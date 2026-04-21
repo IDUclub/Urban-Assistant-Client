@@ -29,7 +29,7 @@ class ChatDataStore {
         this.selectedContext = value;
     }
 
-    setSelectedScenario(scenarioId: number) {
+    setSelectedScenario(scenarioId?: number) {
         this.selectedScenario = scenarioId;
     }
 
