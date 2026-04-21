@@ -7,7 +7,9 @@ import msiLogo from "/png/msi_logo.png";
 import iduLogo from "/png/idu_logo.png";
 import ChatSection from "@components/ChatSection";
 import { IoIosMail } from "react-icons/io";
+import { IoLogOutOutline } from "react-icons/io5";
 import ChatStore from "@lib/ChatStore";
+import { observer } from "mobx-react-lite";
 
 export function meta({}: Route.MetaArgs) {
   return [
@@ -36,7 +38,9 @@ export async function clientLoader({
     await DataStore.getNonProjectStages();
 }
 
-export default function ChatPage() {
+const ChatPage = observer(() => {
+    const { logoutUser, firstName, lastName, isAuthenticated } = AuthStore;
+
     return (
         <main className="w-screen h-screen flex items-center justify-center">
             {/* <h1 className="text-4xl font-semibold text-[48px] sm:text-[62px] md:text-[84px] xl:text-[128px]  text-center text-transparent bg-clip-text bg-linear-to-r from-[#0788CE] via-[#17A3D0] to-[#A5C21B] w-min leading-[1.2]">Chat Page</h1> */}
@@ -63,17 +67,31 @@ export default function ChatPage() {
                     >
                         Новый чат
                     </button>
-                    <div className="w-full border-t border-gray-900/30 mt-auto pb-3 flex justify-center">
-                        <a href="mailto:aicenter@str.mos.ru">
-                            <button className="py-5 flex items-center gap-2 cursor-pointer">
-                                <span><IoIosMail size="1.5rem"/></span>
-                                <p>Написать нам</p>
+                    <div className="w-full mt-auto">
+                        {isAuthenticated && (
+                            <button
+                                className="flex items-center gap-1.5 text-red-600 text-lg cursor-pointer mt-auto my-8 mx-auto"
+                                onClick={() => logoutUser()}
+                            >
+                                <span><IoLogOutOutline /></span>
+                                {`${firstName} ${lastName}`}
                             </button>
-                        </a>
+                        )}
+                        <div className="w-full border-t border-gray-900/30 pb-3 flex justify-center">
+                            <a href="mailto:aicenter@str.mos.ru">
+                                <button className="py-5 flex items-center gap-2 cursor-pointer">
+                                    <span><IoIosMail size="1.5rem"/></span>
+                                    <p>Написать нам</p>
+                                </button>
+                            </a>
+                        </div>
                     </div>
                 </aside>
                 <ChatSection />
             </div>
         </main>
     )
-}
+});
+
+export default ChatPage;
+
