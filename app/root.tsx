@@ -6,8 +6,10 @@ import {
   Scripts,
   ScrollRestoration,
 } from "react-router";
-
+import { useEffect } from "react";
+import { observer } from "mobx-react-lite";
 import type { Route } from "./+types/root";
+import AuthStore from "@lib/AuthStore";
 import "./app.css";
 
 export const links: Route.LinksFunction = () => [
@@ -41,9 +43,19 @@ export function Layout({ children }: { children: React.ReactNode }) {
   );
 }
 
-export default function App() {
+const App = observer(function App() {
+  useEffect(() => {
+    void AuthStore.init();
+  }, []);
+
+  if (AuthStore.status === "idle" || AuthStore.status === "initializing") {
+    return <div className="min-h-screen bg-white" />;
+  }
+
   return <Outlet />;
-}
+});
+
+export default App;
 
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
   let message = "Oops!";
