@@ -1,0 +1,43 @@
+name: build_and_deploy
+on: workflow_dispatch
+
+env:
+  IMAGE_NAME: urban-assistant-client
+
+jobs:
+  build:
+    name: Build Docker image
+    runs-on: idu-testing
+    outputs:
+      tag: ${{ steps.date.outputs.NOW }}
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get build tag
+        id: date
+        run: echo "NOW=$(date +'%Y-%m-%dT%H-%M-%S')" >> $GITHUB_OUTPUT
+
+      - name: Build Docker image
+        run: |
+          docker build -t ${IMAGE_NAME}:${{ steps.date.outputs.NOW }} .
+
+  deploy:
+    name: Deploy container
+    runs-on: idu-testing
+    needs: build
+    env:
+      TAG: ${{ needs.build.outputs.tag }}
+    
+    steps:
+      - name: Stop old container
+        run: docker rm -f urban-assistant-client || true
+
+      - name: Run new container
+        run: |
+          docker run -d \
+            --name urban-assistant-client \
+            --network hosting_net \
+            --restart unless-stopped \
+            ${IMAGE_NAME}:$TAG
