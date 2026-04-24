@@ -3,6 +3,7 @@ import { observer } from "mobx-react-lite";
 import ChatStore from "@lib/ChatStore";
 import NewUser from "@lib/AuthStore";
 import DataStore from "@lib/DataStore";
+import MapStore from "@lib/MapStore";
 import ChatComponent from "@components/Chat";
 import ChatContextSelection from "@components/ChatContextSelection";
 import MapView from "@components/MapView";
@@ -11,13 +12,14 @@ const ChatSection = observer(() => {
     const { firstName } = NewUser;
     const { chatMessages, selectedContext, selectedStage } = ChatStore;
     const { userProjects } = DataStore;
+    const { isMapLayersAvailable } = MapStore;
     const [isMapExpanded, setIsMapExpanded] = useState(false);
 
-    const hasGeoJsonMessages = chatMessages.some((message) => message.message.type === "geojson");
+    // const hasGeoJsonMessages = chatMessages.some((message) => message.message.type === "geojson");
     const selectedProject = userProjects?.find((project) => project.id === Number(selectedContext));
     const mapHeight = "50vh";
     const collapsedMapOffset = "25vh";
-    const visibleMapOffset = hasGeoJsonMessages
+    const visibleMapOffset = isMapLayersAvailable
         ? (isMapExpanded ? mapHeight : collapsedMapOffset)
         : "4px";
     const selectedContextLabel = selectedContext === "nonproject"
@@ -37,7 +39,7 @@ const ChatSection = observer(() => {
             ) : null}
             <div className="min-h-0 flex-1 overflow-hidden">
                 <div
-                    className="mx-auto flex h-full w-full max-w-7xl flex-col px-8 pb-6 pt-6 transition-[padding-bottom] duration-300 ease-out"
+                    className="mx-auto flex h-full w-full max-w-7xl flex-col px-8 pb-6 pt-2 transition-[padding-bottom] duration-300 ease-out"
                     style={{ paddingBottom: `calc(1.5rem + ${visibleMapOffset})` }}
                 >
                     <div className="min-h-0 flex-1 overflow-hidden">
@@ -51,7 +53,6 @@ const ChatSection = observer(() => {
                                             </span>
                                             <span> Чем я могу помочь?</span>
                                         </h1>
-                                        <ChatContextSelection />
                                     </div>
                                 }
                             />
@@ -59,7 +60,7 @@ const ChatSection = observer(() => {
                     </div>
                 </div>
             </div>
-            {hasGeoJsonMessages && (
+            {isMapLayersAvailable && (
                 <div
                     className="absolute inset-x-0 bottom-0 px-8 pb-6 pt-4 transition-transform duration-300 ease-out"
                     style={{

@@ -2,11 +2,15 @@ import { AiOutlinePlusCircle } from "react-icons/ai";
 import { IoIosSend } from "react-icons/io";
 import { FaStopCircle } from "react-icons/fa";
 import { LuLayers3 } from "react-icons/lu";
+import { MdDownload, MdMoreHoriz, MdOutlineMap } from "react-icons/md";
+import { IoAlertCircleOutline } from "react-icons/io5";
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { observer } from "mobx-react-lite";
 import ChatStore from "@lib/ChatStore";
+import MapStore from "@lib/MapStore";
 import { SyncLoader } from "react-spinners";
+import ChatContextSelection from "@components/ChatContextSelection";
 
 
 type ChatMessageItemType = "title" | "plain" | "block" | "list";
@@ -168,65 +172,193 @@ function renderFormattedText(text: string) {
     return <div className="flex flex-col gap-3">{blocks}</div>;
 }
 
+function parseFeatureCollection(layer: unknown) {
+    if (!layer) return undefined;
+
+    if (typeof layer === "string") {
+        try {
+            return JSON.parse(layer);
+        } catch {
+            return undefined;
+        }
+    }
+
+    if (typeof layer === "object") {
+        return layer;
+    }
+
+    return undefined;
+}
+
+function downloadGeoJson(name: string, layer: unknown) {
+    const parsedLayer = parseFeatureCollection(layer);
+    if (!parsedLayer) return;
+
+    const fileName = `${(name || "layer")
+        .trim()
+        .replace(/[^\w.-]+/g, "_")
+        .replace(/^_+|_+$/g, "") || "layer"}.geojson`;
+    const blob = new Blob([JSON.stringify(parsedLayer, null, 2)], {
+        type: "application/geo+json",
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+
+    anchor.href = url;
+    anchor.download = fileName;
+    anchor.click();
+
+    URL.revokeObjectURL(url);
+}
+
+function GeoJsonMessageActions({ name, layer }: { name: string; layer: unknown }) {
+    const [isOpen, setIsOpen] = useState(false);
+    const containerRef = useRef<HTMLSpanElement | null>(null);
+
+    useEffect(() => {
+        if (!isOpen) return;
+
+        const handlePointerDown = (event: MouseEvent) => {
+            if (!containerRef.current?.contains(event.target as Node)) {
+                setIsOpen(false);
+            }
+        };
+
+        const handleEscape = (event: KeyboardEvent) => {
+            if (event.key === "Escape") {
+                setIsOpen(false);
+            }
+        };
+
+        document.addEventListener("mousedown", handlePointerDown);
+        document.addEventListener("keydown", handleEscape);
+
+        return () => {
+            document.removeEventListener("mousedown", handlePointerDown);
+            document.removeEventListener("keydown", handleEscape);
+        };
+    }, [isOpen]);
+
+    const addLayerToMap = () => {
+        const parsedLayer = parseFeatureCollection(layer);
+        if (!parsedLayer) return;
+
+        MapStore.addLayerToMap({
+            name,
+            layer: parsedLayer,
+        });
+        setIsOpen(false);
+    };
+
+    const handleDownload = () => {
+        downloadGeoJson(name, layer);
+        setIsOpen(false);
+    };
+
+    return (
+        <span ref={containerRef} className="relative inline-flex items-center">
+            <button
+                type="button"
+                className="cursor-pointer rounded-full p-1 text-blue-600 transition-colors hover:bg-blue-50 hover:text-blue-700"
+                onClick={() => setIsOpen((current) => !current)}
+                aria-label="Действия со слоем"
+            >
+                <MdMoreHoriz size={18} />
+            </button>
+            {isOpen && (
+                <div className="absolute left-full top-1/2 z-20 ml-2 w-60 -translate-y-1/2 rounded-2xl border border-slate-200 bg-white p-2 text-sm text-slate-700 shadow-[0_18px_40px_-20px_rgba(15,23,42,0.35)]">
+                    <button
+                        type="button"
+                        className="flex w-full cursor-pointer items-center gap-2 rounded-xl px-3 py-2 text-left transition-colors hover:bg-slate-100"
+                        onClick={addLayerToMap}
+                    >
+                        <MdOutlineMap size={18} />
+                         Добавить на карту
+                    </button>
+                    <button
+                        type="button"
+                        className="flex w-full cursor-pointer items-center gap-2 rounded-xl px-3 py-2 text-left transition-colors hover:bg-slate-100"
+                        onClick={handleDownload}
+                    >
+                        <MdDownload size={18} />
+                        Скачать GeoJSON
+                    </button>
+                </div>
+            )}
+        </span>
+    );
+}
+
 const ChatInput = observer((
     { onSubmit }: { onSubmit: ChatComponentProps["onSubmit"]}
 ) => {
-    const { isStreaming } = ChatStore;
+    const { isStreaming, chatMessages } = ChatStore;
     const [currentInput, setCurrentInput] = useState<string>("");
+    const isContextSelectionVisible = !chatMessages.length;
     return (
-        <div
-            className={`
-                w-full rounded-3xl py-4 px-6 mb-1.5
-                flex items-center justify-between gap-2
-                border drop-shadow-lg shadow-gray-300
-                text-gray-950
-                transition-colors duration-200
-                ${isStreaming
-                    ? "bg-slate-100 border-slate-200 shadow-none"
-                    : "bg-white border-gray-300"}
-            `}
-        >
-            <input
-                className={`
-                    w-full bg-transparent focus:outline-none transition-colors duration-200
-                    ${isStreaming ? "cursor-not-allowed text-slate-400 placeholder:text-slate-400" : "text-gray-950 placeholder:text-gray-500"}
-                `}
-                placeholder={isStreaming ? "Ответ генерируется..." : "Расскажи мне..."}
-                value={currentInput}
-                onChange={(e) => setCurrentInput(e.target.value)}
-                onKeyDown={(event) => {
-                    if (event.key === "Enter" && currentInput) {
-                        onSubmit?.(currentInput);
-                        setCurrentInput("");
-                    }
-                }}
-                disabled={isStreaming}
-            />
-            <div className="flex items-center gap-3">
-                <button className="group" disabled={isStreaming}>
-                    <span className={isStreaming ? "text-slate-300" : "text-gray-950 group-hover:text-[#0788CE]"}>
-                        <AiOutlinePlusCircle size={"2rem"} />
-                    </span>
-                </button>
-                <button
-                    className={`group ${isStreaming ? "cursor-pointer" : ""}`}
-                    onClick={() => {
-                        if (isStreaming) {
-                            ChatStore.abortStream();
-                            return;
-                        }
+        <div className={`
+            w-full rounded-3xl py-4 px-6 mb-1.5
+            flex flex-col items-center justify-center
+            border drop-shadow-lg shadow-gray-300
+            text-gray-950
+            transition-colors duration-200
+            ${isStreaming
+                ? "bg-slate-100 border-slate-200 shadow-none"
+                : "bg-white border-gray-300"}
+        `}>
+                <div className={`w-full ${isContextSelectionVisible ? "space-y-7.5" : ""}`}>
+                    <div className={`
+                        w-full flex items-center gap-4
+                        ${isContextSelectionVisible ? "justify-between" : ""}
+                    `}>
+                        <input
+                            className={`
+                                min-w-0 flex-1 bg-transparent focus:outline-none transition-colors duration-200
+                                ${isStreaming ? "cursor-not-allowed text-slate-400 placeholder:text-slate-400" : "text-gray-950 placeholder:text-gray-500"}
+                            `}
+                            placeholder={isStreaming ? "Ответ генерируется..." : "Спросите Помощника"}
+                            value={currentInput}
+                            onChange={(e) => setCurrentInput(e.target.value)}
+                            onKeyDown={(event) => {
+                                if (event.key === "Enter" && currentInput) {
+                                    onSubmit?.(currentInput);
+                                    setCurrentInput("");
+                                }
+                            }}
+                            disabled={isStreaming}
+                        />
+                        <div className="flex items-center gap-3">
+                            <button className="group" disabled={isStreaming}>
+                                <span className={isStreaming ? "text-slate-300" : "text-gray-950 group-hover:text-[#0788CE]"}>
+                                    <AiOutlinePlusCircle size={"2rem"} />
+                                </span>
+                            </button>
+                            <button
+                                className={`group ${isStreaming ? "cursor-pointer" : ""}`}
+                                onClick={() => {
+                                    if (isStreaming) {
+                                        ChatStore.abortStream();
+                                        return;
+                                    }
 
-                        if (currentInput) {
-                            onSubmit?.(currentInput);
-                            setCurrentInput("");
-                        }
-                    }}
-                >
-                    <span className={isStreaming ? "text-[#D45D5D] group-hover:text-[#BF3F3F]" : "text-gray-950 group-hover:text-[#A5C21B]"}>
-                        {isStreaming ? <FaStopCircle size={"2rem"} /> : <IoIosSend size={"2rem"} />}
-                    </span>
-                </button>
-            </div>
+                                    if (currentInput) {
+                                        onSubmit?.(currentInput);
+                                        setCurrentInput("");
+                                    }
+                                }}
+                            >
+                                <span className={isStreaming ? "text-[#D45D5D] group-hover:text-[#BF3F3F]" : "text-gray-950 group-hover:text-[#A5C21B]"}>
+                                    {isStreaming ? <FaStopCircle size={"2rem"} /> : <IoIosSend size={"2rem"} />}
+                                </span>
+                            </button>
+                        </div>
+                    </div>
+                    {isContextSelectionVisible && (
+                        <div className="w-full flex items-center justify-between gap-2">
+                            <ChatContextSelection />
+                        </div>
+                    )}
+                </div>
         </div>
     );
 });
@@ -265,20 +397,39 @@ const ChatComponent = observer(function ChatComponent(
                             <div
                                 key={`chat-message-${message.type}-${ind}`}
                                 className={
-                                    message.type === "response" ?
-                                    "w-full rounded-3xl pr-6 pl-1 py-4 text-gray-950" :
-                                    "w-fit self-end-safe rounded-3xl border border-gray-200 bg-blue-100 px-6 py-4 text-gray-950 whitespace-pre-wrap relative"
+                                    message.type === "response"
+                                        ? message.message.type === "error"
+                                            ? "w-full rounded-3xl border border-red-200 bg-red-50 px-5 py-4 text-red-900"
+                                            : "w-full rounded-3xl pr-6 pl-1 py-4 text-gray-950"
+                                        : "w-fit self-end-safe rounded-3xl border border-gray-200 bg-blue-100 px-6 py-4 text-gray-950 whitespace-pre-wrap relative"
                                 }
                             >
                                 {message.message.type === "text" ? renderFormattedText(message.message.text) : ""}
-                                <span className="text-blue-600 flex items-center gap-2">
-                                    {message.message.type === "geojson" ?
-                                    (<>
+                                {message.message.type === "error" && (
+                                    <div className="flex items-start gap-3">
+                                        <span className="mt-0.5 shrink-0 text-red-500">
+                                            <IoAlertCircleOutline size={22} />
+                                        </span>
+                                        <div className="min-w-0">
+                                            <div className="text-sm font-semibold text-red-700">
+                                                Ошибка
+                                            </div>
+                                            <div className="mt-1 whitespace-pre-wrap text-sm leading-6 text-red-900">
+                                                {message.message.text}
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                                {message.message.type === "geojson" && (
+                                    <span className="inline-flex items-center gap-2 text-blue-600">
                                         <LuLayers3 />
-                                        {message.message.name}
-                                    </>)
-                                    : ""}
-                                </span>
+                                        <span>{message.message.name}</span>
+                                        <GeoJsonMessageActions
+                                            name={message.message.name}
+                                            layer={message.message.layer}
+                                        />
+                                    </span>
+                                )}
                                 {message.type === "request" && (
                                     <div className="absolute -bottom-1.5 right-4 w-0 h-0 border-l-8 border-l-transparent border-r-8 border-r-transparent border-t-8 border-t-blue-100"></div>
                                 )}
