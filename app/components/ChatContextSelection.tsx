@@ -89,8 +89,8 @@ function CustomSelect({ value, options, onChange, placeholder }: CustomSelectPro
             {isOpen && (
                 <div
                     className="
-                        absolute w-fit left-0 right-0 top-[calc(100%+0.75rem)] z-30 overflow-hidden rounded-3xl
-                        border border-slate-200 bg-white/95 p-2 shadow-[0_24px_60px_-24px_rgba(15,23,42,0.32)] backdrop-blur
+                        absolute w-fit max-w-[60vw] max-h-[30vh] left-0 right-0 top-[calc(100%+0.75rem)] z-30 overflow-hidden rounded-3xl
+                        border border-slate-200 bg-white/95 p-2 shadow-[0_24px_20px_-24px_rgba(15,23,42,0.32)] backdrop-blur
                     "
                 >
                     <div className="px-2 pb-2">
