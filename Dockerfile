@@ -10,6 +10,7 @@ RUN npm ci --omit=dev
 
 FROM node:20-alpine AS build-env
 COPY . /app/
+COPY service.env /app/.env
 COPY --from=development-dependencies-env /app/node_modules /app/node_modules
 WORKDIR /app
 RUN npm run build

@@ -15,6 +15,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Copy env file
+        env:
+          ENV_PATH: ${{ secrets.ENV_PATH }}
+        run: cp $ENV_PATH/service.env ./service.env
+
+
       - name: Get build tag
         id: date
         run: echo "NOW=$(date +'%Y-%m-%dT%H-%M-%S')" >> $GITHUB_OUTPUT
