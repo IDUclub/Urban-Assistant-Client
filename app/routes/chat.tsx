@@ -8,6 +8,7 @@ import iduLogo from "/png/idu_logo.png";
 import ChatSection from "@components/ChatSection";
 import { IoIosMail } from "react-icons/io";
 import { IoLogOutOutline } from "react-icons/io5";
+import { MdDeleteForever } from "react-icons/md";
 import ChatStore from "@lib/ChatStore";
 import { observer } from "mobx-react-lite";
 
@@ -40,21 +41,22 @@ export async function clientLoader({
 
 const ChatPage = observer(() => {
     const { logoutUser, firstName, lastName, isAuthenticated } = AuthStore;
-
+    const { chatStoryPreview, activeChatId } = ChatStore;
+    
     return (
         <main className="w-screen h-screen flex items-center justify-center">
-            {/* <h1 className="text-4xl font-semibold text-[48px] sm:text-[62px] md:text-[84px] xl:text-[128px]  text-center text-transparent bg-clip-text bg-linear-to-r from-[#0788CE] via-[#17A3D0] to-[#A5C21B] w-min leading-[1.2]">Chat Page</h1> */}
             <div className="w-screen h-screen grid grid-cols-[1fr_4fr]">
-                <aside className="h-full bg-white p-4 shadow-[20px_0_60px_-25px_rgba(15,23,42,0.28)] z-20 flex flex-col items-center font-cabin text-gray-900">
+                <aside className="min-w-0 h-full bg-white p-4 shadow-[20px_0_60px_-25px_rgba(15,23,42,0.28)] z-20 flex flex-col items-center font-cabin text-gray-900">
                     <div className="flex flex-col items-center justify-center gap-8">
                         <div className="flex items-center justify-center gap-6">
-                            <img src={mskLogo} alt="Logo" className="xl:w-15 md:w-12 h-auto" />
-                            <img src={msiLogo} alt="Logo" className="xl:w-15 md:w-12 h-auto" />
-                            <img src={iduLogo} alt="Logo" className="xl:w-15 md:w-12 h-auto" />
+                            <img src={mskLogo} alt="Logo" className="xl:w-15 w-8 h-auto" />
+                            <img src={msiLogo} alt="Logo" className="xl:w-15 w-8 h-auto" />
+                            <img src={iduLogo} alt="Logo" className="xl:w-15 w-8 h-auto" />
                         </div>
                         <h1
                             className="
-                                text-[10px] sm:text-[12px] md:text-[18px] xl:text-[24px] font-medium text-center text-transparent whitespace-nowrap
+                                max-w-full text-[10px] sm:text-[12px] md:text-[18px] lg:text-[20px] xl:text-[24px] font-medium text-center text-transparent leading-tight
+                                wrap-break-word
                                 bg-clip-text bg-linear-to-r from-[#0788CE] via-[#17A3D0] to-[#A5C21B]
                             "
                         >
@@ -62,11 +64,68 @@ const ChatPage = observer(() => {
                         </h1>
                     </div>
                     <button
-                        className="w-[80%] py-6 px-10 mt-16 bg-white rounded-full drop-shadow-xl border border-gray-600/20 cursor-pointer"
-                        onClick={() => ChatStore.clearChat()}
+                        className="
+                            relative mt-16 w-[80%] cursor-pointer overflow-hidden rounded-[1.75rem]
+                            bg-linear-to-r from-[#0788CE] via-[#17A3D0] to-[#A5C21B]
+                            p-px shadow-[0_0_24px_-4px_rgba(7,136,206,0.55)]
+                            transition duration-200 hover:-translate-y-0.5 hover:shadow-[0_8px_24px_-4px_rgba(23,163,208,0.5)]
+                        "
+                        onClick={() => {
+                            ChatStore.clearChat();
+                            ChatStore.addChat();
+                        }}
                     >
-                        Новый чат
+                        <span
+                            className="
+                                flex w-full items-center justify-center rounded-[calc(1.75rem-1px)]
+                                bg-white/96 px-6 py-4 text-base font-medium tracking-[0.01em] text-gray-900 backdrop-blur
+                            "
+                        >
+                            Новый чат
+                        </span>
                     </button>
+                    <div className="mt-8 py-5 flex w-full min-w-0 min-h-0 flex-1 flex-col overflow-hidden border-t border-gray-900/30">
+                        <div className="px-4 text-sm font-medium uppercase tracking-[0.14em] text-gray-500">
+                            История чатов
+                        </div>
+                        <div className="mt-4 flex min-w-0 flex-1 flex-col space-y-2 overflow-y-auto px-2">
+                            {chatStoryPreview.length ? (
+                                chatStoryPreview.map((chat) => (
+                                    <div
+                                        key={chat.id}
+                                        className={`
+                                            group
+                                            flex w-full min-w-0 items-center justify-between
+                                            gap-2 rounded-3xl px-3 py-2 text-sm transition-colors
+                                            ${activeChatId === chat.id
+                                                ? "bg-[#EAF5FF] text-[#0B5E8E]"
+                                                : "bg-gray-50 text-gray-700 hover:bg-gray-100"}
+                                        `}
+                                    >
+                                        <button
+                                            type="button"
+                                            className="min-w-0 flex-1 cursor-pointer px-2 py-1 text-left"
+                                            onClick={() => ChatStore.loadChat(chat.id)}
+                                        >
+                                            <span className="block truncate">{chat.name}</span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="cursor-pointer text-2xl text-red-700 opacity-0 transition-opacity group-hover:opacity-100 hover:text-red-800"
+                                            onClick={() => ChatStore.deleteChat(chat.id)}
+                                            aria-label="Удалить чат"
+                                        >
+                                            <MdDeleteForever />
+                                        </button>
+                                    </div>
+                                ))
+                            ) : (
+                                <div className="px-4 py-3 text-sm text-gray-400">
+                                    История пока пуста
+                                </div>
+                            )}
+                        </div>
+                    </div>
                     <div className="w-full mt-auto">
                         {isAuthenticated && (
                             <button
@@ -94,4 +153,3 @@ const ChatPage = observer(() => {
 });
 
 export default ChatPage;
-
