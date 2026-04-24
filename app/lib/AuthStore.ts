@@ -84,8 +84,12 @@ class AuthDataStore {
     }
 
     logoutUser() {
-        this.clearSession();
-        return this.keycloakAdapter.logout();
+        return this.keycloakAdapter.logout({
+            redirectUri: "http://localhost:5173/",
+        })
+        .finally(() => {
+            setTimeout(() => this.clearSession(), 500)
+        })
     }
 
     private bindKeycloakEvents() {
