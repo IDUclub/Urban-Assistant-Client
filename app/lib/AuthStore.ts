@@ -85,10 +85,13 @@ class AuthDataStore {
 
     logoutUser() {
         return this.keycloakAdapter.logout({
-            redirectUri: "http://localhost:5173/",
+            redirectUri: import.meta.env.VITE_KEYCLOAK_AUTH_LOGOUT_REDIRECT,
         })
         .finally(() => {
-            setTimeout(() => this.clearSession(), 500)
+            setTimeout(() => {
+                this.clearSession();
+                localStorage.clear();
+            }, 500)
         })
     }
 
