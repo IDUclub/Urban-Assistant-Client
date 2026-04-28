@@ -295,6 +295,17 @@ const ChatInput = observer((
     const { isStreaming, chatMessages } = ChatStore;
     const [currentInput, setCurrentInput] = useState<string>("");
     const isContextSelectionVisible = !chatMessages.length;
+    const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+    useEffect(() => {
+        const textarea = textareaRef.current;
+        if (!textarea) return;
+
+        textarea.style.height = "0px";
+        const nextHeight = Math.min(textarea.scrollHeight, 24 * 3);
+        textarea.style.height = `${nextHeight}px`;
+    }, [currentInput]);
+
     return (
         <div className={`
             w-full rounded-3xl py-4 px-6 mb-1.5
@@ -311,9 +322,11 @@ const ChatInput = observer((
                         w-full flex items-center gap-4
                         ${isContextSelectionVisible ? "justify-between" : ""}
                     `}>
-                        <input
+                        <textarea
+                            ref={textareaRef}
+                            rows={1}
                             className={`
-                                min-w-0 flex-1 bg-transparent focus:outline-none transition-colors duration-200
+                                min-w-0 flex-1 resize-none overflow-y-auto bg-transparent leading-6 focus:outline-none transition-colors duration-200
                                 ${isStreaming ? "cursor-not-allowed text-slate-400 placeholder:text-slate-400" : "text-gray-950 placeholder:text-gray-500"}
                             `}
                             placeholder={isStreaming ? "Ответ генерируется..." : "Спросите Помощника"}
