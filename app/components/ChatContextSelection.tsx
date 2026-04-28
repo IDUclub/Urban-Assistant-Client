@@ -21,7 +21,7 @@ function CustomSelect({ value, options, onChange, placeholder }: CustomSelectPro
     const [searchQuery, setSearchQuery] = useState("");
     const containerRef = useRef<HTMLDivElement | null>(null);
     const searchInputRef = useRef<HTMLInputElement | null>(null);
-    const selectedOption = options.find((option) => option.value === value);
+    const selectedOption = options.find((option) => option.value == value);
     const normalizedSearchQuery = searchQuery.trim().toLowerCase();
     const filteredOptions = normalizedSearchQuery
         ? options.filter((option) => option.label.toLowerCase().includes(normalizedSearchQuery))
@@ -147,7 +147,6 @@ function CustomSelect({ value, options, onChange, placeholder }: CustomSelectPro
 const ChatContextSelection = observer(() => {
     const { userProjects, projectScenarios, nonProjectStages } = DataStore;
     const { selectedContext, selectedStage, selectedScenario } = ChatStore;
-    const [, setSelectedContext] = useState<string | number>("nonproject");
 
     useEffect(() => {
         if (selectedContext === "nonproject") return;
@@ -180,7 +179,23 @@ const ChatContextSelection = observer(() => {
         value: stage,
     }));
 
-    const selectedScenarioValue = selectedScenario ?? scenarioOptions[0]?.value;
+    useEffect(() => {
+        if (selectedContext === "nonproject") {
+            if (selectedScenario !== null) {
+                ChatStore.setSelectedScenario(null);
+            }
+            return;
+        }
+
+        if (!scenarioOptions.length) return;
+
+        const hasSelectedScenario = selectedScenario !== null
+            && scenarioOptions.some((option) => Number(option.value) === selectedScenario);
+
+        if (!hasSelectedScenario) {
+            ChatStore.setSelectedScenario(Number(scenarioOptions[0].value));
+        }
+    }, [scenarioOptions, selectedContext, selectedScenario]);
 
     return (
         <div className="flex w-full max-w-5xl flex-row flex-wrap items-start justify-start gap-6">
@@ -188,14 +203,14 @@ const ChatContextSelection = observer(() => {
                 value={selectedContext}
                 options={contextOptions}
                 onChange={(value) => {
-                    setSelectedContext(value === "nonproject" ? value : Number(value));
-                    ChatStore.setSelectedContext(value);
-                    ChatStore.setSelectedScenario(undefined);
+                    const nextContext = value === "nonproject" ? value : Number(value);
+                    ChatStore.setSelectedContext(nextContext);
+                    // ChatStore.setSelectedScenario(null);
                 }}
             />
             {selectedContext !== "nonproject" && scenarioOptions.length > 0 && (
                 <CustomSelect
-                    value={selectedScenarioValue}
+                    value={selectedScenario ?? scenarioOptions[0]?.value}
                     options={scenarioOptions}
                     onChange={(value) => {
                         ChatStore.setSelectedScenario(Number(value));

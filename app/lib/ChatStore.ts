@@ -43,13 +43,13 @@ type ChatMessage = {
 type ChatSession = {
     messages: ChatMessage[];
     selectedContext: string | number;
-    selectedScenario?: number;
+    selectedScenario: number | null;
     selectedStage: string;
 };
 
 class ChatDataStore {
     selectedContext: string | number = "nonproject";
-    selectedScenario?: number;
+    selectedScenario: number | null = null;
     selectedStage: string = "Общее";
     streamedResponse: string = "";
     isStreaming: boolean = false;
@@ -83,7 +83,7 @@ class ChatDataStore {
         this.selectedContext = value;
     }
 
-    setSelectedScenario(scenarioId?: number) {
+    setSelectedScenario(scenarioId: number | null) {
         this.selectedScenario = scenarioId;
     }
 
@@ -96,7 +96,7 @@ class ChatDataStore {
         this.chatMessages = [];
         this.isStreaming = false;
         this.selectedContext = "nonproject";
-        this.selectedScenario = undefined;
+        this.selectedScenario = null;
         this.selectedStage = "Общее";
         this.streamedResponse = "";
         this.currentStatus = undefined;
@@ -256,7 +256,7 @@ class ChatDataStore {
         this.activeChatId = id;
         this.chatMessages = [...chat.messages];
         this.selectedContext = chat.selectedContext;
-        this.selectedScenario = chat.selectedScenario;
+        this.selectedScenario = chat.selectedScenario ?? null;
         this.selectedStage = chat.selectedStage;
 
         const lastRequestIndex = chat.messages.findLastIndex(message => message.type === "request");
@@ -348,9 +348,7 @@ class ChatDataStore {
                 console.error("Error streaming chat message:", error);
             })
             .finally(this.resetStreamingState);
-        }
-        
-        else {
+        } else if (this.selectedContext !== "nonproject" && this.selectedScenario) {
             return axios.get(
                 `${import.meta.env.VITE_LLM_RESTRICTIONS_API}/restrictions/generate_restrictions/stream`,
                 {
@@ -363,7 +361,7 @@ class ChatDataStore {
                     signal: this.abortController.signal,
                     params: {
                         model: "gpt-oss:20b",
-                        scenario_id: this.selectedScenario ?? 772,
+                        scenario_id: this.selectedScenario,
                         request: message,
                     }
                 }
@@ -463,7 +461,7 @@ class ChatDataStore {
     };
 
     constructor() {
-        makeAutoObservable(this);
+        makeAutoObservable(this, {}, { autoBind: true });
 
         this.getChatStory();
         this.persistCurrentChatDisposer();
