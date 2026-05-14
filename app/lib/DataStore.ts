@@ -5,6 +5,8 @@ import AuthStore from "@lib/AuthStore";
 class AppDataStore {
     userProjects?: {name: string; id: number; }[] = [];
     projectScenarios: Map<number, any> = new Map();
+    projectTerritories: Map<number, any | null> = new Map();
+    projectTerritoryRequests: Map<number, Promise<any | null>> = new Map();
     nonProjectStages?: string[];
 
     getUserProjects() {
@@ -94,6 +96,42 @@ class AppDataStore {
 
     constructor() {
         makeAutoObservable(this);
+    }
+
+    getProjectTerritory(projectId: number) {
+        if (this.projectTerritories.has(projectId)) {
+            return Promise.resolve(this.projectTerritories.get(projectId) ?? null);
+        }
+
+        const currentRequest = this.projectTerritoryRequests.get(projectId);
+        if (currentRequest) {
+            return currentRequest;
+        }
+
+        const request = axios.get(
+            `${import.meta.env.VITE_URBAN_API}/projects/${projectId}/territory`,
+            {
+                headers: {
+                    Authorization: `Bearer ${AuthStore.accessToken}`,
+                },
+            },
+        )
+        .then(({ data }) => {
+            const geometry = data && data.geometry ? data.geometry : null;
+            this.projectTerritories.set(projectId, geometry);
+            return geometry;
+        })
+        .catch(error => {
+            console.error("Error fetching project territory:", error);
+            return null;
+        })
+        .finally(action(() => {
+            this.projectTerritoryRequests.delete(projectId);
+        }));
+
+        this.projectTerritoryRequests.set(projectId, request);
+
+        return request;
     }
 }
 

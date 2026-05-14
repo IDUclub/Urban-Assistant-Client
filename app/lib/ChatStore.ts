@@ -1,6 +1,7 @@
 import axios from "axios";
 import { action, makeAutoObservable, reaction } from "mobx";
 import AuthStore from "@lib/AuthStore";
+import DataStore from "@lib/DataStore";
 import MapStore from "@lib/MapStore";
 
 function parseFeatureCollection(layer: unknown) {
@@ -17,6 +18,44 @@ function parseFeatureCollection(layer: unknown) {
     if (typeof layer === "object") {
         return layer;
     }
+};
+
+const PROJECT_BOUNDARY_LAYER_NAME = "Граница территории";
+
+function normalizeBoundaryLayer(geometry: unknown) {
+    if (!geometry || typeof geometry !== "object") return undefined;
+
+    const normalizedGeometry = geometry as Record<string, any>;
+
+    if (normalizedGeometry.type === "FeatureCollection") {
+        return normalizedGeometry;
+    }
+
+    if (normalizedGeometry.type === "Feature") {
+        return {
+            type: "FeatureCollection",
+            features: [normalizedGeometry],
+        };
+    }
+
+    return {
+        type: "FeatureCollection",
+        features: [
+            {
+                type: "Feature",
+                properties: {},
+                geometry: normalizedGeometry,
+            },
+        ],
+    };
+}
+
+type StreamContext = {
+    requestId: number;
+    projectBoundaryLayer?: any;
+    projectBoundaryPromise?: Promise<any>;
+    hasReceivedMapLayer: boolean;
+    hasAddedProjectBoundary: boolean;
 };
 
 type TextMessage = {
@@ -56,6 +95,8 @@ class ChatDataStore {
     chatMessages: ChatMessage[] = [];
     currentStatus?: string;
     activeChatId?: number;
+    currentStreamRequestId: number = 0;
+    currentStreamContext?: StreamContext;
 
     chatMap: Map<number, ChatSession> = new Map();
 
@@ -93,6 +134,8 @@ class ChatDataStore {
 
     clearChat() {
         this.abortStream();
+        this.currentStreamRequestId += 1;
+        this.currentStreamContext = undefined;
         this.chatMessages = [];
         this.isStreaming = false;
         this.selectedContext = "nonproject";
@@ -156,6 +199,8 @@ class ChatDataStore {
                         parsed.content?.feature_collection
                     ),
                 });
+                this.currentStreamContext = this.markStreamContextHasMapLayer(this.currentStreamContext);
+                this.tryAddProjectBoundaryLayer(this.currentStreamContext);
 
                 return;
             }
@@ -198,6 +243,63 @@ class ChatDataStore {
         if (!this.chatMap.size) return 0;
 
         return Math.max(...Array.from(this.chatMap.keys())) + 1;
+    }
+
+    private markStreamContextHasMapLayer(streamContext?: StreamContext) {
+        if (!streamContext) return undefined;
+
+        streamContext.hasReceivedMapLayer = true;
+        return streamContext;
+    }
+
+    private tryAddProjectBoundaryLayer(streamContext?: StreamContext) {
+        if (
+            !streamContext ||
+            streamContext.requestId !== this.currentStreamRequestId ||
+            streamContext.hasAddedProjectBoundary ||
+            !streamContext.hasReceivedMapLayer ||
+            !streamContext.projectBoundaryLayer
+        ) {
+            return;
+        }
+
+        MapStore.addLayerToMap({
+            name: PROJECT_BOUNDARY_LAYER_NAME,
+            layer: streamContext.projectBoundaryLayer,
+        });
+        streamContext.hasAddedProjectBoundary = true;
+    }
+
+    private createProjectBoundaryStreamContext(projectId: number) {
+        const streamContext: StreamContext = {
+            requestId: this.currentStreamRequestId,
+            hasReceivedMapLayer: false,
+            hasAddedProjectBoundary: false,
+        };
+
+        streamContext.projectBoundaryPromise = DataStore.getProjectTerritory(projectId)
+            .then((geometry) => {
+                streamContext.projectBoundaryLayer = normalizeBoundaryLayer(geometry);
+                this.tryAddProjectBoundaryLayer(streamContext);
+                return streamContext.projectBoundaryLayer;
+            });
+
+        return streamContext;
+    }
+
+    private restoreProjectBoundary(projectId: number, hasResponseLayers: boolean) {
+        if (!hasResponseLayers) return;
+
+        void DataStore.getProjectTerritory(projectId)
+            .then((geometry) => {
+                const boundaryLayer = normalizeBoundaryLayer(geometry);
+                if (!boundaryLayer) return;
+
+                MapStore.addLayerToMap({
+                    name: PROJECT_BOUNDARY_LAYER_NAME,
+                    layer: boundaryLayer,
+                });
+            });
     }
 
     private getChatStory() {
@@ -250,6 +352,8 @@ class ChatDataStore {
         if (!chat) return;
 
         this.abortStream();
+        this.currentStreamRequestId += 1;
+        this.currentStreamContext = undefined;
         this.streamedResponse = "";
         this.isStreaming = false;
         this.currentStatus = undefined;
@@ -270,11 +374,17 @@ class ChatDataStore {
 
         MapStore.clearMapLayers();
         MapStore.setMapLayers(lastResponseLayers);
+
+        if (typeof chat.selectedContext === "number") {
+            this.restoreProjectBoundary(chat.selectedContext, lastResponseLayers.length > 0);
+        }
     };
 
     sendChatMessage = async (message: string) => {
         this.abortController?.abort();
         this.abortController = new AbortController();
+        this.currentStreamRequestId += 1;
+        this.currentStreamContext = undefined;
         this.streamedResponse = "";
         this.isStreaming = true;
         this.currentStatus = undefined;
@@ -282,6 +392,10 @@ class ChatDataStore {
             this.addChat();
         }
         MapStore.clearMapLayers();
+        const isFirstRequestInChat = this.chatMessages.length === 0;
+        if (isFirstRequestInChat && typeof this.selectedContext === "number") {
+            this.currentStreamContext = this.createProjectBoundaryStreamContext(this.selectedContext);
+        }
         this.chatMessages.push({type: "request", message: { type: "text", text: message}})
         
         if (this.selectedContext === "nonproject") {

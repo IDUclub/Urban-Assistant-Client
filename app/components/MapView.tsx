@@ -8,6 +8,7 @@ import {
 } from "react-icons/md";
 import Map, { Layer, Source } from "react-map-gl/mapbox";
 import type { MapRef } from "react-map-gl/mapbox";
+import type { MapMouseEvent } from "react-map-gl/mapbox";
 import "mapbox-gl/dist/mapbox-gl.css";
 import ChatStore from "@lib/ChatStore";
 import MapStore from "@lib/MapStore";
@@ -125,15 +126,48 @@ function createPointLayer(id: string, color: string) {
     };
 }
 
+function isTerritoryBoundaryLayer(name?: string) {
+    const normalizedName = name?.trim().toLowerCase();
+
+    return normalizedName === "граница территории" || normalizedName === "границы территории";
+}
+
 interface MapViewProps {
     isExpanded: boolean;
     onToggleExpanded: () => void;
 }
 
+type SelectedFeatureState = {
+    layerName: string;
+    geometryType: string;
+    properties: Record<string, unknown>;
+};
+
+type ScrollShadowState = {
+    top: boolean;
+    bottom: boolean;
+};
+
+function getScrollShadowState(element: HTMLElement | null): ScrollShadowState {
+    if (!element) {
+        return { top: false, bottom: false };
+    }
+
+    const hasOverflow = element.scrollHeight > element.clientHeight + 1;
+
+    return {
+        top: hasOverflow && element.scrollTop > 1,
+        bottom: hasOverflow && element.scrollTop + element.clientHeight < element.scrollHeight - 1,
+    };
+}
+
 const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
     const { mapLayers, isMapLayersAvailable } = MapStore;
     const [isMounted, setIsMounted] = useState(false);
+    const [selectedFeature, setSelectedFeature] = useState<SelectedFeatureState | null>(null);
+    const [propertyScrollShadows, setPropertyScrollShadows] = useState<ScrollShadowState>({ top: false, bottom: false });
     const mapRef = useRef<MapRef | null>(null);
+    const propertyListRef = useRef<HTMLDivElement | null>(null);
     const mapboxToken = import.meta.env.VITE_MAPBOX_TOKEN;
     const geoJsonMessages = ChatStore.chatMessages.flatMap(
         (message) => message.message.type === "geojson" ? [message.message] : []
@@ -147,6 +181,17 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
     const latestLayerBounds = useMemo(() => {
         return latestLayer ? getFeatureBounds(latestLayer.layer) : undefined;
     }, [latestLayer?.id]);
+    const interactiveLayerIds = useMemo(() => {
+        return mapLayers.flatMap((layer, index) => (
+            layer.isVisible
+                ? [
+                    `geojson-fill-${index}`,
+                    `geojson-line-${index}`,
+                    `geojson-point-${index}`,
+                ]
+                : []
+        ));
+    }, [mapLayers]);
 
     const downloadLayer = (name: string, layer: unknown) => {
         const fileName = `${(name || "layer")
@@ -164,6 +209,36 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
         anchor.click();
 
         URL.revokeObjectURL(url);
+    };
+
+    const updatePropertyScrollShadows = () => {
+        const nextShadows = getScrollShadowState(propertyListRef.current);
+
+        setPropertyScrollShadows((currentShadows) => (
+            currentShadows.top === nextShadows.top && currentShadows.bottom === nextShadows.bottom
+                ? currentShadows
+                : nextShadows
+        ));
+    };
+
+    const handleFeatureClick = (event: MapMouseEvent) => {
+        const clickedFeature = event.features?.[0];
+
+        if (!clickedFeature) {
+            setSelectedFeature(null);
+            return;
+        }
+
+        const layerId = clickedFeature.layer?.id ?? "";
+        const layerIndexMatch = layerId.match(/(\d+)$/);
+        const layerIndex = layerIndexMatch ? Number(layerIndexMatch[1]) : -1;
+        const sourceLayer = mapLayers[layerIndex];
+
+        setSelectedFeature({
+            layerName: sourceLayer?.name || "Без названия",
+            geometryType: clickedFeature.geometry?.type || "Unknown",
+            properties: (clickedFeature.properties as Record<string, unknown> | undefined) ?? {},
+        });
     };
 
     useEffect(() => {
@@ -197,6 +272,20 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
         }, 300)
     }, [isMounted, latestLayerBounds]);
 
+    useEffect(() => {
+        setSelectedFeature(null);
+    }, [mapLayers]);
+
+    useEffect(() => {
+        const animationFrameId = requestAnimationFrame(updatePropertyScrollShadows);
+
+        if (propertyListRef.current) {
+            propertyListRef.current.scrollTop = 0;
+        }
+
+        return () => cancelAnimationFrame(animationFrameId);
+    }, [selectedFeature]);
+
     return (
         <div className="relative h-full w-full overflow-hidden rounded-3xl border border-gray-200 bg-white shadow-sm">
             <div className="pointer-events-none absolute left-1/2 top-4 z-10 -translate-x-1/2">
@@ -216,6 +305,7 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
             ) : (
                 <Map
                     ref={mapRef}
+                    interactiveLayerIds={interactiveLayerIds}
                     initialViewState={latestLayerBounds ? {
                         longitude: latestLayerBounds[0][0],
                         latitude: latestLayerBounds[0][1],
@@ -227,11 +317,14 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                     }}
                     mapStyle="mapbox://styles/mapbox/light-v11"
                     mapboxAccessToken={mapboxToken}
+                    onClick={handleFeatureClick}
+                    cursor={interactiveLayerIds.length ? "pointer" : "default"}
                 >
                     {mapLayers.map((layer, index) => {
                         if (!layer) return null;
 
                         const layerColor = layer.style?.color ?? "#fff";
+                        const isBoundaryLayer = isTerritoryBoundaryLayer(layer.name);
 
                         return (
                             <Source
@@ -240,30 +333,34 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                                 type="geojson"
                                 data={layer.layer}
                             >
-                                <Layer
-                                    {...createFillLayer(`geojson-fill-${index}`, layerColor)}
-                                    layout={{ visibility: layer.isVisible ? "visible" : "none" }}
-                                />
+                                {!isBoundaryLayer && (
+                                    <Layer
+                                        {...createFillLayer(`geojson-fill-${index}`, layerColor)}
+                                        layout={{ visibility: layer.isVisible ? "visible" : "none" }}
+                                    />
+                                )}
                                 <Layer
                                     {...createLineLayer(`geojson-line-${index}`, layerColor)}
                                     layout={{ visibility: layer.isVisible ? "visible" : "none" }}
                                 />
-                                <Layer
-                                    {...createPointLayer(`geojson-point-${index}`, layerColor)}
-                                    layout={{ visibility: layer.isVisible ? "visible" : "none" }}
-                                />
+                                {!isBoundaryLayer && (
+                                    <Layer
+                                        {...createPointLayer(`geojson-point-${index}`, layerColor)}
+                                        layout={{ visibility: layer.isVisible ? "visible" : "none" }}
+                                    />
+                                )}
                             </Source>
                         );
                     })}
                 </Map>
             )}
             {isMapLayersAvailable && (
-                <div className="pointer-events-auto absolute left-4 top-4 z-10 max-w-72 translate-y-1/2">
-                    <div className="rounded-3xl border border-gray-200 bg-white/90 px-6 py-4 shadow-sm backdrop-blur-lg">
-                        <div className="mb-4 text-xs font-semibold uppercase tracking-[0.14em] text-gray-500">
+                <div className="pointer-events-auto absolute left-4 top-4 z-10 h-1/2 w-[min(18rem,calc(100%-2rem))] max-w-72">
+                    <div className="flex h-full flex-col overflow-hidden rounded-3xl border border-gray-200 bg-white/90 px-6 py-4 shadow-sm backdrop-blur-lg">
+                        <div className="mb-4 shrink-0 text-xs font-semibold uppercase tracking-[0.14em] text-gray-500">
                             Отображаемые слои
                         </div>
-                        <div className="h-52 flex flex-col gap-2 overflow-y-auto">
+                        <div className="min-h-0 flex flex-1 flex-col gap-2 overflow-y-auto">
                             {mapLayers.map((layer) => (
                                 <div
                                     key={layer.id}
@@ -296,6 +393,67 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                                 </div>
                             ))}
                         </div>
+                    </div>
+                </div>
+            )}
+            {selectedFeature && (
+                <div className="pointer-events-auto absolute top-4 right-4 z-10 flex max-h-[calc(100%-2rem)] w-[min(24rem,calc(100%-2rem))] flex-col overflow-hidden rounded-3xl border border-gray-200 bg-white/95 p-4 shadow-lg backdrop-blur">
+                    <div className="mb-3 flex shrink-0 items-start justify-between gap-3">
+                        <div className="min-w-0">
+                            <div className="truncate text-sm font-semibold text-slate-900">
+                                {selectedFeature.layerName}
+                            </div>
+                        </div>
+                        <button
+                            type="button"
+                            className="shrink-0 cursor-pointer rounded-full px-2 py-1 text-sm text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800"
+                            onClick={() => setSelectedFeature(null)}
+                            aria-label="Закрыть свойства"
+                        >
+                            ×
+                        </button>
+                    </div>
+                    <div className="relative overflow-hidden rounded-2xl bg-slate-50">
+                        <div
+                            className="max-h-[max(8rem,calc(50vh-7rem))] overflow-y-auto overscroll-contain px-3 pb-8 pt-2"
+                            ref={propertyListRef}
+                            onScroll={updatePropertyScrollShadows}
+                            onWheel={(event) => event.stopPropagation()}
+                            onTouchMove={(event) => event.stopPropagation()}
+                        >
+                            {Object.keys(selectedFeature.properties).length ? (
+                                Object.entries(selectedFeature.properties).map(([key, propertyValue]) => (
+                                    <div key={key} className="border-b border-slate-200 py-2 last:border-b-0">
+                                        <div className="text-xs font-medium uppercase tracking-[0.08em] text-slate-500">
+                                            {key}
+                                        </div>
+                                        <div className="mt-1 wrap-break-word text-sm text-slate-800">
+                                            {typeof propertyValue === "object"
+                                                ? JSON.stringify(propertyValue)
+                                                : String(propertyValue)}
+                                        </div>
+                                    </div>
+                                ))
+                            ) : (
+                                <div className="text-sm text-slate-500">
+                                    У объекта нет свойств
+                                </div>
+                            )}
+                        </div>
+                        <div
+                            className={`
+                                pointer-events-none absolute inset-x-0 top-0 h-5 bg-linear-to-b from-slate-400/55 to-transparent
+                                backdrop-blur-[1px]
+                                transition-opacity duration-200 ${propertyScrollShadows.top ? "opacity-100" : "opacity-0"}
+                            `}
+                        />
+                        <div
+                            className={`
+                                pointer-events-none absolute inset-x-0 bottom-0 h-5 bg-linear-to-t from-slate-400/55 to-transparent
+                                backdrop-blur-[1px]
+                                transition-opacity duration-200 ${propertyScrollShadows.bottom ? "opacity-100" : "opacity-0"}
+                            `}
+                        />
                     </div>
                 </div>
             )}
