@@ -5,9 +5,10 @@ import DataStore from "@lib/DataStore";
 import mskLogo from "/png/msk_logo.png";
 import msiLogo from "/png/msi_logo.png";
 import iduLogo from "/png/idu_logo.png";
+import aiInstitute from "/png/ai_institute.png";
 import ChatSection from "@components/ChatSection";
 import { IoIosMail } from "react-icons/io";
-import { IoLogOutOutline } from "react-icons/io5";
+import { IoLogOutOutline, IoPersonCircleOutline } from "react-icons/io5";
 import { MdDeleteForever } from "react-icons/md";
 import ChatStore from "@lib/ChatStore";
 import { observer } from "mobx-react-lite";
@@ -44,14 +45,18 @@ const ChatPage = observer(() => {
     const { chatStoryPreview, activeChatId } = ChatStore;
     
     return (
-        <main className="w-screen h-screen flex items-center justify-center">
-            <div className="w-screen h-screen grid grid-cols-[1fr_4fr]">
-                <aside className="min-w-0 h-full bg-white p-4 shadow-[20px_0_60px_-25px_rgba(15,23,42,0.28)] z-20 flex flex-col items-center font-cabin text-gray-900">
+        <main className="flex h-dvh w-screen items-center justify-center overflow-hidden">
+            <div className="grid h-dvh w-screen grid-cols-[1fr_4fr] overflow-hidden">
+                <aside className="z-20 flex h-dvh min-w-0 flex-col items-center overflow-hidden bg-white p-4 font-cabin text-gray-900 shadow-[20px_0_60px_-25px_rgba(15,23,42,0.28)]">
                     <div className="flex flex-col items-center justify-center gap-8">
-                        <div className="flex items-center justify-center gap-6">
-                            <img src={mskLogo} alt="Logo" className="xl:w-15 w-8 h-auto" />
-                            <img src={msiLogo} alt="Logo" className="xl:w-15 w-8 h-auto" />
-                            <img src={iduLogo} alt="Logo" className="xl:w-15 w-8 h-auto" />
+                        <div className="flex flex-col items-center justify-center gap-2">
+                            <div className="flex items-center justify-center gap-6">
+                                <img src={mskLogo} alt="Logo" className="xl:w-15 w-8 h-auto" />
+                                <img src={msiLogo} alt="Logo" className="xl:w-15 w-8 h-auto" />
+                                <img src={iduLogo} alt="Logo" className="xl:w-15 w-8 h-auto" />
+                                {/* <img src={aiInstitute} alt="Logo" className="xl:w-50 w-24 h-auto" /> */}
+                            </div>
+                            <img src={aiInstitute} alt="Logo" className="xl:w-70 w-24 h-auto" />
                         </div>
                         <h1
                             className="
@@ -128,13 +133,36 @@ const ChatPage = observer(() => {
                     </div>
                     <div className="w-full mt-auto">
                         {isAuthenticated && (
-                            <button
-                                className="flex items-center gap-1.5 text-red-600 text-lg cursor-pointer mt-auto my-8 mx-auto"
-                                onClick={() => logoutUser()}
-                            >
-                                <span><IoLogOutOutline /></span>
-                                {`${firstName} ${lastName}`}
-                            </button>
+                            <div className="my-8 flex w-full items-center gap-3 rounded-[1.75rem] border border-slate-200 bg-slate-50/90 px-4 py-3 shadow-[0_16px_28px_-24px_rgba(15,23,42,0.55)]">
+                                <div className="flex min-w-0 flex-1 items-center gap-3">
+                                    <span className="shrink-0 text-[#0788CE]">
+                                        <IoPersonCircleOutline size="2.25rem" />
+                                    </span>
+                                    <div className="min-w-0">
+                                        <p className="truncate text-sm font-medium text-slate-900">
+                                            {`${firstName ?? ""} ${lastName ?? ""}`.trim() || "Пользователь"}
+                                        </p>
+                                    </div>
+                                </div>
+                                <div className="group relative shrink-0">
+                                    <button
+                                        type="button"
+                                        className="flex h-11 w-11 cursor-pointer items-center justify-center rounded-2xl border border-red-200 bg-white text-red-600 transition-colors hover:bg-red-50 hover:text-red-700"
+                                        onClick={() => logoutUser()}
+                                        aria-label="Выйти"
+                                        aria-describedby="logout-tooltip"
+                                    >
+                                        <IoLogOutOutline size="1.2rem" />
+                                    </button>
+                                    <div
+                                        id="logout-tooltip"
+                                        role="tooltip"
+                                        className="pointer-events-none absolute right-full top-1/2 z-20 mr-3 -translate-y-1/2 whitespace-nowrap rounded-lg bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+                                    >
+                                        Выйти
+                                    </div>
+                                </div>
+                            </div>
                         )}
                         <div className="w-full border-t border-gray-900/30 pb-3 flex justify-center">
                             <a href="mailto:aicenter@str.mos.ru">
