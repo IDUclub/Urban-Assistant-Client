@@ -3,7 +3,7 @@ module.exports = {
   theme: {
     extend: {
       fontFamily: {
-        cabin: ['Cabin', 'sans-serif'],
+        cabin: ['Inter', 'sans-serif'],
       },
     },
   },
