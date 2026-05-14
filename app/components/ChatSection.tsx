@@ -10,13 +10,14 @@ import MapView from "@components/MapView";
 
 const ChatSection = observer(() => {
     const { firstName } = NewUser;
-    const { chatMessages, selectedContext, selectedStage } = ChatStore;
-    const { userProjects } = DataStore;
+    const { chatMessages, selectedContext, selectedStage, selectedScenario } = ChatStore;
+    const { userProjects, projectScenarios } = DataStore;
     const { isMapLayersAvailable } = MapStore;
     const [isMapExpanded, setIsMapExpanded] = useState(false);
 
     // const hasGeoJsonMessages = chatMessages.some((message) => message.message.type === "geojson");
     const selectedProject = userProjects?.find((project) => project.id === Number(selectedContext));
+    const selectedSceanrioItem = selectedProject?.id && projectScenarios.get(selectedProject.id)?.find((scenario: any) => scenario.id == selectedScenario);
     const mapHeight = "50vh";
     const collapsedMapOffset = "25vh";
     const visibleMapOffset = isMapLayersAvailable
@@ -24,7 +25,7 @@ const ChatSection = observer(() => {
         : "4px";
     const selectedContextLabel = selectedContext === "nonproject"
         ? `Вне проекта / ${selectedStage}`
-        : `Проект / ${selectedProject?.name ?? "Без названия"}`;
+        : `${selectedProject?.name ?? "Без названия"} / ${selectedSceanrioItem?.name ?? "Сценарий"}`;
 
     return (
         <section className="relative flex h-screen w-full flex-col overflow-hidden bg-white">
@@ -47,7 +48,7 @@ const ChatSection = observer(() => {
                             <ChatComponent
                                 emptyState={
                                     <div className="flex flex-col items-center gap-8 py-4 text-center">
-                                        <h1 className="font-cabin text-[32px] font-normal text-[#383432] lg:text-[48px] mb-1.5">
+                                        <h1 className="mb-1.5 max-w-full font-cabin text-[22px] font-normal leading-tight text-[#383432] sm:text-[14px] md:text-[26px] lg:text-[32px] xl:text-[42px]">
                                             <span className="bg-linear-to-r from-[#0788CE] via-[#17A3D0] to-[#A5C21B] bg-clip-text text-transparent">
                                                 Привет{firstName ? `, ${firstName}` : ""}!
                                             </span>
