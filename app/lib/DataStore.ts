@@ -117,7 +117,14 @@ class AppDataStore {
             },
         )
         .then(({ data }) => {
-            const geometry = data && data.geometry ? data.geometry : null;
+            const geometry =
+                data?.geometry ??
+                data?.territory?.geometry ??
+                data?.result?.geometry ??
+                data?.territory ??
+                data?.result ??
+                data ??
+                null;
             this.projectTerritories.set(projectId, geometry);
             return geometry;
         })
@@ -132,6 +139,42 @@ class AppDataStore {
         this.projectTerritoryRequests.set(projectId, request);
 
         return request;
+    }
+
+    getProjectScenarioName(scenarioId: number) {
+        return axios.get(
+            `${import.meta.env.VITE_URBAN_API}/scenarios/${scenarioId}`,
+            {
+                headers: {
+                    Authorization: `Bearer ${AuthStore.accessToken}`,
+                },
+            }
+        )
+        .then(({ data }) => {
+            return data && data.name && data.project?.name ? `${data.project.name} / ${data.name}` : `Сценарий #${scenarioId}`;
+        })
+        .catch(error => {
+            console.error("Error fetching scenario name:", error);
+            return `Сценарий #${scenarioId}`;
+        })
+    }
+
+    getProjectIdByScenario(scenarioId: number) {
+        return axios.get(
+            `${import.meta.env.VITE_URBAN_API}/scenarios/${scenarioId}`,
+            {
+                headers: {
+                    Authorization: `Bearer ${AuthStore.accessToken}`,
+                },
+            }
+        )
+        .then(({ data }) => {
+            return data?.project?.project_id ?? null;
+        })
+        .catch(error => {
+            console.error("Error fetching project ID by scenario:", error);
+            return null;
+        })
     }
 }
 

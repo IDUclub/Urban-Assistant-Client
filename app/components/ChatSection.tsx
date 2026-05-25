@@ -10,7 +10,7 @@ import MapView from "@components/MapView";
 
 const ChatSection = observer(() => {
     const { firstName } = NewUser;
-    const { chatMessages, selectedContext, selectedStage, selectedScenario } = ChatStore;
+    const { chatMessages, parsedContext, selectedContext, selectedStage, selectedScenario, isUserChatOpening } = ChatStore;
     const { userProjects, projectScenarios } = DataStore;
     const { isMapLayersAvailable } = MapStore;
     const [isMapExpanded, setIsMapExpanded] = useState(false);
@@ -23,9 +23,13 @@ const ChatSection = observer(() => {
     const visibleMapOffset = isMapLayersAvailable
         ? (isMapExpanded ? mapHeight : collapsedMapOffset)
         : "4px";
-    const selectedContextLabel = selectedContext === "nonproject"
+    const selectedContextLabel = parsedContext ?? (
+        selectedContext === "nonproject"
         ? `Вне проекта / ${selectedStage}`
-        : `${selectedProject?.name ?? "Без названия"} / ${selectedSceanrioItem?.name ?? "Сценарий"}`;
+        : `${selectedProject?.name ?? "Без названия"} / ${selectedSceanrioItem?.name ?? "Сценарий"}`
+    );
+
+    console.log(selectedContextLabel);
 
     return (
         <section className="relative flex h-screen w-full flex-col overflow-hidden bg-white">
@@ -45,18 +49,24 @@ const ChatSection = observer(() => {
                 >
                     <div className="min-h-0 flex-1 overflow-hidden">
                         <div className="mx-auto flex h-full w-full max-w-5xl flex-col">
-                            <ChatComponent
-                                emptyState={
-                                    <div className="flex flex-col items-center gap-8 py-4 text-center">
-                                        <h1 className="mb-1.5 max-w-full font-cabin text-[22px] font-normal leading-tight text-[#383432] sm:text-[14px] md:text-[26px] lg:text-[32px] xl:text-[42px]">
-                                            <span className="bg-linear-to-r from-[#0788CE] via-[#17A3D0] to-[#A5C21B] bg-clip-text text-transparent">
-                                                Привет{firstName ? `, ${firstName}` : ""}!
-                                            </span>
-                                            <span> Чем я могу помочь?</span>
-                                        </h1>
-                                    </div>
-                                }
-                            />
+                            {isUserChatOpening ? (
+                                <div className="flex h-full items-center justify-center text-sm font-medium text-gray-500">
+                                    Загрузка чата...
+                                </div>
+                            ) : (
+                                <ChatComponent
+                                    emptyState={
+                                        <div className="flex flex-col items-center gap-8 py-4 text-center">
+                                            <h1 className="mb-1.5 max-w-full font-cabin text-[22px] font-normal leading-tight text-[#383432] sm:text-[14px] md:text-[26px] lg:text-[32px] xl:text-[42px]">
+                                                <span className="bg-linear-to-r from-[#0788CE] via-[#17A3D0] to-[#A5C21B] bg-clip-text text-transparent">
+                                                    Привет{firstName ? `, ${firstName}` : ""}!
+                                                </span>
+                                                <span> Чем я могу помочь?</span>
+                                            </h1>
+                                        </div>
+                                    }
+                                />
+                            )}
                         </div>
                     </div>
                 </div>

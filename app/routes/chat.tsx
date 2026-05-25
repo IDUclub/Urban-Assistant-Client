@@ -9,9 +9,9 @@ import aiInstitute from "/png/ai_institute.png";
 import ChatSection from "@components/ChatSection";
 import { IoIosMail } from "react-icons/io";
 import { IoLogOutOutline, IoPersonCircleOutline } from "react-icons/io5";
-import { MdDeleteForever } from "react-icons/md";
 import ChatStore from "@lib/ChatStore";
 import { observer } from "mobx-react-lite";
+import { MdDeleteForever } from "react-icons/md";
 
 export function meta({}: Route.MetaArgs) {
   return [
@@ -38,11 +38,12 @@ export async function clientLoader({
 
     await DataStore.getUserProjects();
     await DataStore.getNonProjectStages();
+    await ChatStore.getUserChats();
 }
 
 const ChatPage = observer(() => {
     const { logoutUser, firstName, lastName, isAuthenticated } = AuthStore;
-    const { chatStoryPreview, activeChatId } = ChatStore;
+    const { chatStoryPreview, activeChatId, isUserChatsLoading, isUserChatOpening } = ChatStore;
     
     return (
         <main className="flex h-dvh w-screen items-center justify-center overflow-hidden">
@@ -77,7 +78,6 @@ const ChatPage = observer(() => {
                         "
                         onClick={() => {
                             ChatStore.clearChat();
-                            ChatStore.addChat();
                         }}
                     >
                         <span
@@ -104,15 +104,18 @@ const ChatPage = observer(() => {
                                             gap-2 rounded-3xl px-3 py-2 text-sm transition-colors
                                             ${activeChatId === chat.id
                                                 ? "bg-[#EAF5FF] text-[#0B5E8E]"
-                                                : "bg-gray-50 text-gray-700 hover:bg-gray-100"}
+                                                : "bg-gray-50/70 text-gray-700 hover:bg-gray-100"}
                                         `}
                                     >
                                         <button
                                             type="button"
                                             className="min-w-0 flex-1 cursor-pointer px-2 py-1 text-left"
-                                            onClick={() => ChatStore.loadChat(chat.id)}
+                                            onClick={() => ChatStore.openUserChat(chat.id)}
+                                            disabled={activeChatId === chat.id}
                                         >
-                                            <span className="block truncate">{chat.name}</span>
+                                            <span className="block truncate">
+                                                {chat.name}
+                                            </span>
                                         </button>
                                         <button
                                             type="button"
@@ -126,14 +129,14 @@ const ChatPage = observer(() => {
                                 ))
                             ) : (
                                 <div className="px-4 py-3 text-sm text-gray-400">
-                                    История пока пуста
+                                    {isUserChatsLoading ? "Загрузка истории..." : "История пока пуста"}
                                 </div>
                             )}
                         </div>
                     </div>
                     <div className="w-full mt-auto">
                         {isAuthenticated && (
-                            <div className="my-8 flex w-full items-center gap-3 rounded-[1.75rem] border border-slate-200 bg-slate-50/90 px-4 py-3 shadow-[0_16px_28px_-24px_rgba(15,23,42,0.55)]">
+                            <div className="my-5 flex w-full items-center gap-3 rounded-[1.75rem] border border-slate-200 bg-slate-50/90 px-4 py-3 shadow-[0_16px_28px_-24px_rgba(15,23,42,0.55)]">
                                 <div className="flex min-w-0 flex-1 items-center gap-3">
                                     <span className="shrink-0 text-[#0788CE]">
                                         <IoPersonCircleOutline size="2.25rem" />
