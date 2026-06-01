@@ -113,3 +113,17 @@ textarea,
 select {
   font: inherit;
 }
+
+@keyframes loader-cube-spin {
+  0% {
+    transform: rotateX(-20deg) rotateY(0deg);
+  }
+
+  50% {
+    transform: rotateX(25deg) rotateY(180deg) scale(1.08);
+  }
+
+  100% {
+    transform: rotateX(-20deg) rotateY(360deg);
+  }
+}

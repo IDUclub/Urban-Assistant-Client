@@ -10,6 +10,7 @@ import { useEffect } from "react";
 import { observer } from "mobx-react-lite";
 import type { Route } from "./+types/root";
 import AuthStore from "@lib/AuthStore";
+import PageLoader from "@components/PageLoader";
 import "./app.css";
 
 export const links: Route.LinksFunction = () => [
@@ -47,13 +48,17 @@ export function Layout({ children }: { children: React.ReactNode }) {
   );
 }
 
+export function HydrateFallback() {
+  return <PageLoader />;
+}
+
 const App = observer(function App() {
   useEffect(() => {
     void AuthStore.init();
   }, []);
 
   if (AuthStore.status === "idle" || AuthStore.status === "initializing") {
-    return <div className="min-h-screen bg-white" />;
+    return <PageLoader />;
   }
 
   return <Outlet />;
