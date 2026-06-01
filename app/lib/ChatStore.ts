@@ -366,10 +366,13 @@ type ChatSession = {
     selectedStage: string;
 };
 
+type ChatTool = "Проверка ПЗЗ";
+
 class ChatDataStore {
     selectedContext: string | number = "nonproject";
     selectedScenario: number | null = null;
     selectedStage: string = "Общее";
+    selectedChatTool: ChatTool | null = null;
     parsedContext: string | null = null;
 
     streamedResponse: string = "";
@@ -411,6 +414,10 @@ class ChatDataStore {
 
     setSelectedStage(stage: string) {
         this.selectedStage = stage;
+    }
+
+    setSelectedChatTool(tool: ChatTool | null) {
+        this.selectedChatTool = tool;
     }
 
     clearChat() {
@@ -768,26 +775,9 @@ class ChatDataStore {
         }
     };
 
-    sendChatMessage = async (message: string) => {
-        this.abortController?.abort();
-        this.abortController = new AbortController();
-        this.currentStreamRequestId += 1;
-        this.currentStreamContext = undefined;
-        this.streamedResponse = "";
-        this.isStreaming = true;
-        this.currentStatus = undefined;
-        // if (this.activeChatId === undefined) {
-        //     this.addChat();
-        // }
-        MapStore.clearMapLayers();
-        if (typeof this.selectedContext === "number") {
-            this.currentStreamContext = this.createProjectBoundaryStreamContext(this.selectedContext);
-        }
-        this.chatMessages.push({type: "request", message: { type: "text", text: message}})
-        
-        if (this.selectedContext === "nonproject") {
-            return axios.get(
-                `${import.meta.env.VITE_LLM_API}/stream/generate`,
+    sendNonProjectContextMessage(message: string) {
+        return axios.get(
+            `${import.meta.env.VITE_LLM_API}/stream/generate`,
                 {
                     headers: {
                         "Accept": "text/event-stream",
@@ -798,7 +788,7 @@ class ChatDataStore {
                     },
                     responseType: "stream",
                     adapter: "fetch",
-                    signal: this.abortController.signal,
+                    signal: this.abortController?.signal,
                 }
             )
             .then(
@@ -849,9 +839,11 @@ class ChatDataStore {
                 console.error("Error streaming chat message:", error);
             })
             .finally(this.finalizeStreamingState);
-        } else if (this.selectedContext !== "nonproject" && this.selectedScenario) {
-            return axios.get(
-                `${import.meta.env.VITE_LLM_RESTRICTIONS_API}/restrictions/generate_restrictions/stream`,
+    }
+
+    sendRestrictionsContextMessage(message: string) {
+        return axios.get(
+            `${import.meta.env.VITE_LLM_RESTRICTIONS_API}/restrictions/generate_restrictions/stream`,
                 {
                     headers: {
                         Accept: "text/event-stream",
@@ -859,7 +851,7 @@ class ChatDataStore {
                     },
                     responseType: "stream",
                     adapter: "fetch",
-                    signal: this.abortController.signal,
+                    signal: this.abortController?.signal,
                     params: {
                         model: "gpt-oss:20b",
                         scenario_id: this.selectedScenario,
@@ -905,17 +897,6 @@ class ChatDataStore {
                     }
 
                     this.commitStreamedResponse();
-
-                    // if (buffer.trim()) {
-                    //     const dataLines = buffer
-                    //         .split("\n")
-                    //         .filter((line) => line.startsWith("data:"))
-                    //         .map((line) => line.slice(5).trimStart());
-
-                    //     if (dataLines.length) {
-                    //         this.appendStreamChunk(dataLines.join("\n"));
-                    //     }
-                    // }
                 }
             ).catch((error) => {
                 if (axios.isCancel(error) || error?.name === "AbortError" || error?.name === "CanceledError") {
@@ -924,6 +905,99 @@ class ChatDataStore {
                 }
                 console.error("Error streaming chat message:", error);
             }).finally(this.finalizeStreamingState);
+    }
+
+    sendProvisionContextMessage(message: string) {
+        return axios.get(
+            `${import.meta.env.VITE_LLM_RESTRICTIONS_API}/provision/calculate_effects/stream`,
+                {
+                    headers: {
+                        Accept: "text/event-stream",
+                        Authorization: `Bearer ${AuthStore.accessToken}`,
+                    },
+                    responseType: "stream",
+                    adapter: "fetch",
+                    signal: this.abortController?.signal,
+                    params: {
+                        model: "gpt-oss:20b",
+                        scenario_id: this.selectedScenario,
+                        request: message,
+                    }
+                }
+            )
+            .then(
+                async (response) => {
+                    const stream = response.data;
+                    const reader = stream.pipeThrough(new TextDecoderStream()).getReader();
+                    let buffer = "";
+
+                    while (true) {
+                        const { value, done } = await reader.read();
+                        if (done) break;
+                        if (!value) continue;   
+
+                        buffer += value;
+                        const events = buffer.split("\n\n");
+                        buffer = events.pop() ?? "";
+
+                        for (const event of events) {
+                            const dataLines = event
+                                .split("\n")
+                                .filter((line) => line.startsWith("data:"))
+                                .map((line) => line.slice(5).trimStart());
+
+                            if (!dataLines.length) continue;
+                            this.appendStreamChunk(dataLines.join("\n"));
+                        }
+                    }
+
+                    if (buffer.trim()) {
+                        const dataLines = buffer
+                            .split("\n")
+                            .filter((line) => line.startsWith("data:"))
+                            .map((line) => line.slice(5).trimStart());
+
+                        if (dataLines.length) {
+                            this.appendStreamChunk(dataLines.join("\n"));
+                        }
+                    }
+
+                    this.commitStreamedResponse();
+                }
+            ).catch((error) => {
+                if (axios.isCancel(error) || error?.name === "AbortError" || error?.name === "CanceledError") {
+                    this.commitStreamedResponse();
+                    return;
+                }
+                console.error("Error streaming chat message:", error);
+            }).finally(this.finalizeStreamingState);
+    }
+
+    sendChatMessage = async (message: string) => {
+        this.abortController?.abort();
+        this.abortController = new AbortController();
+        this.currentStreamRequestId += 1;
+        this.currentStreamContext = undefined;
+        this.streamedResponse = "";
+        this.isStreaming = true;
+        this.currentStatus = undefined;
+        // if (this.activeChatId === undefined) {
+        //     this.addChat();
+        // }
+        MapStore.clearMapLayers();
+        if (typeof this.selectedContext === "number") {
+            this.currentStreamContext = this.createProjectBoundaryStreamContext(this.selectedContext);
+        }
+        this.chatMessages.push({type: "request", message: { type: "text", text: message}})
+        
+        if (this.selectedContext === "nonproject") {
+            return this.sendNonProjectContextMessage(message);
+        } else if (this.selectedContext !== "nonproject" && this.selectedScenario) {
+            if (this.selectedChatTool === "Проверка ПЗЗ") {
+                return this.sendProvisionContextMessage(message);
+            }
+
+            return this.sendRestrictionsContextMessage(message);
         }
 
         this.streamedResponse = "";

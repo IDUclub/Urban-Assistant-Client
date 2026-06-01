@@ -2,7 +2,13 @@ import { AiOutlinePlusCircle } from "react-icons/ai";
 import { IoIosSend } from "react-icons/io";
 import { FaStopCircle } from "react-icons/fa";
 import { LuLayers3 } from "react-icons/lu";
-import { MdDownload, MdMoreHoriz, MdOutlineMap } from "react-icons/md";
+import {
+    MdDownload,
+    MdMoreHoriz,
+    MdOutlineMap,
+    MdArrowForwardIos,
+    MdOutlineUploadFile,
+} from "react-icons/md";
 import { IoAlertCircleOutline } from "react-icons/io5";
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
@@ -11,6 +17,7 @@ import ChatStore from "@lib/ChatStore";
 import MapStore from "@lib/MapStore";
 import { SyncLoader } from "react-spinners";
 import ChatContextSelection from "@components/ChatContextSelection";
+import CascaderSelect from "@components/CascaderSelect";
 
 
 type ChatMessageItemType = "title" | "plain" | "block" | "list";
@@ -64,6 +71,30 @@ function parseMarkdownTableRow(line: string) {
         .map((cell) => cell.trim());
 }
 
+function parseMarkdownHeading(line: string) {
+    const headingMatch = line.trim().match(/^(#{1,6})\s*(.+)$/);
+
+    if (!headingMatch) return undefined;
+
+    return {
+        level: headingMatch[1].length,
+        text: headingMatch[2].trim(),
+    };
+}
+
+function getMarkdownHeadingClassName(level: number) {
+    switch (level) {
+        case 1:
+            return "mt-2 text-2xl font-semibold leading-tight text-gray-950";
+        case 2:
+            return "mt-2 text-xl font-semibold leading-tight text-gray-950";
+        case 3:
+            return "mt-1 text-lg font-semibold leading-snug text-gray-950";
+        default:
+            return "mt-1 text-base font-semibold leading-snug text-gray-900";
+    }
+}
+
 function renderFormattedText(text: string) {
     const lines = text.split("\n");
     const blocks: ReactNode[] = [];
@@ -112,6 +143,24 @@ function renderFormattedText(text: string) {
                         <code>{codeLines.join("\n")}</code>
                     </pre>
                 </div>
+            );
+            continue;
+        }
+
+        const heading = parseMarkdownHeading(line);
+
+        if (heading) {
+            flushParagraph();
+
+            const HeadingTag = `h${heading.level}` as "h1" | "h2" | "h3" | "h4" | "h5" | "h6";
+
+            blocks.push(
+                <HeadingTag
+                    key={`heading-${blocks.length}`}
+                    className={getMarkdownHeadingClassName(heading.level)}
+                >
+                    {renderInlineText(heading.text)}
+                </HeadingTag>
             );
             continue;
         }
@@ -287,12 +336,47 @@ function GeoJsonMessageActions({ name, layer }: { name: string; layer: unknown }
             )}
         </span>
     );
-}
+};
+
+const ChatTools = observer(() => {
+    const { isStreaming } = ChatStore;
+    const [isOpen, setIsOpen] = useState(false);
+
+    return (
+        <>
+          {isOpen && (
+            <div className="absolute left-full top-1/2 z-20 ml-2 w-auto -translate-y-1/2 rounded-2xl border border-slate-200 bg-white p-2 text-sm text-slate-700 shadow-[0_18px_40px_-20px_rgba(15,23,42,0.35)]">
+              <button
+                type="button"
+                className="flex w-full cursor-pointer items-center gap-2 rounded-xl px-3 py-2 text-left transition-colors hover:bg-slate-100"
+                onClick={() => setIsOpen(false)}
+              >
+                <MdOutlineMap size={18} />
+                Загрузить файл
+              </button>
+              <button
+                type="button"
+                className="flex w-full cursor-pointer items-center gap-2 rounded-xl px-3 py-2 text-left transition-colors hover:bg-slate-100"
+                onClick={() => setIsOpen(false)}
+              >
+                Сервисы
+                <MdArrowForwardIos size={14} className="text-slate-400" />
+              </button>
+            </div>
+          )}
+          <button className="group" onClick={() => setIsOpen(!isOpen)} disabled={isStreaming}>
+            <span className={isStreaming ? "text-slate-300" : "text-gray-950 group-hover:text-[#0788CE]"}>
+              <AiOutlinePlusCircle size={"2rem"} />
+            </span>
+          </button>
+        </>
+    );
+});
 
 const ChatInput = observer((
     { onSubmit }: { onSubmit: ChatComponentProps["onSubmit"]}
 ) => {
-    const { isStreaming, chatMessages } = ChatStore;
+    const { isStreaming, chatMessages, selectedContext, setSelectedChatTool } = ChatStore;
     const [currentInput, setCurrentInput] = useState<string>("");
     const isContextSelectionVisible = !chatMessages.length;
     const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -341,11 +425,34 @@ const ChatInput = observer((
                             disabled={isStreaming}
                         />
                         <div className="flex items-center gap-3">
-                            <button className="group" disabled={isStreaming}>
-                                <span className={isStreaming ? "text-slate-300" : "text-gray-950 group-hover:text-[#0788CE]"}>
-                                    <AiOutlinePlusCircle size={"2rem"} />
-                                </span>
-                            </button>
+                            {selectedContext !== "nonproject" && ( <CascaderSelect
+                                items={[
+                                    {
+                                        label: "Загрузить файл",
+                                        icon: <MdOutlineUploadFile size={18} />,
+                                        onClickAction: () => {},
+                                        disabled: true,
+                                    },
+                                    {
+                                        label: "Сервисы",
+                                        icon: <MdMoreHoriz size={18} />,
+                                        children: [
+                                            {
+                                                label: "Проверка ПЗЗ",
+                                                onClickAction: () => {
+                                                    setSelectedChatTool("Проверка ПЗЗ");
+                                                },
+                                            },
+                                        ],
+                                    },
+                                ]}
+                                rootNode={
+                                    <span className={isStreaming ? "text-slate-300" : "text-gray-950 hover:text-[#0788CE]"}>
+                                        <AiOutlinePlusCircle size={"2rem"} />
+                                    </span>
+                                }
+                                disabled={isStreaming}
+                            />)}
                             <button
                                 className={`group ${isStreaming ? "cursor-pointer" : ""}`}
                                 onClick={() => {
@@ -366,11 +473,9 @@ const ChatInput = observer((
                             </button>
                         </div>
                     </div>
-                    {isContextSelectionVisible && (
-                        <div className="w-full flex items-center justify-between gap-2">
-                            <ChatContextSelection />
-                        </div>
-                    )}
+                    <div className="w-full flex items-center justify-between gap-2">
+                        <ChatContextSelection />
+                    </div>
                 </div>
         </div>
     );
