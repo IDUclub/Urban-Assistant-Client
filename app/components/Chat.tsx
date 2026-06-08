@@ -438,9 +438,9 @@ const ChatInput = observer((
                                         icon: <MdMoreHoriz size={18} />,
                                         children: [
                                             {
-                                                label: "Проверка ПЗЗ",
+                                                label: "Обеспеченность",
                                                 onClickAction: () => {
-                                                    setSelectedChatTool("Проверка ПЗЗ");
+                                                    setSelectedChatTool("Обеспеченность");
                                                 },
                                             },
                                         ],

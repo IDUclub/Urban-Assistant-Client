@@ -366,7 +366,7 @@ type ChatSession = {
     selectedStage: string;
 };
 
-type ChatTool = "Проверка ПЗЗ";
+type ChatTool = "Обеспеченность";
 
 class ChatDataStore {
     selectedContext: string | number = "nonproject";
@@ -993,7 +993,7 @@ class ChatDataStore {
         if (this.selectedContext === "nonproject") {
             return this.sendNonProjectContextMessage(message);
         } else if (this.selectedContext !== "nonproject" && this.selectedScenario) {
-            if (this.selectedChatTool === "Проверка ПЗЗ") {
+            if (this.selectedChatTool === "Обеспеченность") {
                 return this.sendProvisionContextMessage(message);
             }
 
