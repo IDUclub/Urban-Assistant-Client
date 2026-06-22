@@ -338,6 +338,62 @@ function GeoJsonMessageActions({ name, layer }: { name: string; layer: unknown }
     );
 };
 
+function GeoJsonLayerRow({ name, layer }: { name: string; layer: unknown }) {
+    return (
+        <span className="inline-flex min-w-0 items-center gap-2 text-blue-600">
+            <LuLayers3 className="shrink-0" />
+            <span className="min-w-0 truncate">{name}</span>
+            <GeoJsonMessageActions
+                name={name}
+                layer={layer}
+            />
+        </span>
+    );
+}
+
+type ChatStoreMessage = (typeof ChatStore.chatMessages)[number];
+
+type GeoJsonResponseMessage = ChatStoreMessage & {
+    type: "response";
+    message: {
+        type: "geojson";
+        name: string;
+        layer: unknown;
+    };
+};
+
+
+function isGeoJsonResponseMessage(message: ChatStoreMessage): message is GeoJsonResponseMessage {
+    return message.type === "response" && message.message.type === "geojson";
+}
+
+function GeoJsonMessageAccordion({ messages }: { messages: GeoJsonResponseMessage[] }) {
+    return (
+        <details className="group w-full rounded-2xl border border-blue-100 bg-blue-50/40 text-blue-700">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 marker:hidden">
+                <span className="inline-flex min-w-0 items-center gap-2 font-medium">
+                    <LuLayers3 className="shrink-0" />
+                    <span className="min-w-0 truncate">GeoJSON-слои ({messages.length})</span>
+                </span>
+                <MdArrowForwardIos className="shrink-0 text-blue-500 transition-transform group-open:rotate-90" size={16} />
+            </summary>
+            <div className="flex flex-col gap-2 border-t border-blue-100 px-4 py-3">
+                {messages.map((message, index) => (
+                    <div
+                        key={`geojson-layer-${message.message.name}-${index}`}
+                        className="flex min-w-0 items-center justify-between gap-3 rounded-xl bg-white/80 px-3 py-2"
+                    >
+                        <GeoJsonLayerRow
+                            name={message.message.name}
+                            layer={message.message.layer}
+                        />
+                    </div>
+                ))}
+            </div>
+        </details>
+    );
+}
+
 const ChatTools = observer(() => {
     const { isStreaming } = ChatStore;
     const [isOpen, setIsOpen] = useState(false);
@@ -495,6 +551,78 @@ const ChatComponent = observer(function ChatComponent(
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
     }, [ChatStore.chatMessages.length, ChatStore.streamedResponse, ChatStore.isStreaming]);
 
+    const renderedMessages: ReactNode[] = [];
+
+    for (let ind = 0; ind < ChatStore.chatMessages.length; ind += 1) {
+        const message = ChatStore.chatMessages[ind];
+
+        if (isGeoJsonResponseMessage(message)) {
+            const geoJsonMessages: GeoJsonResponseMessage[] = [message];
+            let nextIndex = ind + 1;
+
+            while (nextIndex < ChatStore.chatMessages.length) {
+                const nextMessage = ChatStore.chatMessages[nextIndex];
+
+                if (!isGeoJsonResponseMessage(nextMessage)) break;
+
+                geoJsonMessages.push(nextMessage);
+                nextIndex += 1;
+            }
+
+            if (geoJsonMessages.length > 1) {
+                renderedMessages.push(
+                    <div
+                        key={`chat-message-geojson-group-${ind}`}
+                        className="w-full rounded-3xl py-4 pr-6 pl-1 text-gray-950"
+                    >
+                        <GeoJsonMessageAccordion messages={geoJsonMessages} />
+                    </div>
+                );
+                ind = nextIndex - 1;
+                continue;
+            }
+        }
+
+        renderedMessages.push(
+            <div
+                key={`chat-message-${message.type}-${ind}`}
+                className={
+                    message.type === "response"
+                        ? message.message.type === "error"
+                            ? "w-full rounded-3xl border border-red-200 bg-red-50 px-5 py-4 text-red-900"
+                            : "w-full rounded-3xl pr-6 pl-1 py-4 text-gray-950"
+                        : "w-fit self-end-safe rounded-3xl border border-gray-200 bg-blue-100 px-6 py-4 text-gray-950 whitespace-pre-wrap relative"
+                }
+            >
+                {message.message.type === "text" ? renderFormattedText(message.message.text) : ""}
+                {message.message.type === "error" && (
+                    <div className="flex items-start gap-3">
+                        <span className="mt-0.5 shrink-0 text-red-500">
+                            <IoAlertCircleOutline size={22} />
+                        </span>
+                        <div className="min-w-0">
+                            <div className="text-sm font-semibold text-red-700">
+                                Ошибка
+                            </div>
+                            <div className="mt-1 whitespace-pre-wrap text-sm leading-6 text-red-900">
+                                {message.message.text}
+                            </div>
+                        </div>
+                    </div>
+                )}
+                {message.message.type === "geojson" && (
+                    <GeoJsonLayerRow
+                        name={message.message.name}
+                        layer={message.message.layer}
+                    />
+                )}
+                {message.type === "request" && (
+                    <div className="absolute -bottom-1.5 right-4 w-0 h-0 border-l-8 border-l-transparent border-r-8 border-r-transparent border-t-8 border-t-blue-100"></div>
+                )}
+            </div>
+        );
+    }
+
     if (!hasMessages) {
         return (
             <div className="flex w-full flex-1 items-center justify-center">
@@ -510,50 +638,7 @@ const ChatComponent = observer(function ChatComponent(
         <div className="w-full flex flex-col min-h-0 flex-1">
             <div className="min-h-0 flex-1 overflow-y-auto pr-2">
                 <div className="flex min-h-full flex-col gap-2 pb-4 justify-start">
-                    {ChatStore.chatMessages.map(
-                        (message, ind) => (
-                            <div
-                                key={`chat-message-${message.type}-${ind}`}
-                                className={
-                                    message.type === "response"
-                                        ? message.message.type === "error"
-                                            ? "w-full rounded-3xl border border-red-200 bg-red-50 px-5 py-4 text-red-900"
-                                            : "w-full rounded-3xl pr-6 pl-1 py-4 text-gray-950"
-                                        : "w-fit self-end-safe rounded-3xl border border-gray-200 bg-blue-100 px-6 py-4 text-gray-950 whitespace-pre-wrap relative"
-                                }
-                            >
-                                {message.message.type === "text" ? renderFormattedText(message.message.text) : ""}
-                                {message.message.type === "error" && (
-                                    <div className="flex items-start gap-3">
-                                        <span className="mt-0.5 shrink-0 text-red-500">
-                                            <IoAlertCircleOutline size={22} />
-                                        </span>
-                                        <div className="min-w-0">
-                                            <div className="text-sm font-semibold text-red-700">
-                                                Ошибка
-                                            </div>
-                                            <div className="mt-1 whitespace-pre-wrap text-sm leading-6 text-red-900">
-                                                {message.message.text}
-                                            </div>
-                                        </div>
-                                    </div>
-                                )}
-                                {message.message.type === "geojson" && (
-                                    <span className="inline-flex items-center gap-2 text-blue-600">
-                                        <LuLayers3 />
-                                        <span>{message.message.name}</span>
-                                        <GeoJsonMessageActions
-                                            name={message.message.name}
-                                            layer={message.message.layer}
-                                        />
-                                    </span>
-                                )}
-                                {message.type === "request" && (
-                                    <div className="absolute -bottom-1.5 right-4 w-0 h-0 border-l-8 border-l-transparent border-r-8 border-r-transparent border-t-8 border-t-blue-100"></div>
-                                )}
-                            </div>
-                        )
-                    )}
+                    {renderedMessages}
                     <div>
                         {ChatStore.isStreaming && ChatStore.currentStatus && (
                             <span>{ChatStore.currentStatus}</span>

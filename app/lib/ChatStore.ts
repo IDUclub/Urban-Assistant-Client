@@ -8,6 +8,7 @@ interface UserChat {
     chat_id: string;
     title: string;
     scenario_id: number | null;
+    project_id?: number | null;
     metadata?: Record<string, any> | null;
     created_at: string;
     updated_at: string;
@@ -152,6 +153,27 @@ function normalizeBoundaryLayer(geometry: unknown): any | undefined {
     return undefined;
 }
 
+function hasBoundaryLayerContent(layer: unknown): boolean {
+    const parsedLayer = parseJsonValue(layer);
+    if (!parsedLayer || typeof parsedLayer !== "object" || Array.isArray(parsedLayer)) return false;
+
+    const record = parsedLayer as Record<string, any>;
+
+    if (record.type === "FeatureCollection") {
+        return Array.isArray(record.features) && record.features.length > 0;
+    }
+
+    if (record.type === "Feature") {
+        return !!record.geometry;
+    }
+
+    if (record.type === "GeometryCollection") {
+        return Array.isArray(record.geometries) && record.geometries.length > 0;
+    }
+
+    return typeof record.type === "string" && GEOJSON_TYPES.has(record.type) && "coordinates" in record;
+}
+
 function parseJsonValue(value: unknown): unknown {
     if (typeof value !== "string") return value;
 
@@ -188,6 +210,18 @@ function getTimestamp(value: unknown) {
     const timestamp = typeof value === "string" ? Date.parse(value) : NaN;
 
     return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function getUserChatProjectId(chat: UserChat) {
+    const metadata = chat.metadata ?? {};
+
+    return toNumber(
+        chat.project_id ??
+        metadata.project_id ??
+        metadata.projectId ??
+        metadata.selected_context ??
+        metadata.selectedContext,
+    );
 }
 
 function getLayerName(value: unknown) {
@@ -391,17 +425,61 @@ class ChatDataStore {
     abortController?: AbortController;
 
     get chatStoryPreview() {
-        return this.userChats
+        const projectNameById = new Map(
+            (DataStore.userProjects ?? []).map((project) => [project.id, project.name])
+        );
+        const scenarioProjectIdByScenarioId = new Map<number, number>();
+
+        DataStore.projectScenarios.forEach((scenarios, projectId) => {
+            if (!Array.isArray(scenarios)) return;
+
+            scenarios.forEach((scenario: any) => {
+                const scenarioId = toNumber(scenario?.id ?? scenario?.scenario_id);
+
+                if (scenarioId !== undefined) {
+                    scenarioProjectIdByScenarioId.set(scenarioId, projectId);
+                }
+            });
+        });
+
+        const groups = new Map<string, {
+            id: string;
+            projectId: number | null;
+            name: string;
+            chats: { id: string; name: string }[];
+        }>();
+        const sortedChats = this.userChats
             .slice()
             .sort(
                 (left, right) =>
                     getTimestamp(right.updated_at ?? right.created_at) -
                     getTimestamp(left.updated_at ?? left.created_at)
-            )
-            .map((chat, index) => ({
+            );
+
+        sortedChats.forEach((chat, index) => {
+            const projectId = getUserChatProjectId(chat) ??
+                (chat.scenario_id ? scenarioProjectIdByScenarioId.get(chat.scenario_id) : undefined);
+            const groupId = projectId === undefined ? "nonproject" : `project-${projectId}`;
+            const groupName = projectId === undefined
+                ? "Вне проекта"
+                : projectNameById.get(projectId) ?? `Проект #${projectId}`;
+
+            if (!groups.has(groupId)) {
+                groups.set(groupId, {
+                    id: groupId,
+                    projectId: projectId ?? null,
+                    name: groupName,
+                    chats: [],
+                });
+            }
+
+            groups.get(groupId)?.chats.push({
                 id: chat.chat_id,
                 name: chat.title?.trim() || `Чат ${this.userChats.length - index}`,
-            }));
+            });
+        });
+
+        return Array.from(groups.values());
     }
 
     setSelectedContext(value: string | number) {
@@ -432,6 +510,7 @@ class ChatDataStore {
         this.streamedResponse = "";
         this.currentStatus = undefined;
         this.activeChatId = undefined;
+        this.selectedChatTool = null;
 
         MapStore.clearMapLayers();
     }
@@ -600,10 +679,10 @@ class ChatDataStore {
         console.log("Current stream context", this.currentStreamRequestId);
         if (
             !streamContext ||
-            streamContext.requestId !== this.currentStreamRequestId
-            // streamContext.hasAddedProjectBoundary ||
-            // !streamContext.hasReceivedMapLayer ||
-            // !streamContext.projectBoundaryLayer
+            streamContext.requestId !== this.currentStreamRequestId ||
+            streamContext.hasAddedProjectBoundary ||
+            !streamContext.projectBoundaryLayer ||
+            !hasBoundaryLayerContent(streamContext.projectBoundaryLayer)
         ) {
             return;
         }
@@ -648,7 +727,7 @@ class ChatDataStore {
                 if (requestId !== this.currentStreamRequestId) return;
 
                 const boundaryLayer = normalizeBoundaryLayer(geometry);
-                if (!boundaryLayer) return;
+                if (!boundaryLayer || !hasBoundaryLayerContent(boundaryLayer)) return;
 
                 MapStore.addLayerToMap({
                     name: PROJECT_BOUNDARY_LAYER_NAME,
@@ -1004,6 +1083,50 @@ class ChatDataStore {
         this.isStreaming = false;
     };
 
+    private resolveMissingUserChatProjectIds(chats: UserChat[]) {
+        const scenarioIds = Array.from(new Set(
+            chats.flatMap((chat) => (
+                chat.scenario_id && getUserChatProjectId(chat) === undefined
+                    ? [chat.scenario_id]
+                    : []
+            ))
+        ));
+
+        if (!scenarioIds.length) return;
+
+        void Promise.all(
+            scenarioIds.map(async (scenarioId) => ({
+                scenarioId,
+                projectId: await DataStore.getProjectIdByScenario(scenarioId),
+            }))
+        ).then(action((resolvedProjects) => {
+            const projectIdByScenarioId = new Map(
+                resolvedProjects.flatMap(({ scenarioId, projectId }) =>
+                    projectId ? [[scenarioId, projectId] as const] : []
+                )
+            );
+
+            if (!projectIdByScenarioId.size) return;
+
+            this.userChats = this.userChats.map((chat) => {
+                if (!chat.scenario_id || getUserChatProjectId(chat) !== undefined) return chat;
+
+                const projectId = projectIdByScenarioId.get(chat.scenario_id);
+                if (!projectId) return chat;
+
+                return {
+                    ...chat,
+                    project_id: projectId,
+                    metadata: {
+                        ...(chat.metadata ?? {}),
+                        project_id: projectId,
+                        selectedContext: projectId,
+                    },
+                };
+            });
+        }));
+    }
+
     getUserChats() {
         this.isUserChatsLoading = true;
 
@@ -1021,13 +1144,17 @@ class ChatDataStore {
         .then(
             action(
                 ({ data }) => {
+                    console.log("Fetched user chats:", data);
                     const chats = Array.isArray(data?.items) ? data.items as UserChat[] : [];
                     const fetchedChatIds = new Set(chats.map((chat) => chat.chat_id));
                     const localOnlyChats = this.userChats.filter(
                         (chat) => !fetchedChatIds.has(chat.chat_id),
                     );
 
+                    console.log("Local only chats:", localOnlyChats);
+
                     this.userChats = [...chats, ...localOnlyChats];
+                    this.resolveMissingUserChatProjectIds(this.userChats);
                     return this.userChats;
                 },
             ),
@@ -1261,7 +1388,15 @@ class ChatDataStore {
             if (chat && chat.scenario_id) {
                 const projectId: number | null = await DataStore.getProjectIdByScenario(chat.scenario_id);
                 if (projectId) {
-                    this.currentStreamContext = this.createProjectBoundaryStreamContext(projectId);
+                    runInAction(() => {
+                        if (this.activeChatId !== chatId || this.currentStreamRequestId !== requestId) return;
+
+                        this.selectedContext = projectId;
+                        this.selectedScenario = chat.scenario_id;
+                        this.selectedStage = "Общее";
+                        void DataStore.getProjectScenarios(projectId);
+                        this.currentStreamContext = this.createProjectBoundaryStreamContext(projectId);
+                    });
                 }
             }
         } finally {
