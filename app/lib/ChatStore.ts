@@ -388,9 +388,31 @@ type ErrorMessage = {
     text: string;
 };
 
+type PzzZoneSource = {
+    year: number;
+    source: string;
+};
+
+type PzzTaskStatus = "queued" | "running" | "finished" | "failed" | "waiting_capacity";
+
+type PzzSetupStatus = "loading" | "ready" | "submitting" | PzzTaskStatus | "error";
+
+type PzzSetupMessage = {
+    type: "pzz_setup";
+    id: string;
+    request: string;
+    sources: PzzZoneSource[];
+    status: PzzSetupStatus;
+    selectedYear?: number;
+    selectedSource?: string;
+    errorText?: string;
+    taskExternalId?: string;
+    resultLoaded?: boolean;
+};
+
 type ChatMessage = {
     type: "request" | "response";
-    message: TextMessage | GeoJSONMessage | ErrorMessage;
+    message: TextMessage | GeoJSONMessage | ErrorMessage | PzzSetupMessage;
 };
 
 type ChatSession = {
@@ -400,13 +422,49 @@ type ChatSession = {
     selectedStage: string;
 };
 
-type ChatTool = "Обеспеченность";
+type ChatTool = "Обеспеченность" | "Проверка объектов по ПЗЗ";
+
+function isPzzSetupMessage(message: ChatMessage["message"]): message is PzzSetupMessage {
+    return message.type === "pzz_setup";
+}
+
+function normalizePzzZoneSources(value: unknown): PzzZoneSource[] {
+    const sources = Array.isArray(value) ? value : [];
+    const seenSources = new Set<string>();
+
+    return sources.flatMap((sourceItem) => {
+        const record = asRecord(sourceItem);
+        if (!record) return [];
+
+        const year = toNumber(record.year);
+        const source = toString(record.source);
+
+        if (year === undefined || !source) return [];
+
+        const key = `${year}:${source}`;
+        if (seenSources.has(key)) return [];
+        seenSources.add(key);
+
+        return { year, source };
+    }).sort((left, right) => right.year - left.year || left.source.localeCompare(right.source));
+}
+
+function normalizePzzTaskStatus(value: unknown): PzzTaskStatus | undefined {
+    return value === "queued" ||
+        value === "running" ||
+        value === "finished" ||
+        value === "failed" ||
+        value === "waiting_capacity"
+        ? value
+        : undefined;
+}
 
 class ChatDataStore {
     selectedContext: string | number = "nonproject";
     selectedScenario: number | null = null;
     selectedStage: string = "Общее";
     selectedChatTool: ChatTool | null = null;
+    selectedPzzZoneSource?: PzzZoneSource;
     parsedContext: string | null = null;
 
     streamedResponse: string = "";
@@ -415,6 +473,7 @@ class ChatDataStore {
     currentStatus?: string;
     activeChatId?: string | number;
     currentStreamRequestId: number = 0;
+    currentPzzSetupId: number = 0;
     currentStreamContext?: StreamContext;
     userChats: UserChat[] = [];
     isUserChatsLoading = false;
@@ -484,10 +543,12 @@ class ChatDataStore {
 
     setSelectedContext(value: string | number) {
         this.selectedContext = value;
+        this.selectedPzzZoneSource = undefined;
     }
 
     setSelectedScenario(scenarioId: number | null) {
         this.selectedScenario = scenarioId;
+        this.selectedPzzZoneSource = undefined;
     }
 
     setSelectedStage(stage: string) {
@@ -496,6 +557,9 @@ class ChatDataStore {
 
     setSelectedChatTool(tool: ChatTool | null) {
         this.selectedChatTool = tool;
+        if (tool !== "Проверка объектов по ПЗЗ") {
+            this.selectedPzzZoneSource = undefined;
+        }
     }
 
     clearChat() {
@@ -511,6 +575,7 @@ class ChatDataStore {
         this.currentStatus = undefined;
         this.activeChatId = undefined;
         this.selectedChatTool = null;
+        this.selectedPzzZoneSource = undefined;
 
         MapStore.clearMapLayers();
     }
@@ -836,6 +901,7 @@ class ChatDataStore {
         this.selectedContext = chat.selectedContext;
         this.selectedScenario = chat.selectedScenario ?? null;
         this.selectedStage = chat.selectedStage;
+        this.selectedChatTool = null;
 
         const lastRequestIndex = chat.messages.findLastIndex(message => message.type === "request");
         const lastResponseLayers = chat.messages.flatMap((message, ind) => 
@@ -1052,6 +1118,389 @@ class ChatDataStore {
             }).finally(this.finalizeStreamingState);
     }
 
+    private getNextPzzSetupId() {
+        return `pzz-setup-${this.currentPzzSetupId++}`;
+    }
+
+    private getPzzSetupMessage(setupId: string) {
+        const chatMessage = this.chatMessages.find(
+            (message) => message.type === "response" &&
+                isPzzSetupMessage(message.message) &&
+                message.message.id === setupId
+        );
+
+        return chatMessage && isPzzSetupMessage(chatMessage.message)
+            ? chatMessage.message
+            : undefined;
+    }
+
+    private hasActivePzzSetup() {
+        return this.chatMessages.some((message) =>
+            message.type === "response" &&
+            isPzzSetupMessage(message.message) &&
+            (message.message.status === "loading" ||
+                message.message.status === "ready" ||
+                message.message.status === "submitting" ||
+                message.message.status === "queued" ||
+                message.message.status === "waiting_capacity" ||
+                message.message.status === "running")
+        );
+    }
+
+    private startPzzCheckSetup(message: string) {
+        const scenarioId = this.selectedScenario;
+
+        this.isStreaming = false;
+        this.currentStatus = undefined;
+        this.abortController = undefined;
+
+        if (!scenarioId) {
+            this.chatMessages.push({
+                type: "response",
+                message: {
+                    type: "error",
+                    text: "Для проверки объектов по ПЗЗ выберите сценарий.",
+                },
+            });
+            return;
+        }
+
+        if (this.hasActivePzzSetup()) {
+            this.chatMessages.push({
+                type: "response",
+                message: {
+                    type: "error",
+                    text: "Завершите выбор года и типа зоны для текущей проверки ПЗЗ.",
+                },
+            });
+            return;
+        }
+
+        const setupId = this.getNextPzzSetupId();
+
+        this.chatMessages.push({
+            type: "response",
+            message: {
+                type: "pzz_setup",
+                id: setupId,
+                request: message,
+                sources: [],
+                status: "loading",
+            },
+        });
+
+        void DataStore.getScenarioZoneSources(scenarioId)
+            .then(action((data) => {
+                const setupMessage = this.getPzzSetupMessage(setupId);
+                if (!setupMessage) return;
+
+                const sources = normalizePzzZoneSources(data);
+
+                setupMessage.sources = sources;
+                setupMessage.status = sources.length ? "ready" : "error";
+                setupMessage.errorText = sources.length
+                    ? undefined
+                    : "Для выбранного сценария не найдены источники функциональных зон.";
+            }));
+    }
+
+    private setPzzSetupError(
+        setupId: string | undefined,
+        errorText: string,
+        status: PzzSetupStatus = "error",
+    ) {
+        this.selectedPzzZoneSource = undefined;
+
+        if (!setupId) return;
+
+        const setupMessage = this.getPzzSetupMessage(setupId);
+
+        if (!setupMessage) return;
+
+        setupMessage.status = status;
+        setupMessage.errorText = errorText;
+    }
+
+    private appendPzzResult(result: unknown) {
+        const layer = extractLayerFromUnknown(result, "Результат проверки ПЗЗ");
+
+        if (layer) {
+            this.chatMessages.push({
+                type: "response",
+                message: {
+                    type: "geojson",
+                    name: layer.name,
+                    layer: layer.layer,
+                },
+            });
+
+            MapStore.addLayerToMap({
+                name: layer.name,
+                layer: parseFeatureCollection(layer.layer),
+            });
+
+            return;
+        }
+
+        const serializedResult = typeof result === "string"
+            ? result
+            : JSON.stringify(result, null, 2);
+        const text = extractTextFromPayload(result) ??
+            (serializedResult ? `\`\`\`json\n${serializedResult}\n\`\`\`` : undefined);
+
+        this.chatMessages.push({
+            type: "response",
+            message: {
+                type: "text",
+                text: text || "Проверка объектов по ПЗЗ завершена.",
+            },
+        });
+    }
+
+    private fetchPzzTaskResult(
+        scenarioId: number,
+        externalId: string,
+        setupId: string | undefined,
+        requestId: number,
+    ) {
+        this.currentStatus = "Получение результата проверки объектов по ПЗЗ";
+
+        return axios.get(
+            `${import.meta.env.VITE_PZZ_COMPARE_API}/scenarios/${scenarioId}/tasks/${externalId}/result`,
+            {
+                headers: {
+                    Authorization: `Bearer ${AuthStore.accessToken}`,
+                },
+                signal: this.abortController?.signal,
+            },
+        )
+        .then(action(({ data }) => {
+            if (this.currentStreamRequestId !== requestId) return;
+
+            const setupMessage = setupId ? this.getPzzSetupMessage(setupId) : undefined;
+
+            if (setupMessage) {
+                setupMessage.status = "finished";
+                setupMessage.resultLoaded = true;
+                setupMessage.errorText = undefined;
+            }
+
+            this.appendPzzResult(data);
+        }))
+        .catch(action((error) => {
+            if (axios.isCancel(error) || error?.name === "AbortError" || error?.name === "CanceledError") {
+                return;
+            }
+
+            console.error("Error fetching PZZ check result:", error);
+            this.setPzzSetupError(setupId, "Проверка завершена, но результат получить не удалось.");
+            this.chatMessages.push({
+                type: "response",
+                message: {
+                    type: "error",
+                    text: "Проверка завершена, но результат получить не удалось.",
+                },
+            });
+        }))
+        .finally(action(() => {
+            if (this.currentStreamRequestId !== requestId) return;
+
+            this.isStreaming = false;
+            this.currentStatus = undefined;
+            this.abortController = undefined;
+            void this.getUserChats();
+        }));
+    }
+
+    private pollPzzTask(
+        scenarioId: number,
+        externalId: string,
+        setupId: string | undefined,
+        requestId: number,
+    ) {
+        return axios.get(
+            `${import.meta.env.VITE_PZZ_COMPARE_API}/scenarios/${scenarioId}/tasks/${externalId}`,
+            {
+                headers: {
+                    Authorization: `Bearer ${AuthStore.accessToken}`,
+                },
+                signal: this.abortController?.signal,
+            },
+        )
+        .then(action(({ data }) => {
+            if (this.currentStreamRequestId !== requestId) return;
+
+            const status = normalizePzzTaskStatus(data?.status);
+            const setupMessage = setupId ? this.getPzzSetupMessage(setupId) : undefined;
+
+            if (setupMessage) {
+                setupMessage.taskExternalId = externalId;
+                setupMessage.status = status ?? setupMessage.status;
+            }
+
+            if (status === "finished") {
+                return this.fetchPzzTaskResult(scenarioId, externalId, setupId, requestId);
+            }
+
+            if (status === "failed") {
+                this.isStreaming = false;
+                this.currentStatus = undefined;
+                this.abortController = undefined;
+                this.setPzzSetupError(
+                    setupId,
+                    data?.error_text ?? "Проверка объектов по ПЗЗ завершилась с ошибкой.",
+                    "failed",
+                );
+                this.chatMessages.push({
+                    type: "response",
+                    message: {
+                        type: "error",
+                        text: data?.error_text ?? "Проверка объектов по ПЗЗ завершилась с ошибкой.",
+                    },
+                });
+                void this.getUserChats();
+                return;
+            }
+
+            this.currentStatus = status === "waiting_capacity"
+                ? "Проверка объектов по ПЗЗ ожидает доступных ресурсов"
+                : "Проверка объектов по ПЗЗ выполняется";
+
+            window.setTimeout(() => {
+                if (this.currentStreamRequestId !== requestId) return;
+
+                void this.pollPzzTask(scenarioId, externalId, setupId, requestId);
+            }, 3000);
+        }))
+        .catch(action((error) => {
+            if (axios.isCancel(error) || error?.name === "AbortError" || error?.name === "CanceledError") {
+                return;
+            }
+
+            console.error("Error polling PZZ check status:", error);
+            this.isStreaming = false;
+            this.currentStatus = undefined;
+            this.abortController = undefined;
+            this.setPzzSetupError(setupId, "Не удалось получить статус проверки объектов по ПЗЗ.");
+            this.chatMessages.push({
+                type: "response",
+                message: {
+                    type: "error",
+                    text: "Не удалось получить статус проверки объектов по ПЗЗ.",
+                },
+            });
+        }));
+    }
+
+    private sendPzzCheckRequest(
+        message: string,
+        zoneSource: PzzZoneSource,
+        setupId?: string,
+    ) {
+        const scenarioId = this.selectedScenario;
+
+        if (!scenarioId) {
+            this.chatMessages.push({
+                type: "response",
+                message: {
+                    type: "error",
+                    text: "Для проверки объектов по ПЗЗ выберите сценарий.",
+                },
+            });
+            return;
+        }
+
+        this.abortController?.abort();
+        this.abortController = new AbortController();
+        const requestId = this.currentStreamRequestId;
+        this.isStreaming = true;
+        this.currentStatus = "Запуск проверки объектов по ПЗЗ";
+
+        const body = new URLSearchParams();
+        body.set("year", String(zoneSource.year));
+        body.set("source", zoneSource.source);
+
+        return axios.post(
+            `${import.meta.env.VITE_PZZ_COMPARE_API}/scenarios/${scenarioId}/classify`,
+            body,
+            {
+                headers: {
+                    Authorization: `Bearer ${AuthStore.accessToken}`,
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+                signal: this.abortController.signal,
+            },
+        )
+        .then(action(({ data }) => {
+            const externalId = toString(data?.external_id);
+            const taskStatus = normalizePzzTaskStatus(data?.status) ?? "queued";
+
+            if (!externalId) {
+                throw new Error("PZZ classify response does not include external_id");
+            }
+
+            this.selectedPzzZoneSource = zoneSource;
+
+            if (setupId) {
+                const setupMessage = this.getPzzSetupMessage(setupId);
+
+                if (setupMessage) {
+                    setupMessage.status = taskStatus;
+                    setupMessage.selectedYear = zoneSource.year;
+                    setupMessage.selectedSource = zoneSource.source;
+                    setupMessage.taskExternalId = externalId;
+                    setupMessage.errorText = undefined;
+                }
+            }
+
+            this.currentStatus = "Проверка объектов по ПЗЗ выполняется";
+            void this.pollPzzTask(scenarioId, externalId, setupId, requestId);
+            return data;
+        }))
+        .catch(action((error) => {
+            if (axios.isCancel(error) || error?.name === "AbortError" || error?.name === "CanceledError") {
+                return;
+            }
+
+            console.error("Error starting PZZ check:", error);
+
+            this.setPzzSetupError(setupId, "Не удалось запустить проверку объектов по ПЗЗ.");
+
+            this.chatMessages.push({
+                type: "response",
+                message: {
+                    type: "error",
+                    text: "Не удалось запустить проверку объектов по ПЗЗ.",
+                },
+            });
+            this.isStreaming = false;
+            this.currentStatus = undefined;
+            this.abortController = undefined;
+        }))
+    }
+
+    submitPzzSetup(setupId: string, year: number, source: string) {
+        const setupMessage = this.getPzzSetupMessage(setupId);
+        if (
+            !setupMessage ||
+            setupMessage.status === "submitting" ||
+            setupMessage.status === "queued" ||
+            setupMessage.status === "waiting_capacity" ||
+            setupMessage.status === "running" ||
+            setupMessage.status === "finished"
+        ) return;
+
+        const zoneSource = { year, source };
+
+        setupMessage.status = "submitting";
+        setupMessage.selectedYear = year;
+        setupMessage.selectedSource = source;
+        setupMessage.errorText = undefined;
+        this.selectedPzzZoneSource = zoneSource;
+
+        return this.sendPzzCheckRequest(setupMessage.request, zoneSource, setupId);
+    }
+
     sendChatMessage = async (message: string) => {
         this.abortController?.abort();
         this.abortController = new AbortController();
@@ -1064,7 +1513,10 @@ class ChatDataStore {
         //     this.addChat();
         // }
         MapStore.clearMapLayers();
-        if (typeof this.selectedContext === "number") {
+        if (
+            typeof this.selectedContext === "number" &&
+            this.selectedChatTool !== "Проверка объектов по ПЗЗ"
+        ) {
             this.currentStreamContext = this.createProjectBoundaryStreamContext(this.selectedContext);
         }
         this.chatMessages.push({type: "request", message: { type: "text", text: message}})
@@ -1074,6 +1526,12 @@ class ChatDataStore {
         } else if (this.selectedContext !== "nonproject" && this.selectedScenario) {
             if (this.selectedChatTool === "Обеспеченность") {
                 return this.sendProvisionContextMessage(message);
+            } else if (this.selectedChatTool === "Проверка объектов по ПЗЗ") {
+                if (this.selectedPzzZoneSource) {
+                    return this.sendPzzCheckRequest(message, this.selectedPzzZoneSource);
+                }
+
+                return this.startPzzCheckSetup(message);
             }
 
             return this.sendRestrictionsContextMessage(message);

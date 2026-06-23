@@ -176,6 +176,24 @@ class AppDataStore {
             return null;
         })
     }
+
+    getScenarioZoneSources(scenarioId: number) {
+        return axios.get(
+            `${import.meta.env.VITE_URBAN_API}/scenarios/${scenarioId}/functional_zone_sources`,
+            {
+                headers: {
+                    Authorization: `Bearer ${AuthStore.accessToken}`,
+                },
+            }
+        )
+        .then(({ data }) => {
+            return data && Array.isArray(data) ? data : [];
+        })
+        .catch(error => {
+            console.error("Error fetching scenario zone sources:", error);
+            return [];
+        })
+    }
 }
 
 const DataStore = new AppDataStore();

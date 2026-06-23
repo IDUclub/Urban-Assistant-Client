@@ -8,6 +8,7 @@ import {
     MdOutlineMap,
     MdArrowForwardIos,
     MdOutlineUploadFile,
+    MdCheck,
 } from "react-icons/md";
 import { IoAlertCircleOutline } from "react-icons/io5";
 import { useEffect, useRef, useState } from "react";
@@ -18,6 +19,7 @@ import MapStore from "@lib/MapStore";
 import { SyncLoader } from "react-spinners";
 import ChatContextSelection from "@components/ChatContextSelection";
 import CascaderSelect from "@components/CascaderSelect";
+import Select from "@components/ui/Select";
 
 
 type ChatMessageItemType = "title" | "plain" | "block" | "list";
@@ -362,6 +364,7 @@ type GeoJsonResponseMessage = ChatStoreMessage & {
     };
 };
 
+type PzzSetupData = Extract<ChatStoreMessage["message"], { type: "pzz_setup" }>;
 
 function isGeoJsonResponseMessage(message: ChatStoreMessage): message is GeoJsonResponseMessage {
     return message.type === "response" && message.message.type === "geojson";
@@ -393,6 +396,147 @@ function GeoJsonMessageAccordion({ messages }: { messages: GeoJsonResponseMessag
         </details>
     );
 }
+
+function getPzzSetupStatusLabel(status: PzzSetupData["status"]) {
+    switch (status) {
+        case "loading":
+            return "Загрузка источников";
+        case "ready":
+            return "Готово к запуску";
+        case "submitting":
+            return "Запуск";
+        case "queued":
+            return "В очереди";
+        case "waiting_capacity":
+            return "Ожидает ресурсы";
+        case "running":
+            return "Выполняется";
+        case "finished":
+            return "Завершено";
+        case "failed":
+            return "Ошибка";
+        case "error":
+            return "Ошибка";
+        default:
+            return "Статус неизвестен";
+    }
+}
+
+const PzzSetupMessageCard = observer(({ setup }: { setup: PzzSetupData }) => {
+    const yearOptions = Array.from(new Set(setup.sources.map((source) => source.year)))
+        .sort((left, right) => right - left);
+    const [selectedYear, setSelectedYear] = useState<number | undefined>(setup.selectedYear ?? yearOptions[0]);
+    const sourceOptions = setup.sources
+        .filter((source) => source.year === selectedYear)
+        .map((source) => source.source);
+    const [selectedSource, setSelectedSource] = useState<string | undefined>(setup.selectedSource ?? sourceOptions[0]);
+    const isLocked = setup.status === "submitting" ||
+        setup.status === "queued" ||
+        setup.status === "waiting_capacity" ||
+        setup.status === "running" ||
+        setup.status === "finished" ||
+        setup.status === "failed";
+    const isLoading = setup.status === "loading";
+    const canSubmit = !isLocked && setup.status === "ready" && selectedYear !== undefined && !!selectedSource;
+    const statusLabel = getPzzSetupStatusLabel(setup.status);
+
+    useEffect(() => {
+        if (setup.selectedYear !== undefined) {
+            setSelectedYear(setup.selectedYear);
+            return;
+        }
+
+        if (selectedYear === undefined && yearOptions.length) {
+            setSelectedYear(yearOptions[0]);
+        }
+    }, [setup.selectedYear, selectedYear, yearOptions.join("|")]);
+
+    useEffect(() => {
+        if (setup.selectedSource) {
+            setSelectedSource(setup.selectedSource);
+            return;
+        }
+
+        if (!sourceOptions.length) {
+            setSelectedSource(undefined);
+            return;
+        }
+
+        if (!selectedSource || !sourceOptions.includes(selectedSource)) {
+            setSelectedSource(sourceOptions[0]);
+        }
+    }, [selectedSource, setup.selectedSource, sourceOptions.join("|")]);
+
+    const handleSubmit = () => {
+        if (!canSubmit || selectedYear === undefined || !selectedSource) return;
+
+        ChatStore.submitPzzSetup(setup.id, selectedYear, selectedSource);
+    };
+
+    return (
+        <div className="flex w-full flex-col gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-800">
+            <div className="flex items-center justify-between gap-3">
+                <span className="font-medium text-slate-900">Проверка объектов по ПЗЗ</span>
+                <div className="flex min-w-0 shrink-0 items-center gap-2">
+                    <span className="rounded-full bg-white px-2.5 py-1 text-xs text-slate-500">
+                        {statusLabel}
+                    </span>
+                </div>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_auto]">
+                <label className="flex min-w-0 flex-col gap-3 text-xs font-medium uppercase tracking-[0.12em] text-slate-500">
+                    Год
+                    <Select
+                        value={selectedYear ?? ""}
+                        options={yearOptions.map((year) => ({
+                            label: String(year),
+                            value: year,
+                        }))}
+                        onChange={(value) => setSelectedYear(Number(value))}
+                        block
+                        // disabled={isLoading || isLocked || !yearOptions.length}
+                    />
+                </label>
+                <label className="flex min-w-0 flex-col gap-3 text-xs font-medium uppercase tracking-[0.12em] text-slate-500">
+                    Тип зоны
+                    <Select
+                        value={selectedSource ?? ""}
+                        options={sourceOptions.map((source) => ({
+                            label: source,
+                            value: source,
+                        }))}
+                        onChange={(value) => setSelectedSource(String(value))}
+                        block
+                        // disabled={isLoading || isLocked || !sourceOptions.length}
+                    />
+                </label>
+                <button
+                    type="button"
+                    className="inline-flex min-h-11 items-center justify-center gap-2 self-end rounded-2xl bg-[#0788CE] px-4 text-sm font-medium text-white transition-colors hover:bg-[#0676B3] disabled:cursor-not-allowed disabled:bg-slate-300"
+                    onClick={handleSubmit}
+                    disabled={!canSubmit}
+                >
+                    <MdCheck size={18} />
+                    {setup.status === "finished"
+                        ? "Готово"
+                        : setup.status === "failed" || setup.status === "error"
+                            ? "Ошибка"
+                            : isLocked
+                                ? "Запущено"
+                                : "Запустить"}
+                </button>
+            </div>
+            {isLoading && (
+                <div className="text-xs text-slate-500">Загрузка источников функциональных зон...</div>
+            )}
+            {setup.errorText && (
+                <div className="rounded-2xl border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700">
+                    {setup.errorText}
+                </div>
+            )}
+        </div>
+    );
+});
 
 const ChatTools = observer(() => {
     const { isStreaming } = ChatStore;
@@ -497,6 +641,12 @@ const ChatInput = observer((
                                                 label: "Обеспеченность",
                                                 onClickAction: () => {
                                                     setSelectedChatTool("Обеспеченность");
+                                                },
+                                            },
+                                            {
+                                                label: "Проверка объектов по ПЗЗ",
+                                                onClickAction: () => {
+                                                    setSelectedChatTool("Проверка объектов по ПЗЗ");
                                                 },
                                             },
                                         ],
@@ -615,6 +765,9 @@ const ChatComponent = observer(function ChatComponent(
                         name={message.message.name}
                         layer={message.message.layer}
                     />
+                )}
+                {message.message.type === "pzz_setup" && (
+                    <PzzSetupMessageCard setup={message.message} />
                 )}
                 {message.type === "request" && (
                     <div className="absolute -bottom-1.5 right-4 w-0 h-0 border-l-8 border-l-transparent border-r-8 border-r-transparent border-t-8 border-t-blue-100"></div>
