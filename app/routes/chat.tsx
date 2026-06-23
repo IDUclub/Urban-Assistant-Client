@@ -12,6 +12,7 @@ import { IoLogOutOutline, IoPersonCircleOutline } from "react-icons/io5";
 import ChatStore from "@lib/ChatStore";
 import { observer } from "mobx-react-lite";
 import { MdDeleteForever } from "react-icons/md";
+import ChatStory from "@components/ChatStory";
 
 export function meta({}: Route.MetaArgs) {
   return [
@@ -47,17 +48,17 @@ const ChatPage = observer(() => {
     
     return (
         <main className="flex h-dvh w-screen items-center justify-center overflow-hidden">
-            <div className="grid h-dvh w-screen grid-cols-[1fr_4fr] overflow-hidden">
+            <div className="grid h-dvh w-screen grid-cols-[1fr_2fr] lg:grid-cols-[1fr_3fr] 2xl:grid-cols-[1fr_4fr] overflow-hidden">
                 <aside className="z-20 flex h-dvh min-w-0 flex-col items-center overflow-hidden bg-white p-4 font-cabin text-gray-900 shadow-[20px_0_60px_-25px_rgba(15,23,42,0.28)]">
-                    <div className="flex flex-col items-center justify-center gap-8">
+                    <div className="flex flex-col items-center justify-center gap-4 lg:gap-6 xl:gap-6 2xl:gap-8">
                         <div className="flex flex-col items-center justify-center gap-2">
                             <div className="flex items-center justify-center gap-6">
-                                <img src={mskLogo} alt="Logo" className="xl:w-15 w-8 h-auto" />
-                                <img src={msiLogo} alt="Logo" className="xl:w-15 w-8 h-auto" />
-                                <img src={iduLogo} alt="Logo" className="xl:w-15 w-8 h-auto" />
+                                <img src={mskLogo} alt="Logo" className="2xl:w-14 xl:w-9 lg:w-7 w-4 h-auto" />
+                                <img src={msiLogo} alt="Logo" className="2xl:w-15 xl:w-10 lg:w-8 w-4 h-auto" />
+                                <img src={iduLogo} alt="Logo" className="2xl:w-15 xl:w-10 lg:w-8 w-4 h-auto" />
                                 {/* <img src={aiInstitute} alt="Logo" className="xl:w-50 w-24 h-auto" /> */}
                             </div>
-                            <img src={aiInstitute} alt="Logo" className="xl:w-70 w-24 h-auto" />
+                            <img src={aiInstitute} alt="Logo" className="2xl:w-70 xl:w-50 w-24 h-auto" />
                         </div>
                         <h1
                             className="
@@ -71,7 +72,7 @@ const ChatPage = observer(() => {
                     </div>
                     <button
                         className="
-                            relative mt-16 w-[80%] cursor-pointer overflow-hidden rounded-[1.75rem]
+                            relative mt-10 w-[80%] cursor-pointer overflow-hidden rounded-[1.75rem]
                             bg-linear-to-r from-[#0788CE] via-[#17A3D0] to-[#A5C21B]
                             p-px shadow-[0_0_24px_-4px_rgba(7,136,206,0.55)]
                             transition duration-200 hover:-translate-y-0.5 hover:shadow-[0_8px_24px_-4px_rgba(23,163,208,0.5)]
@@ -89,51 +90,7 @@ const ChatPage = observer(() => {
                             Новый чат
                         </span>
                     </button>
-                    <div className="mt-8 py-5 flex w-full min-w-0 min-h-0 flex-1 flex-col overflow-hidden border-t border-gray-900/30">
-                        <div className="px-4 text-sm font-medium uppercase tracking-[0.14em] text-gray-500">
-                            История чатов
-                        </div>
-                        <div className="mt-4 flex min-w-0 flex-1 flex-col space-y-2 overflow-y-auto px-2">
-                            {chatStoryPreview.length ? (
-                                chatStoryPreview.map((chat) => (
-                                    <div
-                                        key={chat.id}
-                                        className={`
-                                            group
-                                            flex w-full min-w-0 items-center justify-between
-                                            gap-2 rounded-3xl px-3 py-2 text-sm transition-colors
-                                            ${activeChatId === chat.id
-                                                ? "bg-[#EAF5FF] text-[#0B5E8E]"
-                                                : "bg-gray-50/70 text-gray-700 hover:bg-gray-100"}
-                                        `}
-                                    >
-                                        <button
-                                            type="button"
-                                            className="min-w-0 flex-1 cursor-pointer px-2 py-1 text-left"
-                                            onClick={() => ChatStore.openUserChat(chat.id)}
-                                            disabled={activeChatId === chat.id}
-                                        >
-                                            <span className="block truncate">
-                                                {chat.name}
-                                            </span>
-                                        </button>
-                                        <button
-                                            type="button"
-                                            className="cursor-pointer text-2xl text-red-700 opacity-0 transition-opacity group-hover:opacity-100 hover:text-red-800"
-                                            onClick={() => ChatStore.deleteChat(chat.id)}
-                                            aria-label="Удалить чат"
-                                        >
-                                            <MdDeleteForever />
-                                        </button>
-                                    </div>
-                                ))
-                            ) : (
-                                <div className="px-4 py-3 text-sm text-gray-400">
-                                    {isUserChatsLoading ? "Загрузка истории..." : "История пока пуста"}
-                                </div>
-                            )}
-                        </div>
-                    </div>
+                    <ChatStory />
                     <div className="w-full mt-auto">
                         {isAuthenticated && (
                             <div className="my-5 flex w-full items-center gap-3 rounded-[1.75rem] border border-slate-200 bg-slate-50/90 px-4 py-3 shadow-[0_16px_28px_-24px_rgba(15,23,42,0.55)]">
