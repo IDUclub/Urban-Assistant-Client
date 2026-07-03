@@ -20,7 +20,8 @@ function parseFeatureCollection(layer: unknown) {
         try {
             return JSON.parse(layer);
         } catch {
-            return undefined;
+            const uri = layer.trim();
+            return isGeoJsonLayerUri(uri) ? uri : undefined;
         }
     }
 
@@ -29,6 +30,17 @@ function parseFeatureCollection(layer: unknown) {
     }
 
     return undefined;
+}
+
+function isGeoJsonLayerUri(value: unknown): value is string {
+    if (typeof value !== "string" || !value.trim()) return false;
+
+    try {
+        const parsedUrl = new URL(value.trim());
+        return parsedUrl.protocol === "http:" || parsedUrl.protocol === "https:";
+    } catch {
+        return false;
+    }
 }
 
 type Bounds = [[number, number], [number, number]];
@@ -90,13 +102,220 @@ function getRandomColor() {
     return `rgb(${red}, ${green}, ${blue})`;
 }
 
-function createFillLayer(id: string, color: string) {
+const PZZ_VERDICT_PROPERTY = "Вердикт_ПЗЗ";
+const PZZ_VERDICT_COLORS = [
+    ["Разрешен", "#22C55E"],
+    ["Условно разрешен", "#EAB308"],
+    ["Разрешен как вспомогательный", "#14B8A6"],
+    ["Не разрешен", "#EF4444"],
+    ["Требуется ручная проверка", "#F97316"],
+    ["Нет пересечения с ПЗЗ", "#3B82F6"],
+    ["Нет описания зоны в шаблоне", "#A855F7"],
+    ["Только кандидаты классификатора", "#EC4899"],
+] as const;
+const PZZ_VERDICT_LEGEND_GRADIENT = `linear-gradient(to bottom, ${PZZ_VERDICT_COLORS.map(([, color]) => color).join(", ")})`;
+const PZZ_CLASSIFIER_CANDIDATES_VERDICT = "Только кандидаты классификатора";
+const VRI_TOP1_PROPERTY = "Топ1_возможный_ВРИ";
+const DEFAULT_FILL_OPACITY = 0.24;
+const PZZ_VERDICT_FILL_OPACITY = 0.65;
+const VRI_TOP1_FILL_OPACITY = 0.65;
+
+function getPrimitivePropertyMatchValue(value: unknown) {
+    if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") return undefined;
+
+    const matchValue = String(value);
+    return matchValue.trim() ? matchValue : undefined;
+}
+
+function normalizePropertyName(value: string) {
+    return value.trim().toLowerCase().replace(/[\s_]+/g, "");
+}
+
+function getFeatureProperty(feature: any, propertyName: string) {
+    const properties = feature?.properties;
+    if (!properties || typeof properties !== "object") return undefined;
+
+    if (propertyName in properties) return properties[propertyName];
+
+    const normalizedPropertyName = normalizePropertyName(propertyName);
+    const matchedKey = Object.keys(properties).find((key) =>
+        normalizePropertyName(key) === normalizedPropertyName
+    );
+
+    return matchedKey ? properties[matchedKey] : undefined;
+}
+
+function getFeaturePropertyValues(layer: unknown, propertyName: string): string[] {
+    const parsedLayer = parseFeatureCollection(layer);
+    if (!parsedLayer || typeof parsedLayer !== "object" || typeof parsedLayer === "string") return [];
+
+    const record = parsedLayer as Record<string, any>;
+    const values = new Set<string>();
+    const collectValue = (feature: any) => {
+        const value = getPrimitivePropertyMatchValue(getFeatureProperty(feature, propertyName));
+
+        if (value) {
+            values.add(value);
+        }
+    };
+
+    if (record.type === "FeatureCollection" && Array.isArray(record.features)) {
+        record.features.forEach(collectValue);
+        return Array.from(values);
+    }
+
+    if (record.type === "Feature") {
+        collectValue(record);
+        return Array.from(values);
+    }
+
+    const value = getPrimitivePropertyMatchValue(getFeatureProperty(record, propertyName));
+    return value ? [value] : [];
+}
+
+function hasLayerProperty(layer: unknown, propertyName: string): boolean {
+    return getFeaturePropertyValues(layer, propertyName).length > 0;
+}
+
+function isPzzCheckResponseLayer(name: string | undefined, layer: unknown) {
+    const normalizedName = name?.trim().toLowerCase() ?? "";
+
+    return normalizedName.includes("результат проверки пзз") || hasLayerProperty(layer, PZZ_VERDICT_PROPERTY);
+}
+
+function getStableValueColor(value: string) {
+    let hash = 0;
+
+    for (let index = 0; index < value.length; index += 1) {
+        hash = Math.imul(hash ^ value.charCodeAt(index), 16777619) >>> 0;
+    }
+
+    const red = 48 + (hash & 0x9f);
+    const green = 48 + ((hash >>> 8) & 0x9f);
+    const blue = 48 + ((hash >>> 16) & 0x9f);
+
+    return `#${[red, green, blue].map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function getPzzVerdictColor(value: string) {
+    return PZZ_VERDICT_COLORS.find(([verdict]) => verdict === value)?.[1] ?? getStableValueColor(value);
+}
+
+function getPzzVerdictValueColors(layer: unknown) {
+    const orderByVerdict = new globalThis.Map<string, number>(
+        PZZ_VERDICT_COLORS.map(([value], index) => [value, index])
+    );
+
+    return getFeaturePropertyValues(layer, PZZ_VERDICT_PROPERTY)
+        .sort((left, right) => {
+            const leftOrder = orderByVerdict.get(left) ?? Number.POSITIVE_INFINITY;
+            const rightOrder = orderByVerdict.get(right) ?? Number.POSITIVE_INFINITY;
+
+            return leftOrder - rightOrder || left.localeCompare(right, "ru");
+        })
+        .map((value) => [value, getPzzVerdictColor(value)] as const);
+}
+
+function getVriTop1ValueColors(layer: unknown) {
+    return getFeaturePropertyValues(layer, VRI_TOP1_PROPERTY)
+        .sort((left, right) => left.localeCompare(right, "ru"))
+        .map((value) => [value, getStableValueColor(value)] as const);
+}
+
+type CategoricalLayerStyle = {
+    propertyName: string;
+    valueColors: readonly (readonly [string, string])[];
+    fillOpacity: number;
+    legendGradient: string | undefined;
+};
+
+function getCategoricalLayerStyle(name: string | undefined, layer: unknown): CategoricalLayerStyle | undefined {
+    const pzzVerdictValues = getFeaturePropertyValues(layer, PZZ_VERDICT_PROPERTY);
+    const vriTop1ValueColors = getVriTop1ValueColors(layer);
+    const isPzzLayer = isPzzCheckResponseLayer(name, layer);
+
+    if (
+        isPzzLayer &&
+        pzzVerdictValues.length === 1 &&
+        pzzVerdictValues[0] === PZZ_CLASSIFIER_CANDIDATES_VERDICT &&
+        vriTop1ValueColors.length > 1
+    ) {
+        return {
+            propertyName: VRI_TOP1_PROPERTY,
+            valueColors: vriTop1ValueColors,
+            fillOpacity: VRI_TOP1_FILL_OPACITY,
+            legendGradient: getValueColorGradient(vriTop1ValueColors),
+        };
+    }
+
+    if (isPzzLayer && pzzVerdictValues.length) {
+        const valueColors = getPzzVerdictValueColors(layer);
+
+        return {
+            propertyName: PZZ_VERDICT_PROPERTY,
+            valueColors,
+            fillOpacity: PZZ_VERDICT_FILL_OPACITY,
+            legendGradient: getValueColorGradient(valueColors) ?? PZZ_VERDICT_LEGEND_GRADIENT,
+        };
+    }
+
+    if (!isPzzLayer && vriTop1ValueColors.length) {
+        return {
+            propertyName: VRI_TOP1_PROPERTY,
+            valueColors: vriTop1ValueColors,
+            fillOpacity: VRI_TOP1_FILL_OPACITY,
+            legendGradient: getValueColorGradient(vriTop1ValueColors),
+        };
+    }
+
+    return undefined;
+}
+
+function filterLayerByPropertyValue(
+    layer: unknown,
+    propertyName: string,
+    expectedValue: string,
+): any {
+    const parsedLayer = parseFeatureCollection(layer);
+    if (!parsedLayer || typeof parsedLayer !== "object" || typeof parsedLayer === "string") return layer;
+
+    const matchesValue = (feature: any) => {
+        const value = getPrimitivePropertyMatchValue(getFeatureProperty(feature, propertyName));
+        return value === expectedValue;
+    };
+
+    const record = parsedLayer as Record<string, any>;
+
+    if (record.type === "FeatureCollection" && Array.isArray(record.features)) {
+        return {
+            ...record,
+            features: record.features.filter(matchesValue),
+        };
+    }
+
+    if (record.type === "Feature") {
+        return matchesValue(record) ? record : {
+            type: "FeatureCollection",
+            features: [],
+        };
+    }
+
+    return layer;
+}
+
+function getValueColorGradient(valueColors: readonly (readonly [string, string])[]) {
+    if (!valueColors.length) return undefined;
+
+    return `linear-gradient(to bottom, ${valueColors.map(([, color]) => color).join(", ")})`;
+}
+
+function createFillLayer(id: string, color: string, opacity = DEFAULT_FILL_OPACITY) {
     return {
         id,
         type: "fill" as const,
         paint: {
             "fill-color": color,
-            "fill-opacity": 0.24,
+            "fill-opacity": opacity,
         },
     };
 }
@@ -130,6 +349,22 @@ function isTerritoryBoundaryLayer(name?: string) {
     const normalizedName = name?.trim().toLowerCase();
 
     return normalizedName === "граница территории" || normalizedName === "границы территории";
+}
+
+function getDefaultRenderedLayerIds(index: number) {
+    return [
+        `geojson-fill-${index}`,
+        `geojson-line-${index}`,
+        `geojson-point-${index}`,
+    ];
+}
+
+function getCategorizedRenderedLayerIds(index: number, valueIndex: number) {
+    return [
+        `geojson-category-fill-${valueIndex}-map-${index}`,
+        `geojson-category-line-${valueIndex}-map-${index}`,
+        `geojson-category-point-${valueIndex}-map-${index}`,
+    ];
 }
 
 interface MapViewProps {
@@ -182,15 +417,15 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
         return latestLayer ? getFeatureBounds(latestLayer.layer) : undefined;
     }, [latestLayer?.id]);
     const interactiveLayerIds = useMemo(() => {
-        return mapLayers.flatMap((layer, index) => (
-            layer.isVisible
-                ? [
-                    `geojson-fill-${index}`,
-                    `geojson-line-${index}`,
-                    `geojson-point-${index}`,
-                ]
-                : []
-        ));
+        return mapLayers.flatMap((layer, index) => {
+            if (!layer.isVisible) return [];
+
+            const categoricalStyle = getCategoricalLayerStyle(layer.name, layer.layer);
+
+            return categoricalStyle?.valueColors.length
+                ? categoricalStyle.valueColors.flatMap((_, valueIndex) => getCategorizedRenderedLayerIds(index, valueIndex))
+                : getDefaultRenderedLayerIds(index);
+        });
     }, [mapLayers]);
 
     const downloadLayer = (name: string, layer: unknown) => {
@@ -198,6 +433,18 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
             .trim()
             .replace(/[^\w.-]+/g, "_")
             .replace(/^_+|_+$/g, "") || "layer"}.geojson`;
+
+        if (isGeoJsonLayerUri(layer)) {
+            const anchor = document.createElement("a");
+
+            anchor.href = layer.trim();
+            anchor.download = fileName;
+            anchor.target = "_blank";
+            anchor.rel = "noreferrer";
+            anchor.click();
+            return;
+        }
+
         const blob = new Blob([JSON.stringify(layer, null, 2)], {
             type: "application/geo+json",
         });
@@ -241,34 +488,44 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
         });
     };
 
+    const zoomToBounds = (bounds: Bounds | undefined, duration = 1600) => {
+        if (!bounds || !mapRef.current) return;
+
+        const map = mapRef.current;
+        const [[minLng, minLat], [maxLng, maxLat]] = bounds;
+
+        if (minLng === maxLng && minLat === maxLat) {
+            map.flyTo({
+                center: [minLng, minLat],
+                zoom: 14,
+                duration,
+                essential: true,
+            });
+            return;
+        }
+
+        map.fitBounds(bounds, {
+            padding: 64,
+            duration,
+            essential: true,
+        });
+    };
+
+    const zoomToLayer = (layer: unknown) => {
+        zoomToBounds(getFeatureBounds(layer));
+    };
+
     useEffect(() => {
         setIsMounted(true);
     }, []);
 
     useEffect(() => {
-        if (!isMounted || !latestLayerBounds || !mapRef.current) {
+        if (!isMounted || !latestLayerBounds) {
             return;
         }
 
-        const map = mapRef.current;
-        const [[minLng, minLat], [maxLng, maxLat]] = latestLayerBounds;
-
         setTimeout(() => {
-            if (minLng === maxLng && minLat === maxLat) {
-                map.flyTo({
-                    center: [minLng, minLat],
-                    zoom: 14,
-                    duration: 1600,
-                    essential: true,
-                });
-                return;
-            }
-
-            map.fitBounds(latestLayerBounds, {
-                padding: 64,
-                duration: 1600,
-                essential: true,
-            });
+            zoomToBounds(latestLayerBounds);
         }, 300)
     }, [isMounted, latestLayerBounds]);
 
@@ -316,6 +573,8 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                         zoom: 11,
                     }}
                     mapStyle="mapbox://styles/mapbox/light-v11"
+                    language="ru"
+                    projection="mercator"
                     mapboxAccessToken={mapboxToken}
                     onClick={handleFeatureClick}
                     cursor={interactiveLayerIds.length ? "pointer" : "default"}
@@ -325,6 +584,39 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
 
                         const layerColor = layer.style?.color ?? "#fff";
                         const isBoundaryLayer = isTerritoryBoundaryLayer(layer.name);
+                        const categoricalStyle = getCategoricalLayerStyle(layer.name, layer.layer);
+
+                        if (categoricalStyle?.valueColors.length) {
+                            return categoricalStyle.valueColors.map(([value, color], valueIndex) => {
+                                const [fillLayerId, lineLayerId, pointLayerId] = getCategorizedRenderedLayerIds(index, valueIndex);
+
+                                return (
+                                    <Source
+                                        key={`geojson-category-source-${index}-${valueIndex}`}
+                                        id={`geojson-category-source-${index}-${valueIndex}`}
+                                        type="geojson"
+                                        data={filterLayerByPropertyValue(layer.layer, categoricalStyle.propertyName, value)}
+                                    >
+                                        {!isBoundaryLayer && (
+                                            <Layer
+                                                {...createFillLayer(fillLayerId, color, categoricalStyle.fillOpacity)}
+                                                layout={{ visibility: layer.isVisible ? "visible" : "none" }}
+                                            />
+                                        )}
+                                        <Layer
+                                            {...createLineLayer(lineLayerId, color)}
+                                            layout={{ visibility: layer.isVisible ? "visible" : "none" }}
+                                        />
+                                        {!isBoundaryLayer && (
+                                            <Layer
+                                                {...createPointLayer(pointLayerId, color)}
+                                                layout={{ visibility: layer.isVisible ? "visible" : "none" }}
+                                            />
+                                        )}
+                                    </Source>
+                                );
+                            });
+                        }
 
                         return (
                             <Source
@@ -361,37 +653,51 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                             Отображаемые слои
                         </div>
                         <div className="min-h-0 flex flex-1 flex-col gap-2 overflow-y-auto">
-                            {mapLayers.map((layer) => (
-                                <div
-                                    key={layer.id}
-                                    className={`
-                                        flex items-center gap-3 rounded-2xl py-2 text-sm
-                                        ${layer.isVisible ? "text-gray-700" : "text-gray-400"}
-                                    `}
-                                >
-                                    <button
-                                        type="button"
-                                        className="cursor-pointer text-lg text-gray-500 transition-colors hover:text-[#0788CE]"
-                                        onClick={() => MapStore.toggleLayerVisibility(layer.id)}
-                                        aria-label={layer.isVisible ? "Скрыть слой" : "Показать слой"}
+                            {mapLayers.map((layer) => {
+                                const categoricalStyle = getCategoricalLayerStyle(layer.name, layer.layer);
+                                const legendGradient = categoricalStyle?.legendGradient;
+
+                                return (
+                                    <div
+                                        key={layer.id}
+                                        className={`
+                                            flex items-center gap-3 rounded-2xl py-2 text-sm
+                                            ${layer.isVisible ? "text-gray-700" : "text-gray-400"}
+                                        `}
                                     >
-                                        {layer.isVisible ? <MdOutlineVisibility /> : <MdOutlineVisibilityOff />}
-                                    </button>
-                                    <span
-                                        className="h-4 w-1.5 shrink-0 shadow-sm"
-                                        style={{ backgroundColor: layer.style.color }}
-                                    />
-                                    <span className="min-w-0 flex-1 truncate">{layer.name || "Без названия"}</span>
-                                    <button
-                                        type="button"
-                                        className="cursor-pointer text-lg text-gray-500 transition-colors hover:text-[#0788CE]"
-                                        onClick={() => downloadLayer(layer.name, layer.layer)}
-                                        aria-label="Скачать слой"
-                                    >
-                                        <MdDownload />
-                                    </button>
-                                </div>
-                            ))}
+                                        <button
+                                            type="button"
+                                            className="cursor-pointer text-lg text-gray-500 transition-colors hover:text-[#0788CE]"
+                                            onClick={() => MapStore.toggleLayerVisibility(layer.id)}
+                                            aria-label={layer.isVisible ? "Скрыть слой" : "Показать слой"}
+                                        >
+                                            {layer.isVisible ? <MdOutlineVisibility /> : <MdOutlineVisibilityOff />}
+                                        </button>
+                                        <span
+                                            className="h-4 w-1.5 shrink-0 shadow-sm"
+                                            style={legendGradient
+                                                ? { background: legendGradient }
+                                                : { backgroundColor: layer.style.color }}
+                                        />
+                                        <button
+                                            type="button"
+                                            className="min-w-0 flex-1 cursor-pointer truncate text-left transition-colors hover:text-[#0788CE]"
+                                            onClick={() => zoomToLayer(layer.layer)}
+                                            title={layer.name || "Без названия"}
+                                        >
+                                            {layer.name || "Без названия"}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="cursor-pointer text-lg text-gray-500 transition-colors hover:text-[#0788CE]"
+                                            onClick={() => downloadLayer(layer.name, layer.layer)}
+                                            aria-label="Скачать слой"
+                                        >
+                                            <MdDownload />
+                                        </button>
+                                    </div>
+                                );
+                            })}
                         </div>
                     </div>
                 </div>

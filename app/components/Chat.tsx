@@ -12,10 +12,9 @@ import {
 } from "react-icons/md";
 import { IoAlertCircleOutline } from "react-icons/io5";
 import { useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { ChangeEvent, ReactNode } from "react";
 import { observer } from "mobx-react-lite";
 import ChatStore from "@lib/ChatStore";
-import MapStore from "@lib/MapStore";
 import { SyncLoader } from "react-spinners";
 import ChatContextSelection from "@components/ChatContextSelection";
 import CascaderSelect from "@components/CascaderSelect";
@@ -230,7 +229,8 @@ function parseFeatureCollection(layer: unknown) {
         try {
             return JSON.parse(layer);
         } catch {
-            return undefined;
+            const uri = layer.trim();
+            return isGeoJsonLayerUri(uri) ? uri : undefined;
         }
     }
 
@@ -241,14 +241,39 @@ function parseFeatureCollection(layer: unknown) {
     return undefined;
 }
 
-function downloadGeoJson(name: string, layer: unknown) {
-    const parsedLayer = parseFeatureCollection(layer);
-    if (!parsedLayer) return;
+function isGeoJsonLayerUri(value: unknown): value is string {
+    if (typeof value !== "string" || !value.trim()) return false;
 
-    const fileName = `${(name || "layer")
+    try {
+        const parsedUrl = new URL(value.trim());
+        return parsedUrl.protocol === "http:" || parsedUrl.protocol === "https:";
+    } catch {
+        return false;
+    }
+}
+
+function getGeoJsonFileName(name: string) {
+    return `${(name || "layer")
         .trim()
         .replace(/[^\w.-]+/g, "_")
         .replace(/^_+|_+$/g, "") || "layer"}.geojson`;
+}
+
+function downloadGeoJson(name: string, layer: unknown) {
+    if (isGeoJsonLayerUri(layer)) {
+        const anchor = document.createElement("a");
+
+        anchor.href = layer.trim();
+        anchor.download = getGeoJsonFileName(name);
+        anchor.target = "_blank";
+        anchor.rel = "noreferrer";
+        anchor.click();
+        return;
+    }
+
+    const parsedLayer = parseFeatureCollection(layer);
+    if (!parsedLayer) return;
+
     const blob = new Blob([JSON.stringify(parsedLayer, null, 2)], {
         type: "application/geo+json",
     });
@@ -256,7 +281,7 @@ function downloadGeoJson(name: string, layer: unknown) {
     const anchor = document.createElement("a");
 
     anchor.href = url;
-    anchor.download = fileName;
+    anchor.download = getGeoJsonFileName(name);
     anchor.click();
 
     URL.revokeObjectURL(url);
@@ -291,13 +316,7 @@ function GeoJsonMessageActions({ name, layer }: { name: string; layer: unknown }
     }, [isOpen]);
 
     const addLayerToMap = () => {
-        const parsedLayer = parseFeatureCollection(layer);
-        if (!parsedLayer) return;
-
-        MapStore.addLayerToMap({
-            name,
-            layer: parsedLayer,
-        });
+        ChatStore.addGeoJsonLayerMessageToMap(name, layer);
         setIsOpen(false);
     };
 
@@ -365,6 +384,7 @@ type GeoJsonResponseMessage = ChatStoreMessage & {
 };
 
 type PzzSetupData = Extract<ChatStoreMessage["message"], { type: "pzz_setup" }>;
+type VriSetupData = Extract<ChatStoreMessage["message"], { type: "vri_setup" }>;
 
 function isGeoJsonResponseMessage(message: ChatStoreMessage): message is GeoJsonResponseMessage {
     return message.type === "response" && message.message.type === "geojson";
@@ -538,6 +558,214 @@ const PzzSetupMessageCard = observer(({ setup }: { setup: PzzSetupData }) => {
     );
 });
 
+function getVriSetupStatusLabel(status: VriSetupData["status"]) {
+    switch (status) {
+        case "ready":
+            return "Настройка";
+        case "submitting":
+            return "Запуск";
+        case "running":
+            return "Выполняется";
+        case "finished":
+            return "Завершено";
+        case "error":
+            return "Ошибка";
+        default:
+            return "Статус неизвестен";
+    }
+}
+
+function VriFileUpload({
+    label,
+    fileName,
+    disabled,
+    onFileSelected,
+}: {
+    label: string;
+    fileName?: string;
+    disabled: boolean;
+    onFileSelected: (file: File) => void;
+}) {
+    const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        if (file) {
+            onFileSelected(file);
+        }
+        event.currentTarget.value = "";
+    };
+
+    return (
+        <label className="flex min-w-0 flex-col gap-2">
+            <span className="text-sm font-medium text-slate-900">{label}</span>
+            <span className="flex min-w-0 flex-col gap-2 rounded-2xl border border-dashed border-slate-300 bg-white px-4 py-4">
+                <span className="flex min-w-0 items-center gap-2 text-sm text-slate-600">
+                    <MdOutlineUploadFile className="shrink-0" size={20} />
+                    <span className="min-w-0 truncate">
+                        {fileName ?? "Выберите файл"}
+                    </span>
+                </span>
+                <input
+                    type="file"
+                    className="block w-full cursor-pointer text-sm text-slate-600 file:mr-3 file:cursor-pointer file:rounded-xl file:border-0 file:bg-[#0788CE] file:px-3 file:py-2 file:text-sm file:font-medium file:text-white disabled:cursor-not-allowed disabled:text-slate-300 disabled:file:bg-slate-300"
+                    onChange={handleFileChange}
+                    disabled={disabled}
+                />
+            </span>
+        </label>
+    );
+}
+
+function VriChoiceButtons({
+    question,
+    disabled,
+    onYes,
+    onNo,
+}: {
+    question: string;
+    disabled: boolean;
+    onYes: () => void;
+    onNo: () => void;
+}) {
+    return (
+        <div className="flex flex-col gap-3">
+            <div className="text-sm font-medium text-slate-900">{question}</div>
+            <div className="flex flex-wrap gap-2">
+                <button
+                    type="button"
+                    className="rounded-2xl bg-[#0788CE] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#0676B3] disabled:cursor-not-allowed disabled:bg-slate-300"
+                    onClick={onYes}
+                    disabled={disabled}
+                >
+                    Да
+                </button>
+                <button
+                    type="button"
+                    className="rounded-2xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-300"
+                    onClick={onNo}
+                    disabled={disabled}
+                >
+                    Нет
+                </button>
+            </div>
+        </div>
+    );
+}
+
+const VriSetupMessageCard = observer(({ setup }: { setup: VriSetupData }) => {
+    const isReady = setup.status === "ready";
+    const isLocked = setup.status === "submitting" ||
+        setup.status === "running" ||
+        setup.status === "finished";
+    const uploadedFiles = [
+        setup.landPlotsFileName ? `Земельные участки: ${setup.landPlotsFileName}` : undefined,
+        setup.classifierFileName ? `Классификатор ВРИ: ${setup.classifierFileName}` : undefined,
+        setup.pzzZonesFileName ? `Зоны ПЗЗ: ${setup.pzzZonesFileName}` : undefined,
+        setup.pzzZoneDescriptionFileName ? `Описание зон ПЗЗ: ${setup.pzzZoneDescriptionFileName}` : undefined,
+    ].filter(Boolean);
+
+    const renderStep = () => {
+        if (setup.status === "finished") {
+            return <div className="text-sm text-slate-600">Проверка ВРИ завершена.</div>;
+        }
+
+        if (setup.status === "submitting" || setup.status === "running") {
+            return <div className="text-sm text-slate-600">Проверка ВРИ выполняется...</div>;
+        }
+
+        switch (setup.step) {
+            case "upload_land_plots":
+                return (
+                    <VriFileUpload
+                        label="Загрузите земельные участки"
+                        fileName={setup.landPlotsFileName}
+                        disabled={!isReady || isLocked}
+                        onFileSelected={(file) => ChatStore.submitVriLandPlots(setup.id, file)}
+                    />
+                );
+            case "ask_classifier":
+                return (
+                    <VriChoiceButtons
+                        question="Хотите загрузить классификатор ВРИ?"
+                        disabled={!isReady || isLocked}
+                        onYes={() => ChatStore.answerVriClassifier(setup.id, true)}
+                        onNo={() => ChatStore.answerVriClassifier(setup.id, false)}
+                    />
+                );
+            case "upload_classifier":
+                return (
+                    <VriFileUpload
+                        label="Загрузите классификатор ВРИ"
+                        fileName={setup.classifierFileName}
+                        disabled={!isReady || isLocked}
+                        onFileSelected={(file) => ChatStore.submitVriClassifier(setup.id, file)}
+                    />
+                );
+            case "ask_pzz_check":
+                return (
+                    <VriChoiceButtons
+                        question="Хотите ли сравнить с ПЗЗ?"
+                        disabled={!isReady || isLocked}
+                        onYes={() => ChatStore.answerVriPzzCheck(setup.id, true)}
+                        onNo={() => ChatStore.answerVriPzzCheck(setup.id, false)}
+                    />
+                );
+            case "upload_pzz_zones":
+                return (
+                    <VriFileUpload
+                        label="Загрузите зоны ПЗЗ"
+                        fileName={setup.pzzZonesFileName}
+                        disabled={!isReady || isLocked}
+                        onFileSelected={(file) => ChatStore.submitVriPzzZones(setup.id, file)}
+                    />
+                );
+            case "ask_pzz_zone_description":
+                return (
+                    <VriChoiceButtons
+                        question="Хотите загрузить описание зон ПЗЗ?"
+                        disabled={!isReady || isLocked}
+                        onYes={() => ChatStore.answerVriPzzZoneDescription(setup.id, true)}
+                        onNo={() => ChatStore.answerVriPzzZoneDescription(setup.id, false)}
+                    />
+                );
+            case "upload_pzz_zone_description":
+                return (
+                    <VriFileUpload
+                        label="Загрузите описание зон ПЗЗ"
+                        fileName={setup.pzzZoneDescriptionFileName}
+                        disabled={!isReady || isLocked}
+                        onFileSelected={(file) => ChatStore.submitVriPzzZoneDescription(setup.id, file)}
+                    />
+                );
+            default:
+                return null;
+        }
+    };
+
+    return (
+        <div className="flex w-full flex-col gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-800">
+            <div className="flex items-center justify-between gap-3">
+                <span className="font-medium text-slate-900">Проверка ВРИ</span>
+                <span className="rounded-full bg-white px-2.5 py-1 text-xs text-slate-500">
+                    {getVriSetupStatusLabel(setup.status)}
+                </span>
+            </div>
+            {uploadedFiles.length > 0 && (
+                <div className="flex flex-col gap-1 rounded-2xl bg-white px-3 py-2 text-xs text-slate-500">
+                    {uploadedFiles.map((fileLabel) => (
+                        <div key={fileLabel} className="min-w-0 truncate">{fileLabel}</div>
+                    ))}
+                </div>
+            )}
+            {renderStep()}
+            {/* {setup.errorText && (
+                <div className="rounded-2xl border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700">
+                    {setup.errorText}
+                </div>
+            )} */}
+        </div>
+    );
+});
+
 const ChatTools = observer(() => {
     const { isStreaming } = ChatStore;
     const [isOpen, setIsOpen] = useState(false);
@@ -579,6 +807,48 @@ const ChatInput = observer((
     const { isStreaming, chatMessages, selectedContext, setSelectedChatTool } = ChatStore;
     const [currentInput, setCurrentInput] = useState<string>("");
     const isContextSelectionVisible = !chatMessages.length;
+    const isProjectContext = selectedContext !== "nonproject";
+    const serviceItems = [
+        ...(isProjectContext
+            ? [
+                {
+                    label: "Обеспеченность",
+                    onClickAction: () => {
+                        setSelectedChatTool("Обеспеченность");
+                    },
+                },
+                {
+                    label: "Проверка объектов по ПЗЗ",
+                    onClickAction: () => {
+                        setSelectedChatTool("Проверка объектов по ПЗЗ");
+                    },
+                },
+            ]
+            : []),
+        {
+            label: "Проверка ВРИ",
+            onClickAction: () => {
+                setSelectedChatTool("Проверка ВРИ");
+            },
+        },
+    ];
+    const toolMenuItems = [
+        ...(isProjectContext
+            ? [
+                {
+                    label: "Загрузить файл",
+                    icon: <MdOutlineUploadFile size={18} />,
+                    onClickAction: () => {},
+                    disabled: true,
+                },
+            ]
+            : []),
+        {
+            label: "Сервисы",
+            icon: <MdMoreHoriz size={18} />,
+            children: serviceItems,
+        },
+    ];
     const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
     useEffect(() => {
@@ -625,40 +895,15 @@ const ChatInput = observer((
                             disabled={isStreaming}
                         />
                         <div className="flex items-center gap-3">
-                            {selectedContext !== "nonproject" && ( <CascaderSelect
-                                items={[
-                                    {
-                                        label: "Загрузить файл",
-                                        icon: <MdOutlineUploadFile size={18} />,
-                                        onClickAction: () => {},
-                                        disabled: true,
-                                    },
-                                    {
-                                        label: "Сервисы",
-                                        icon: <MdMoreHoriz size={18} />,
-                                        children: [
-                                            {
-                                                label: "Обеспеченность",
-                                                onClickAction: () => {
-                                                    setSelectedChatTool("Обеспеченность");
-                                                },
-                                            },
-                                            {
-                                                label: "Проверка объектов по ПЗЗ",
-                                                onClickAction: () => {
-                                                    setSelectedChatTool("Проверка объектов по ПЗЗ");
-                                                },
-                                            },
-                                        ],
-                                    },
-                                ]}
+                            <CascaderSelect
+                                items={toolMenuItems}
                                 rootNode={
                                     <span className={isStreaming ? "text-slate-300" : "text-gray-950 hover:text-[#0788CE]"}>
                                         <AiOutlinePlusCircle size={"2rem"} />
                                     </span>
                                 }
                                 disabled={isStreaming}
-                            />)}
+                            />
                             <button
                                 className={`group ${isStreaming ? "cursor-pointer" : ""}`}
                                 onClick={() => {
@@ -740,7 +985,9 @@ const ChatComponent = observer(function ChatComponent(
                     message.type === "response"
                         ? message.message.type === "error"
                             ? "w-full rounded-3xl border border-red-200 bg-red-50 px-5 py-4 text-red-900"
-                            : "w-full rounded-3xl pr-6 pl-1 py-4 text-gray-950"
+                            : message.message.type === "warning"
+                                ? "w-full rounded-3xl border border-amber-200 bg-amber-50 px-5 py-4 text-amber-950"
+                                : "w-full rounded-3xl pr-6 pl-1 py-4 text-gray-950"
                         : "w-fit self-end-safe rounded-3xl border border-gray-200 bg-blue-100 px-6 py-4 text-gray-950 whitespace-pre-wrap relative"
                 }
             >
@@ -760,6 +1007,21 @@ const ChatComponent = observer(function ChatComponent(
                         </div>
                     </div>
                 )}
+                {message.message.type === "warning" && (
+                    <div className="flex items-start gap-3">
+                        <span className="mt-0.5 shrink-0 text-amber-500">
+                            <IoAlertCircleOutline size={22} />
+                        </span>
+                        <div className="min-w-0">
+                            <div className="text-sm font-semibold text-amber-800">
+                                Предупреждение
+                            </div>
+                            <div className="mt-1 whitespace-pre-wrap text-sm leading-6 text-amber-950">
+                                {message.message.text}
+                            </div>
+                        </div>
+                    </div>
+                )}
                 {message.message.type === "geojson" && (
                     <GeoJsonLayerRow
                         name={message.message.name}
@@ -768,6 +1030,9 @@ const ChatComponent = observer(function ChatComponent(
                 )}
                 {message.message.type === "pzz_setup" && (
                     <PzzSetupMessageCard setup={message.message} />
+                )}
+                {message.message.type === "vri_setup" && (
+                    <VriSetupMessageCard setup={message.message} />
                 )}
                 {message.type === "request" && (
                     <div className="absolute -bottom-1.5 right-4 w-0 h-0 border-l-8 border-l-transparent border-r-8 border-r-transparent border-t-8 border-t-blue-100"></div>

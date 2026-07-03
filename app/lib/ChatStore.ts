@@ -52,7 +52,12 @@ type ToolCallPart = UserChatPartBase & {
     payload: ToolCallPayload;
 };
 
-type UserChatPart = TextPart | StatusPart | ToolCallPart;
+type FilePart = UserChatPartBase & {
+    kind: "file";
+    payload: Record<string, any>;
+};
+
+type UserChatPart = TextPart | StatusPart | ToolCallPart | FilePart;
 
 interface UserChatMessage {
     message_id: string;
@@ -80,7 +85,8 @@ function parseFeatureCollection(layer: unknown) {
         try {
             return JSON.parse(layer);
         } catch {
-            return undefined;
+            const uri = layer.trim();
+            return isGeoJsonLayerUri(uri) ? uri : undefined;
         }
     }
 
@@ -88,6 +94,12 @@ function parseFeatureCollection(layer: unknown) {
         return layer;
     }
 };
+
+function getLayerUri(layer: unknown) {
+    const parsedLayer = parseFeatureCollection(layer);
+
+    return isGeoJsonLayerUri(parsedLayer) ? parsedLayer : undefined;
+}
 
 const PROJECT_BOUNDARY_LAYER_NAME = "Граница территории";
 const HISTORY_LAYER_FALLBACK_NAME = "Слой";
@@ -174,6 +186,26 @@ function hasBoundaryLayerContent(layer: unknown): boolean {
     return typeof record.type === "string" && GEOJSON_TYPES.has(record.type) && "coordinates" in record;
 }
 
+async function downloadGeoJsonLayer(uri: string) {
+    const response = await fetch(uri, {
+        redirect: "follow",
+    });
+
+    if (!response.ok) {
+        throw new Error(`GeoJSON layer request failed with ${response.status}`);
+    }
+
+    const text = await response.text();
+    const parsed = parseJsonValue(text);
+    const layer = normalizeBoundaryLayer(parsed);
+
+    if (!layer) {
+        throw new Error("Downloaded file is not a valid GeoJSON layer");
+    }
+
+    return layer;
+}
+
 function parseJsonValue(value: unknown): unknown {
     if (typeof value !== "string") return value;
 
@@ -204,6 +236,18 @@ function toNumber(value: unknown) {
 
 function toString(value: unknown) {
     return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function isGeoJsonLayerUri(value: unknown) {
+    const uri = toString(value);
+    if (!uri) return false;
+
+    try {
+        const parsedUrl = new URL(uri);
+        return parsedUrl.protocol === "http:" || parsedUrl.protocol === "https:";
+    } catch {
+        return false;
+    }
 }
 
 function getTimestamp(value: unknown) {
@@ -320,6 +364,83 @@ function extractTextFromPayload(payload: unknown) {
     );
 }
 
+function isGeoJsonFilePayload(content: Record<string, any>) {
+    const mimeType = toString(content.mime_type ?? content.mimeType)?.toLowerCase();
+    const filename = toString(content.filename)?.toLowerCase();
+    const uri = toString(content.uri ?? content.url ?? content.download_url ?? content.downloadUrl)?.toLowerCase();
+
+    return (
+        !!mimeType?.includes("geo+json") ||
+        !!mimeType?.includes("geojson") ||
+        !!filename?.endsWith(".geojson") ||
+        !!uri?.includes(".geojson")
+    );
+}
+
+function extractGeoJsonFileLayer(
+    payload: unknown,
+    fallbackName = "GeoJSON layer",
+): UserChatLayer | undefined {
+    const parsed = parseJsonValue(payload);
+    const record = asRecord(parsed);
+    if (!record) return undefined;
+
+    const content = asRecord(record.content) ?? record;
+    if (!isGeoJsonFilePayload(content)) return undefined;
+
+    const uri = (
+        toString(content.uri) ??
+        toString(content.url) ??
+        toString(content.download_url) ??
+        toString(content.downloadUrl)
+    );
+
+    if (!isGeoJsonLayerUri(uri)) return undefined;
+
+    return {
+        name: (
+            toString(content.filename) ??
+            toString(content.name) ??
+            fallbackName
+        ),
+        layer: uri,
+    };
+}
+
+function getVriFileLayer(payload: unknown, eventName?: string): UserChatLayer | undefined {
+    const chunkKind = getStreamChunkKind(payload, eventName);
+    if (chunkKind !== "file") return undefined;
+
+    return extractGeoJsonFileLayer(payload);
+}
+
+function isVriResultFile(payload: unknown, eventName?: string) {
+    const chunkKind = getStreamChunkKind(payload, eventName);
+    if (chunkKind !== "file") return false;
+
+    const record = asRecord(payload);
+    const content = asRecord(record?.content) ?? record;
+    if (!content) return false;
+
+    const role = toString(content.role)?.toLowerCase();
+    const name = toString(content.name)?.toLowerCase();
+    const filename = toString(content.filename)?.toLowerCase();
+    const uri = toString(content.uri ?? content.url ?? content.download_url ?? content.downloadUrl)?.toLowerCase();
+    const event = eventName?.toLowerCase();
+    const resultMarkers = [name, filename, uri].filter((value): value is string => !!value);
+
+    return (
+        role === "result" ||
+        event === "result" ||
+        resultMarkers.some((value) =>
+            value === "classified_result" ||
+            value.includes("classified_result") ||
+            value.includes("/files/result/") ||
+            value.includes("/outputs/") && value.includes("result")
+        )
+    );
+}
+
 function isStatusPart(part: UserChatMessage["parts"][number]) {
     const payload = asRecord(part.payload);
 
@@ -388,6 +509,11 @@ type ErrorMessage = {
     text: string;
 };
 
+type WarningMessage = {
+    type: "warning";
+    text: string;
+};
+
 type PzzZoneSource = {
     year: number;
     source: string;
@@ -410,9 +536,62 @@ type PzzSetupMessage = {
     resultLoaded?: boolean;
 };
 
+type VriSetupStatus = "ready" | "submitting" | "running" | "finished" | "error";
+
+type VriSetupStep =
+    "upload_land_plots" |
+    "ask_classifier" |
+    "upload_classifier" |
+    "ask_pzz_check" |
+    "upload_pzz_zones" |
+    "ask_pzz_zone_description" |
+    "upload_pzz_zone_description" |
+    "finished";
+
+type VriSetupMessage = {
+    type: "vri_setup";
+    id: string;
+    request: string;
+    status: VriSetupStatus;
+    step: VriSetupStep;
+    landPlotsFileName?: string;
+    classifierFileName?: string;
+    pzzZonesFileName?: string;
+    pzzZoneDescriptionFileName?: string;
+    wantsClassifier?: boolean;
+    wantsPzzCheck?: boolean;
+    wantsPzzZoneDescription?: boolean;
+    errorText?: string;
+};
+
+type VriSetupFiles = {
+    landPlots?: File;
+    classifier?: File;
+    pzzZones?: File;
+    pzzZoneDescription?: File;
+};
+
+type SseStreamEvent = {
+    eventName?: string;
+    data: string;
+};
+
+type VriStreamState = {
+    hasReceivedResult: boolean;
+    hasReceivedReport: boolean;
+    hasStreamError: boolean;
+    reportMessageIndex?: number;
+};
+
+type AddGeoJsonLayerOptions = {
+    requestId?: number;
+    showError?: boolean;
+    onLayerAdded?: () => void;
+};
+
 type ChatMessage = {
     type: "request" | "response";
-    message: TextMessage | GeoJSONMessage | ErrorMessage | PzzSetupMessage;
+    message: TextMessage | GeoJSONMessage | ErrorMessage | WarningMessage | PzzSetupMessage | VriSetupMessage;
 };
 
 type ChatSession = {
@@ -422,10 +601,14 @@ type ChatSession = {
     selectedStage: string;
 };
 
-type ChatTool = "Обеспеченность" | "Проверка объектов по ПЗЗ";
+type ChatTool = "Обеспеченность" | "Проверка объектов по ПЗЗ" | "Проверка ВРИ";
 
 function isPzzSetupMessage(message: ChatMessage["message"]): message is PzzSetupMessage {
     return message.type === "pzz_setup";
+}
+
+function isVriSetupMessage(message: ChatMessage["message"]): message is VriSetupMessage {
+    return message.type === "vri_setup";
 }
 
 function normalizePzzZoneSources(value: unknown): PzzZoneSource[] {
@@ -459,6 +642,276 @@ function normalizePzzTaskStatus(value: unknown): PzzTaskStatus | undefined {
         : undefined;
 }
 
+const VRI_FORM_FIELDS = {
+    landPlots: "cadastral_feature_collection_file",
+    classifier: "vri_classifier_file",
+    pzzZones: "pzz_zones_feature_collection_file",
+    pzzZoneDescription: "pzz_zone_vri_labels_file",
+} as const;
+
+const VRI_RESULT_EVENT_NAMES = new Set([
+    "result",
+    "output",
+    "finished",
+    "finish",
+    "complete",
+    "completed",
+    "done",
+]);
+
+const VRI_REPORT_CHUNK_KINDS = new Set([
+    "report",
+    "report_chunk",
+    "chunk",
+    "object_zone_fit",
+]);
+
+const VRI_STATUS_CHUNK_KINDS = new Set([
+    "status",
+    "warning",
+]);
+
+function parseSseEventBlock(eventBlock: string): SseStreamEvent | undefined {
+    let eventName: string | undefined;
+    const dataLines: string[] = [];
+
+    eventBlock.split(/\r?\n/).forEach((rawLine) => {
+        const line = rawLine.trimEnd();
+        if (!line || line.startsWith(":")) return;
+
+        if (line.startsWith("event:")) {
+            eventName = line.slice(6).trim() || undefined;
+            return;
+        }
+
+        if (line.startsWith("data:")) {
+            dataLines.push(line.slice(5).trimStart());
+        }
+    });
+
+    if (!dataLines.length) return undefined;
+
+    return {
+        eventName,
+        data: dataLines.join("\n"),
+    };
+}
+
+async function readSseStream(
+    stream: ReadableStream<Uint8Array>,
+    handleEvent: (event: SseStreamEvent) => void,
+) {
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split(/\r?\n\r?\n/);
+        buffer = events.pop() ?? "";
+
+        events.forEach((eventBlock) => {
+            const event = parseSseEventBlock(eventBlock);
+            if (event) handleEvent(event);
+        });
+    }
+
+    buffer += decoder.decode();
+
+    if (!buffer.trim()) return;
+
+    const event = parseSseEventBlock(buffer);
+    if (event) handleEvent(event);
+}
+
+function getStreamChunkKind(payload: unknown, eventName?: string) {
+    const record = asRecord(payload);
+    const content = asRecord(record?.content);
+    const data = asRecord(record?.data);
+    const candidates = [
+        record?.type,
+        record?.chunk_type,
+        record?.chunkType,
+        content?.type,
+        data?.type,
+        eventName,
+    ];
+
+    for (const candidate of candidates) {
+        const chunkKind = toString(candidate)?.toLowerCase();
+        if (chunkKind && chunkKind !== "message") return chunkKind;
+    }
+
+    return undefined;
+}
+
+function getVriErrorText(payload: unknown) {
+    const parsed = parseJsonValue(payload);
+    if (typeof parsed === "string") return parsed.trim() || undefined;
+
+    const record = asRecord(parsed);
+    const content = asRecord(record?.content);
+    if (!record) return undefined;
+
+    return (
+        toString(record.error_text) ??
+        toString(record.errorText) ??
+        toString(record.error) ??
+        toString(record.detail) ??
+        toString(record.message) ??
+        toString(record.traceback) ??
+        toString(content?.error_text) ??
+        toString(content?.errorText) ??
+        toString(content?.error) ??
+        toString(content?.traceback)
+    );
+}
+
+function getVriReportText(payload: unknown, eventName?: string) {
+    const chunkKind = getStreamChunkKind(payload, eventName);
+    if (!chunkKind || !VRI_REPORT_CHUNK_KINDS.has(chunkKind)) return undefined;
+
+    const parsed = parseJsonValue(payload);
+    if (typeof parsed === "string") return parsed;
+
+    const record = asRecord(parsed);
+    if (!record) return undefined;
+
+    const content = asRecord(record.content);
+    const data = asRecord(record.data);
+    const delta = asRecord(record.delta);
+    const textCandidates = [
+        record.chat_message,
+        record.chatMessage,
+        record.text,
+        record.report,
+        record.message,
+        record.delta,
+        content?.chat_message,
+        content?.chatMessage,
+        content?.text,
+        content?.report,
+        content?.message,
+        content?.delta,
+        data?.chat_message,
+        data?.chatMessage,
+        data?.text,
+        data?.report,
+        data?.message,
+        delta?.text,
+    ];
+
+    for (const candidate of textCandidates) {
+        if (typeof candidate === "string") return candidate;
+
+        const text = extractTextFromPayload(candidate);
+        if (text) return text;
+    }
+
+    if (chunkKind === "chunk") return undefined;
+
+    const fallbackPayload = content ?? data ?? record.report ?? record.content ?? record.data;
+    const serializedReport = fallbackPayload === undefined
+        ? undefined
+        : JSON.stringify(fallbackPayload, null, 2);
+
+    return serializedReport ? `\`\`\`json\n${serializedReport}\n\`\`\`` : undefined;
+}
+
+function getVriResultPayload(payload: unknown, eventName?: string) {
+    const chunkKind = getStreamChunkKind(payload, eventName);
+    if (
+        (chunkKind && VRI_REPORT_CHUNK_KINDS.has(chunkKind)) ||
+        (chunkKind && VRI_STATUS_CHUNK_KINDS.has(chunkKind)) ||
+        chunkKind === "file"
+    ) return undefined;
+
+    const parsed = parseJsonValue(payload);
+    const record = asRecord(parsed);
+    const isResultEvent = !!eventName && VRI_RESULT_EVENT_NAMES.has(eventName.toLowerCase());
+
+    if (extractLayerFromUnknown(parsed, "Результат проверки ВРИ")) return parsed;
+
+    if (!record) {
+        return isResultEvent ? parsed : undefined;
+    }
+
+    if (
+        chunkKind === "result" ||
+        chunkKind === "output" ||
+        chunkKind === "feature_collection" ||
+        chunkKind === "geojson"
+    ) {
+        return parsed;
+    }
+
+    const candidateKeys = ["result", "data", "output", "content"];
+
+    for (const key of candidateKeys) {
+        if (!(key in record)) continue;
+
+        const candidate = record[key];
+        if (extractLayerFromUnknown(candidate, "Результат проверки ВРИ")) return candidate;
+        if (key === "result" && extractTextFromPayload(candidate)) return candidate;
+    }
+
+    if (isResultEvent) {
+        return record.result ?? record.data ?? record.output ?? record.content ?? parsed;
+    }
+
+    return undefined;
+}
+
+function getVriStatusText(payload: unknown, eventName?: string) {
+    const chunkKind = getStreamChunkKind(payload, eventName);
+    if (!chunkKind || !VRI_STATUS_CHUNK_KINDS.has(chunkKind)) return undefined;
+
+    return extractTextFromPayload(payload) ?? "Проверка ВРИ выполняется";
+}
+
+function getVriWarningText(payload: unknown, eventName?: string) {
+    const chunkKind = getStreamChunkKind(payload, eventName);
+    const parsed = parseJsonValue(payload);
+    const record = asRecord(parsed);
+    const content = asRecord(record?.content);
+    const data = asRecord(record?.data);
+    const isWarningStatus = [
+        chunkKind,
+        record?.status,
+        record?.level,
+        record?.severity,
+        content?.status,
+        content?.level,
+        content?.severity,
+        data?.status,
+        data?.level,
+        data?.severity,
+    ].some((candidate) => toString(candidate)?.toLowerCase() === "warning");
+
+    if (!isWarningStatus) return undefined;
+
+    return (
+        toString(record?.chat_message) ??
+        toString(record?.chatMessage) ??
+        toString(content?.chat_message) ??
+        toString(content?.chatMessage) ??
+        toString(content?.message) ??
+        toString(data?.chat_message) ??
+        toString(data?.chatMessage) ??
+        toString(data?.message) ??
+        toString(record?.message) ??
+        toString(content?.detail) ??
+        toString(data?.detail) ??
+        toString(record?.detail) ??
+        extractTextFromPayload(parsed) ??
+        "Проверка ВРИ вернула предупреждение."
+    );
+}
+
 class ChatDataStore {
     selectedContext: string | number = "nonproject";
     selectedScenario: number | null = null;
@@ -474,10 +927,12 @@ class ChatDataStore {
     activeChatId?: string | number;
     currentStreamRequestId: number = 0;
     currentPzzSetupId: number = 0;
+    currentVriSetupId: number = 0;
     currentStreamContext?: StreamContext;
     userChats: UserChat[] = [];
     isUserChatsLoading = false;
     isUserChatOpening = false;
+    private vriSetupFiles: Map<string, VriSetupFiles> = new Map();
 
     chatMap: Map<number, ChatSession> = new Map();
 
@@ -544,11 +999,13 @@ class ChatDataStore {
     setSelectedContext(value: string | number) {
         this.selectedContext = value;
         this.selectedPzzZoneSource = undefined;
+        this.vriSetupFiles.clear();
     }
 
     setSelectedScenario(scenarioId: number | null) {
         this.selectedScenario = scenarioId;
         this.selectedPzzZoneSource = undefined;
+        this.vriSetupFiles.clear();
     }
 
     setSelectedStage(stage: string) {
@@ -559,6 +1016,9 @@ class ChatDataStore {
         this.selectedChatTool = tool;
         if (tool !== "Проверка объектов по ПЗЗ") {
             this.selectedPzzZoneSource = undefined;
+        }
+        if (tool !== "Проверка ВРИ") {
+            this.vriSetupFiles.clear();
         }
     }
 
@@ -576,6 +1036,7 @@ class ChatDataStore {
         this.activeChatId = undefined;
         this.selectedChatTool = null;
         this.selectedPzzZoneSource = undefined;
+        this.vriSetupFiles.clear();
 
         MapStore.clearMapLayers();
     }
@@ -657,7 +1118,69 @@ class ChatDataStore {
         return false;
     }
 
-    private appendStreamChunk = action((payload: string) => {
+    private appendGeoJsonLayerLoadError(layerName: string) {
+        this.chatMessages.push({
+            type: "response",
+            message: {
+                type: "error",
+                text: `Не удалось загрузить GeoJSON-слой "${layerName || "Без названия"}" по ссылке.`,
+            },
+        });
+    }
+
+    private addGeoJsonLayerToMap(
+        layer: UserChatLayer,
+        options: AddGeoJsonLayerOptions = {},
+    ) {
+        const requestId = options.requestId ?? this.currentStreamRequestId;
+        const parsedLayer = parseFeatureCollection(layer.layer);
+
+        if (!parsedLayer) {
+            if (options.showError) {
+                this.appendGeoJsonLayerLoadError(layer.name);
+            }
+            return;
+        }
+
+        const layerUri = getLayerUri(parsedLayer);
+        if (!layerUri) {
+            MapStore.addLayerToMap({
+                name: layer.name,
+                layer: parsedLayer,
+            });
+            options.onLayerAdded?.();
+            return;
+        }
+
+        void downloadGeoJsonLayer(layerUri)
+            .then(action((downloadedLayer) => {
+                if (requestId !== this.currentStreamRequestId) return;
+
+                MapStore.addLayerToMap({
+                    name: layer.name,
+                    layer: downloadedLayer,
+                });
+                options.onLayerAdded?.();
+            }))
+            .catch(action((error) => {
+                if (requestId !== this.currentStreamRequestId) return;
+
+                console.error("Error downloading GeoJSON layer:", error);
+
+                if (options.showError) {
+                    this.appendGeoJsonLayerLoadError(layer.name);
+                }
+            }));
+    }
+
+    addGeoJsonLayerMessageToMap(name: string, layer: unknown) {
+        this.addGeoJsonLayerToMap(
+            { name, layer },
+            { showError: true },
+        );
+    }
+
+    private appendStreamChunk = action((payload: string, eventName?: string) => {
         const trimmedPayload = payload.trim();
         if (!trimmedPayload || trimmedPayload === "[DONE]") return;
 
@@ -665,34 +1188,65 @@ class ChatDataStore {
             const parsed = JSON.parse(trimmedPayload);
             if (this.handleServiceEvent(parsed)) return;
 
-            if (parsed?.type === "status") {
+            const chunkKind = getStreamChunkKind(parsed, eventName);
+
+            if (chunkKind === "status") {
                 this.currentStatus = parsed.content?.text
                 return;
             };
 
-            if (parsed?.type === "feature_collection") {
+            if (chunkKind === "file") {
+                const layer = extractGeoJsonFileLayer(parsed, "Результат проверки ПЗЗ");
+
+                if (!layer) return;
+
                 this.chatMessages.push({
                     type: "response",
                     message: {
                         type: "geojson",
-                        name: parsed.content?.name,
-                        layer: parsed.content?.feature_collection,
+                        name: layer.name,
+                        layer: layer.layer,
                     },
                 });
 
-                MapStore.addLayerToMap({
-                    name: parsed.content?.name ?? "",
-                    layer: parseFeatureCollection(
-                        parsed.content?.feature_collection
-                    ),
+                this.addGeoJsonLayerToMap(layer, {
+                    showError: true,
+                    onLayerAdded: () => {
+                        this.currentStreamContext = this.markStreamContextHasMapLayer(this.currentStreamContext);
+                        this.tryAddProjectBoundaryLayer(this.currentStreamContext);
+                    },
                 });
-                this.currentStreamContext = this.markStreamContextHasMapLayer(this.currentStreamContext);
-                this.tryAddProjectBoundaryLayer(this.currentStreamContext);
 
                 return;
             }
 
-            if (parsed?.type === "error") {
+            if (chunkKind === "feature_collection") {
+                const layer = {
+                    name: parsed.content?.name ?? "",
+                    layer: parsed.content?.feature_collection,
+                };
+
+                this.chatMessages.push({
+                    type: "response",
+                    message: {
+                        type: "geojson",
+                        name: layer.name,
+                        layer: layer.layer,
+                    },
+                });
+
+                this.addGeoJsonLayerToMap(layer, {
+                    showError: true,
+                    onLayerAdded: () => {
+                        this.currentStreamContext = this.markStreamContextHasMapLayer(this.currentStreamContext);
+                        this.tryAddProjectBoundaryLayer(this.currentStreamContext);
+                    },
+                });
+
+                return;
+            }
+
+            if (chunkKind === "error") {
                 this.chatMessages.push({
                     type: "response",
                     message: {
@@ -812,7 +1366,9 @@ class ChatDataStore {
         );
 
         MapStore.clearMapLayers();
-        MapStore.setMapLayers(lastResponseLayers);
+        lastResponseLayers.forEach((layer) => {
+            this.addGeoJsonLayerToMap(layer);
+        });
 
         if (typeof this.selectedContext === "number") {
             this.restoreProjectBoundary(this.selectedContext, lastResponseLayers.length > 0);
@@ -902,6 +1458,7 @@ class ChatDataStore {
         this.selectedScenario = chat.selectedScenario ?? null;
         this.selectedStage = chat.selectedStage;
         this.selectedChatTool = null;
+        this.vriSetupFiles.clear();
 
         const lastRequestIndex = chat.messages.findLastIndex(message => message.type === "request");
         const lastResponseLayers = chat.messages.flatMap((message, ind) => 
@@ -913,7 +1470,9 @@ class ChatDataStore {
         );
 
         MapStore.clearMapLayers();
-        MapStore.setMapLayers(lastResponseLayers);
+        lastResponseLayers.forEach((layer) => {
+            this.addGeoJsonLayerToMap(layer);
+        });
 
         if (typeof chat.selectedContext === "number") {
             this.restoreProjectBoundary(chat.selectedContext, lastResponseLayers.length > 0);
@@ -1225,20 +1784,7 @@ class ChatDataStore {
         const layer = extractLayerFromUnknown(result, "Результат проверки ПЗЗ");
 
         if (layer) {
-            this.chatMessages.push({
-                type: "response",
-                message: {
-                    type: "geojson",
-                    name: layer.name,
-                    layer: layer.layer,
-                },
-            });
-
-            MapStore.addLayerToMap({
-                name: layer.name,
-                layer: parseFeatureCollection(layer.layer),
-            });
-
+            this.appendGeoJsonLayer(layer);
             return;
         }
 
@@ -1255,141 +1801,6 @@ class ChatDataStore {
                 text: text || "Проверка объектов по ПЗЗ завершена.",
             },
         });
-    }
-
-    private fetchPzzTaskResult(
-        scenarioId: number,
-        externalId: string,
-        setupId: string | undefined,
-        requestId: number,
-    ) {
-        this.currentStatus = "Получение результата проверки объектов по ПЗЗ";
-
-        return axios.get(
-            `${import.meta.env.VITE_PZZ_COMPARE_API}/scenarios/${scenarioId}/tasks/${externalId}/result`,
-            {
-                headers: {
-                    Authorization: `Bearer ${AuthStore.accessToken}`,
-                },
-                signal: this.abortController?.signal,
-            },
-        )
-        .then(action(({ data }) => {
-            if (this.currentStreamRequestId !== requestId) return;
-
-            const setupMessage = setupId ? this.getPzzSetupMessage(setupId) : undefined;
-
-            if (setupMessage) {
-                setupMessage.status = "finished";
-                setupMessage.resultLoaded = true;
-                setupMessage.errorText = undefined;
-            }
-
-            this.appendPzzResult(data);
-        }))
-        .catch(action((error) => {
-            if (axios.isCancel(error) || error?.name === "AbortError" || error?.name === "CanceledError") {
-                return;
-            }
-
-            console.error("Error fetching PZZ check result:", error);
-            this.setPzzSetupError(setupId, "Проверка завершена, но результат получить не удалось.");
-            this.chatMessages.push({
-                type: "response",
-                message: {
-                    type: "error",
-                    text: "Проверка завершена, но результат получить не удалось.",
-                },
-            });
-        }))
-        .finally(action(() => {
-            if (this.currentStreamRequestId !== requestId) return;
-
-            this.isStreaming = false;
-            this.currentStatus = undefined;
-            this.abortController = undefined;
-            void this.getUserChats();
-        }));
-    }
-
-    private pollPzzTask(
-        scenarioId: number,
-        externalId: string,
-        setupId: string | undefined,
-        requestId: number,
-    ) {
-        return axios.get(
-            `${import.meta.env.VITE_PZZ_COMPARE_API}/scenarios/${scenarioId}/tasks/${externalId}`,
-            {
-                headers: {
-                    Authorization: `Bearer ${AuthStore.accessToken}`,
-                },
-                signal: this.abortController?.signal,
-            },
-        )
-        .then(action(({ data }) => {
-            if (this.currentStreamRequestId !== requestId) return;
-
-            const status = normalizePzzTaskStatus(data?.status);
-            const setupMessage = setupId ? this.getPzzSetupMessage(setupId) : undefined;
-
-            if (setupMessage) {
-                setupMessage.taskExternalId = externalId;
-                setupMessage.status = status ?? setupMessage.status;
-            }
-
-            if (status === "finished") {
-                return this.fetchPzzTaskResult(scenarioId, externalId, setupId, requestId);
-            }
-
-            if (status === "failed") {
-                this.isStreaming = false;
-                this.currentStatus = undefined;
-                this.abortController = undefined;
-                this.setPzzSetupError(
-                    setupId,
-                    data?.error_text ?? "Проверка объектов по ПЗЗ завершилась с ошибкой.",
-                    "failed",
-                );
-                this.chatMessages.push({
-                    type: "response",
-                    message: {
-                        type: "error",
-                        text: data?.error_text ?? "Проверка объектов по ПЗЗ завершилась с ошибкой.",
-                    },
-                });
-                void this.getUserChats();
-                return;
-            }
-
-            this.currentStatus = status === "waiting_capacity"
-                ? "Проверка объектов по ПЗЗ ожидает доступных ресурсов"
-                : "Проверка объектов по ПЗЗ выполняется";
-
-            window.setTimeout(() => {
-                if (this.currentStreamRequestId !== requestId) return;
-
-                void this.pollPzzTask(scenarioId, externalId, setupId, requestId);
-            }, 3000);
-        }))
-        .catch(action((error) => {
-            if (axios.isCancel(error) || error?.name === "AbortError" || error?.name === "CanceledError") {
-                return;
-            }
-
-            console.error("Error polling PZZ check status:", error);
-            this.isStreaming = false;
-            this.currentStatus = undefined;
-            this.abortController = undefined;
-            this.setPzzSetupError(setupId, "Не удалось получить статус проверки объектов по ПЗЗ.");
-            this.chatMessages.push({
-                type: "response",
-                message: {
-                    type: "error",
-                    text: "Не удалось получить статус проверки объектов по ПЗЗ.",
-                },
-            });
-        }));
     }
 
     private sendPzzCheckRequest(
@@ -1416,67 +1827,98 @@ class ChatDataStore {
         this.isStreaming = true;
         this.currentStatus = "Запуск проверки объектов по ПЗЗ";
 
-        const body = new URLSearchParams();
-        body.set("year", String(zoneSource.year));
-        body.set("source", zoneSource.source);
+        const formData = new FormData();
+        formData.set("year", String(zoneSource.year));
+        formData.set("source", zoneSource.source);
+        formData.set("user_query", message);
+
+        if (typeof this.activeChatId === "string") {
+            formData.set("chat_id", this.activeChatId);
+        }
+
+        this.selectedPzzZoneSource = zoneSource;
+
+        if (setupId) {
+            const setupMessage = this.getPzzSetupMessage(setupId);
+
+            if (setupMessage) {
+                setupMessage.status = "running";
+                setupMessage.selectedYear = zoneSource.year;
+                setupMessage.selectedSource = zoneSource.source;
+                setupMessage.taskExternalId = undefined;
+                setupMessage.resultLoaded = false;
+                setupMessage.errorText = undefined;
+            }
+        }
 
         return axios.post(
-            `${import.meta.env.VITE_PZZ_COMPARE_API}/scenarios/${scenarioId}/classify`,
-            body,
+            `${import.meta.env.VITE_PZZ_COMPARE_API}/scenarios/${scenarioId}/chat/stream`,
+            formData,
             {
                 headers: {
+                    Accept: "text/event-stream",
                     Authorization: `Bearer ${AuthStore.accessToken}`,
-                    "Content-Type": "application/x-www-form-urlencoded",
                 },
+                responseType: "stream",
+                adapter: "fetch",
                 signal: this.abortController.signal,
             },
         )
-        .then(action(({ data }) => {
-            const externalId = toString(data?.external_id);
-            const taskStatus = normalizePzzTaskStatus(data?.status) ?? "queued";
-
-            if (!externalId) {
-                throw new Error("PZZ classify response does not include external_id");
-            }
-
-            this.selectedPzzZoneSource = zoneSource;
-
-            if (setupId) {
-                const setupMessage = this.getPzzSetupMessage(setupId);
-
-                if (setupMessage) {
-                    setupMessage.status = taskStatus;
-                    setupMessage.selectedYear = zoneSource.year;
-                    setupMessage.selectedSource = zoneSource.source;
-                    setupMessage.taskExternalId = externalId;
-                    setupMessage.errorText = undefined;
-                }
+        .then(async ({ data }) => {
+            const stream = data as ReadableStream<Uint8Array> | undefined;
+            if (!stream || typeof stream.getReader !== "function") {
+                throw new Error("PZZ check stream response is not readable");
             }
 
             this.currentStatus = "Проверка объектов по ПЗЗ выполняется";
-            void this.pollPzzTask(scenarioId, externalId, setupId, requestId);
-            return data;
-        }))
+
+            await readSseStream(stream, (streamEvent) => {
+                runInAction(() => {
+                    if (this.currentStreamRequestId !== requestId) return;
+
+                    this.appendStreamChunk(streamEvent.data, streamEvent.eventName);
+                });
+            });
+
+            runInAction(() => {
+                if (this.currentStreamRequestId !== requestId) return;
+
+                this.commitStreamedResponse();
+
+                const setupMessage = setupId ? this.getPzzSetupMessage(setupId) : undefined;
+                if (setupMessage) {
+                    setupMessage.status = "finished";
+                    setupMessage.resultLoaded = true;
+                    setupMessage.errorText = undefined;
+                }
+            });
+        })
         .catch(action((error) => {
             if (axios.isCancel(error) || error?.name === "AbortError" || error?.name === "CanceledError") {
+                this.commitStreamedResponse();
                 return;
             }
 
-            console.error("Error starting PZZ check:", error);
+            console.error("Error streaming PZZ check:", error);
 
-            this.setPzzSetupError(setupId, "Не удалось запустить проверку объектов по ПЗЗ.");
+            this.setPzzSetupError(setupId, "Не удалось выполнить потоковую проверку объектов по ПЗЗ.");
 
             this.chatMessages.push({
                 type: "response",
                 message: {
                     type: "error",
-                    text: "Не удалось запустить проверку объектов по ПЗЗ.",
+                    text: "Не удалось выполнить потоковую проверку объектов по ПЗЗ.",
                 },
             });
+        }))
+        .finally(action(() => {
+            if (this.currentStreamRequestId !== requestId) return;
+
             this.isStreaming = false;
             this.currentStatus = undefined;
             this.abortController = undefined;
-        }))
+            void this.getUserChats();
+        }));
     }
 
     submitPzzSetup(setupId: string, year: number, source: string) {
@@ -1501,6 +1943,512 @@ class ChatDataStore {
         return this.sendPzzCheckRequest(setupMessage.request, zoneSource, setupId);
     }
 
+    private getNextVriSetupId() {
+        return `vri-setup-${this.currentVriSetupId++}`;
+    }
+
+    private getVriSetupMessage(setupId: string) {
+        const chatMessage = this.chatMessages.find(
+            (message) => message.type === "response" &&
+                isVriSetupMessage(message.message) &&
+                message.message.id === setupId
+        );
+
+        return chatMessage && isVriSetupMessage(chatMessage.message)
+            ? chatMessage.message
+            : undefined;
+    }
+
+    private hasActiveVriSetup() {
+        return this.chatMessages.some((message) =>
+            message.type === "response" &&
+            isVriSetupMessage(message.message) &&
+            (message.message.status === "ready" ||
+                message.message.status === "submitting" ||
+                message.message.status === "running")
+        );
+    }
+
+    private startVriCheckSetup(message: string) {
+        this.isStreaming = false;
+        this.currentStatus = undefined;
+        this.abortController = undefined;
+
+        if (this.hasActiveVriSetup()) {
+            this.chatMessages.push({
+                type: "response",
+                message: {
+                    type: "error",
+                    text: "Завершите текущую настройку проверки ВРИ.",
+                },
+            });
+            return;
+        }
+
+        const setupId = this.getNextVriSetupId();
+        this.vriSetupFiles.set(setupId, {});
+
+        this.chatMessages.push({
+            type: "response",
+            message: {
+                type: "vri_setup",
+                id: setupId,
+                request: message,
+                status: "ready",
+                step: "upload_land_plots",
+            },
+        });
+    }
+
+    private getVriSetupFiles(setupId: string) {
+        const files = this.vriSetupFiles.get(setupId) ?? {};
+        this.vriSetupFiles.set(setupId, files);
+
+        return files;
+    }
+
+    private setVriSetupError(setupId: string | undefined, errorText: string) {
+        if (!setupId) return;
+
+        const setupMessage = this.getVriSetupMessage(setupId);
+        if (!setupMessage) return;
+
+        setupMessage.status = "error";
+        setupMessage.errorText = errorText;
+    }
+
+    submitVriLandPlots(setupId: string, file: File) {
+        const setupMessage = this.getVriSetupMessage(setupId);
+        if (!setupMessage || setupMessage.status !== "ready") return;
+
+        const files = this.getVriSetupFiles(setupId);
+        files.landPlots = file;
+        setupMessage.landPlotsFileName = file.name;
+        setupMessage.step = "ask_classifier";
+        setupMessage.errorText = undefined;
+    }
+
+    answerVriClassifier(setupId: string, wantsClassifier: boolean) {
+        const setupMessage = this.getVriSetupMessage(setupId);
+        if (!setupMessage || setupMessage.status !== "ready") return;
+
+        setupMessage.wantsClassifier = wantsClassifier;
+        setupMessage.errorText = undefined;
+
+        if (wantsClassifier) {
+            setupMessage.step = "upload_classifier";
+            return;
+        }
+
+        const files = this.getVriSetupFiles(setupId);
+        files.classifier = undefined;
+        setupMessage.classifierFileName = undefined;
+        setupMessage.step = "ask_pzz_check";
+    }
+
+    submitVriClassifier(setupId: string, file: File) {
+        const setupMessage = this.getVriSetupMessage(setupId);
+        if (!setupMessage || setupMessage.status !== "ready") return;
+
+        const files = this.getVriSetupFiles(setupId);
+        files.classifier = file;
+        setupMessage.classifierFileName = file.name;
+        setupMessage.step = "ask_pzz_check";
+        setupMessage.errorText = undefined;
+    }
+
+    answerVriPzzCheck(setupId: string, wantsPzzCheck: boolean) {
+        const setupMessage = this.getVriSetupMessage(setupId);
+        if (!setupMessage || setupMessage.status !== "ready") return;
+
+        setupMessage.wantsPzzCheck = wantsPzzCheck;
+        setupMessage.errorText = undefined;
+
+        if (wantsPzzCheck) {
+            setupMessage.step = "upload_pzz_zones";
+            return;
+        }
+
+        return this.sendVriCheckRequest(setupId, false);
+    }
+
+    submitVriPzzZones(setupId: string, file: File) {
+        const setupMessage = this.getVriSetupMessage(setupId);
+        if (!setupMessage || setupMessage.status !== "ready") return;
+
+        const files = this.getVriSetupFiles(setupId);
+        files.pzzZones = file;
+        setupMessage.pzzZonesFileName = file.name;
+        setupMessage.step = "ask_pzz_zone_description";
+        setupMessage.errorText = undefined;
+    }
+
+    answerVriPzzZoneDescription(setupId: string, wantsPzzZoneDescription: boolean) {
+        const setupMessage = this.getVriSetupMessage(setupId);
+        if (!setupMessage || setupMessage.status !== "ready") return;
+
+        setupMessage.wantsPzzZoneDescription = wantsPzzZoneDescription;
+        setupMessage.errorText = undefined;
+
+        if (wantsPzzZoneDescription) {
+            setupMessage.step = "upload_pzz_zone_description";
+            return;
+        }
+
+        return this.sendVriCheckRequest(setupId, true);
+    }
+
+    submitVriPzzZoneDescription(setupId: string, file: File) {
+        const setupMessage = this.getVriSetupMessage(setupId);
+        if (!setupMessage || setupMessage.status !== "ready") return;
+
+        const files = this.getVriSetupFiles(setupId);
+        files.pzzZoneDescription = file;
+        setupMessage.pzzZoneDescriptionFileName = file.name;
+        setupMessage.errorText = undefined;
+
+        return this.sendVriCheckRequest(setupId, true);
+    }
+
+    private appendGeoJsonLayer(layer: UserChatLayer) {
+        this.chatMessages.push({
+            type: "response",
+            message: {
+                type: "geojson",
+                name: layer.name,
+                layer: layer.layer,
+            },
+        });
+
+        this.addGeoJsonLayerToMap(layer, { showError: true });
+    }
+
+    private appendVriResult(result: unknown) {
+        const layer = extractLayerFromUnknown(result, "Результат проверки ВРИ");
+
+        if (layer) {
+            this.appendGeoJsonLayer(layer);
+            return;
+        }
+
+        const serializedResult = typeof result === "string"
+            ? result
+            : JSON.stringify(result, null, 2);
+        const text = extractTextFromPayload(result) ??
+            (serializedResult ? `\`\`\`json\n${serializedResult}\n\`\`\`` : undefined);
+
+        this.chatMessages.push({
+            type: "response",
+            message: {
+                type: "text",
+                text: text || "Проверка ВРИ завершена.",
+            },
+        });
+    }
+
+    private appendVriReport(reportText: string, streamState: VriStreamState): VriStreamState {
+        if (!reportText.length) return streamState;
+
+        const existingReportMessage = streamState.reportMessageIndex !== undefined
+            ? this.chatMessages[streamState.reportMessageIndex]
+            : undefined;
+
+        if (
+            existingReportMessage?.type === "response" &&
+            existingReportMessage.message.type === "text"
+        ) {
+            existingReportMessage.message.text += reportText;
+
+            return {
+                ...streamState,
+                hasReceivedReport: true,
+            };
+        }
+
+        this.chatMessages.push({
+            type: "response",
+            message: {
+                type: "text",
+                text: reportText,
+            },
+        });
+
+        return {
+            ...streamState,
+            hasReceivedReport: true,
+            reportMessageIndex: this.chatMessages.length - 1,
+        };
+    }
+
+    private appendVriWarning(warningText: string, streamState: VriStreamState): VriStreamState {
+        if (!warningText.length) return streamState;
+
+        this.chatMessages.push({
+            type: "response",
+            message: {
+                type: "warning",
+                text: warningText,
+            },
+        });
+
+        return {
+            ...streamState,
+            hasReceivedReport: true,
+        };
+    }
+
+    private handleVriStreamEvent(
+        streamEvent: SseStreamEvent,
+        setupId: string,
+        streamState: VriStreamState,
+    ) {
+        const trimmedData = streamEvent.data.trim();
+        if (!trimmedData || trimmedData === "[DONE]") return streamState;
+
+        const eventName = streamEvent.eventName?.toLowerCase();
+        const payload = parseJsonValue(trimmedData);
+        const chunkKind = getStreamChunkKind(payload, eventName);
+        const setupMessage = this.getVriSetupMessage(setupId);
+
+        if (this.handleServiceEvent(payload)) return streamState;
+
+        if (chunkKind === "error") {
+            const errorText = getVriErrorText(payload) ?? "Проверка ВРИ завершилась с ошибкой.";
+
+            if (setupMessage) {
+                setupMessage.status = "error";
+                setupMessage.errorText = errorText;
+            }
+
+            this.currentStatus = undefined;
+            this.chatMessages.push({
+                type: "response",
+                message: {
+                    type: "error",
+                    text: errorText,
+                },
+            });
+
+            return {
+                ...streamState,
+                hasStreamError: true,
+            };
+        }
+
+        const warningText = getVriWarningText(payload, eventName);
+        if (warningText) {
+            this.currentStatus = warningText;
+
+            if (setupMessage) {
+                setupMessage.status = "running";
+            }
+
+            return this.appendVriWarning(warningText, streamState);
+        }
+
+        const statusText = getVriStatusText(payload, eventName);
+        if (statusText) {
+            this.currentStatus = statusText;
+
+            if (setupMessage) {
+                setupMessage.status = "running";
+            }
+
+            return streamState;
+        }
+
+        const isResultFile = isVriResultFile(payload, eventName);
+        const fileLayer = isResultFile ? getVriFileLayer(payload, eventName) : undefined;
+        if (fileLayer) {
+            this.appendGeoJsonLayer(fileLayer);
+
+            if (setupMessage) {
+                setupMessage.status = "finished";
+                setupMessage.step = "finished";
+                setupMessage.errorText = undefined;
+            }
+
+            this.currentStatus = "Проверка ВРИ завершена";
+
+            return {
+                ...streamState,
+                hasReceivedResult: true,
+            };
+        }
+
+        const reportText = getVriReportText(payload, eventName);
+        const nextStreamState = reportText !== undefined
+            ? this.appendVriReport(reportText, streamState)
+            : streamState;
+
+        const resultPayload = getVriResultPayload(payload, eventName);
+        if (resultPayload === undefined || nextStreamState.hasReceivedResult) return nextStreamState;
+
+        if (setupMessage) {
+            setupMessage.status = "finished";
+            setupMessage.step = "finished";
+            setupMessage.errorText = undefined;
+        }
+
+        this.currentStatus = "Проверка ВРИ завершена";
+        this.appendVriResult(resultPayload);
+
+        return {
+            ...nextStreamState,
+            hasReceivedResult: true,
+        };
+    }
+
+    private sendVriCheckRequest(setupId: string, withPzzCheck: boolean) {
+        const setupMessage = this.getVriSetupMessage(setupId);
+        const files = this.getVriSetupFiles(setupId);
+
+        if (!setupMessage) return;
+
+        if (!files.landPlots) {
+            this.setVriSetupError(setupId, "Загрузите земельные участки.");
+            return;
+        }
+
+        if (withPzzCheck && !files.pzzZones) {
+            this.setVriSetupError(setupId, "Загрузите зоны ПЗЗ.");
+            return;
+        }
+
+        const formData = new FormData();
+        formData.append(VRI_FORM_FIELDS.landPlots, files.landPlots, files.landPlots.name);
+        formData.set("user_query", setupMessage.request);
+
+        if (typeof this.activeChatId === "string") {
+            formData.set("chat_id", this.activeChatId);
+        }
+
+        // if (typeof this.selectedContext === "number") {
+        //     formData.set("project_id", String(this.selectedContext));
+        // }
+
+        // if (this.selectedScenario) {
+        //     formData.set("scenario_id", String(this.selectedScenario));
+        // }
+
+        if (files.classifier) {
+            formData.append(VRI_FORM_FIELDS.classifier, files.classifier, files.classifier.name);
+        }
+
+        if (withPzzCheck) {
+            formData.append(VRI_FORM_FIELDS.pzzZones, files.pzzZones!, files.pzzZones!.name);
+
+            if (files.pzzZoneDescription) {
+                formData.append(
+                    VRI_FORM_FIELDS.pzzZoneDescription,
+                    files.pzzZoneDescription,
+                    files.pzzZoneDescription.name,
+                );
+            }
+        }
+
+        this.abortController?.abort();
+        this.abortController = new AbortController();
+        this.currentStreamRequestId += 1;
+        const requestId = this.currentStreamRequestId;
+        this.isStreaming = true;
+        this.currentStatus = "Запуск проверки ВРИ";
+        setupMessage.status = "submitting";
+        setupMessage.errorText = undefined;
+
+        const endPoint = withPzzCheck ? "pzz_check" : "classify_only";
+        formData.set("mode", endPoint);
+
+        return axios.post(
+            `${import.meta.env.VITE_PZZ_COMPARE_API}/tasks/auto/chat/stream`,
+            formData,
+            {
+                headers: {
+                    Accept: "text/event-stream",
+                    Authorization: `Bearer ${AuthStore.accessToken}`,
+                },
+                responseType: "stream",
+                adapter: "fetch",
+                signal: this.abortController.signal,
+            },
+        )
+        .then(async ({ data }) => {
+            const stream = data as ReadableStream<Uint8Array> | undefined;
+            if (!stream || typeof stream.getReader !== "function") {
+                throw new Error("VRI check stream response is not readable");
+            }
+
+            setupMessage.status = "running";
+
+            let streamState: VriStreamState = {
+                hasReceivedResult: false,
+                hasReceivedReport: false,
+                hasStreamError: false,
+            };
+
+            await readSseStream(stream, (streamEvent) => {
+                runInAction(() => {
+                    if (this.currentStreamRequestId !== requestId) return;
+
+                    streamState = this.handleVriStreamEvent(streamEvent, setupId, streamState);
+                });
+            });
+
+            runInAction(() => {
+                if (this.currentStreamRequestId !== requestId) return;
+                if (streamState.hasStreamError) return;
+
+                if (!streamState.hasReceivedResult && !streamState.hasReceivedReport) {
+                    const errorText = "Поток проверки ВРИ завершился без результата.";
+
+                    this.setVriSetupError(setupId, errorText);
+                    this.chatMessages.push({
+                        type: "response",
+                        message: {
+                            type: "error",
+                            text: errorText,
+                        },
+                    });
+                    return;
+                }
+
+                const currentSetupMessage = this.getVriSetupMessage(setupId);
+                if (currentSetupMessage) {
+                    currentSetupMessage.status = "finished";
+                    currentSetupMessage.step = "finished";
+                    currentSetupMessage.errorText = undefined;
+                }
+            });
+        })
+        .catch(action((error) => {
+            if (this.currentStreamRequestId !== requestId) return;
+
+            if (axios.isCancel(error) || error?.name === "AbortError" || error?.name === "CanceledError") {
+                this.setVriSetupError(setupId, "Проверка ВРИ отменена.");
+                return;
+            }
+
+            console.error("Error streaming VRI check:", error);
+
+            this.setVriSetupError(setupId, "Не удалось выполнить потоковую проверку ВРИ.");
+            this.chatMessages.push({
+                type: "response",
+                message: {
+                    type: "error",
+                    text: "Не удалось выполнить потоковую проверку ВРИ.",
+                },
+            });
+        }))
+        .finally(action(() => {
+            if (this.currentStreamRequestId !== requestId) return;
+
+            this.isStreaming = false;
+            this.currentStatus = undefined;
+            this.abortController = undefined;
+            void this.getUserChats();
+        }));
+    }
+
     sendChatMessage = async (message: string) => {
         this.abortController?.abort();
         this.abortController = new AbortController();
@@ -1515,13 +2463,16 @@ class ChatDataStore {
         MapStore.clearMapLayers();
         if (
             typeof this.selectedContext === "number" &&
-            this.selectedChatTool !== "Проверка объектов по ПЗЗ"
+            this.selectedChatTool !== "Проверка объектов по ПЗЗ" &&
+            this.selectedChatTool !== "Проверка ВРИ"
         ) {
             this.currentStreamContext = this.createProjectBoundaryStreamContext(this.selectedContext);
         }
         this.chatMessages.push({type: "request", message: { type: "text", text: message}})
         
-        if (this.selectedContext === "nonproject") {
+        if (this.selectedChatTool === "Проверка ВРИ") {
+            return this.startVriCheckSetup(message);
+        } else if (this.selectedContext === "nonproject") {
             return this.sendNonProjectContextMessage(message);
         } else if (this.selectedContext !== "nonproject" && this.selectedScenario) {
             if (this.selectedChatTool === "Обеспеченность") {
@@ -1760,9 +2711,17 @@ class ChatDataStore {
 
             for (const part of sortedParts) {
                 const directLayer = userMessage.role === "assistant"
-                    ? extractLayerFromUnknown(
-                        part.payload,
-                        getLayerName(part.payload) ?? HISTORY_LAYER_FALLBACK_NAME,
+                    ? (
+                        extractLayerFromUnknown(
+                            part.payload,
+                            getLayerName(part.payload) ?? HISTORY_LAYER_FALLBACK_NAME,
+                        ) ??
+                        (part.kind === "file"
+                            ? extractGeoJsonFileLayer(
+                                part.payload,
+                                getLayerName(part.payload) ?? HISTORY_LAYER_FALLBACK_NAME,
+                            )
+                            : undefined)
                     )
                     : undefined;
 
@@ -1821,6 +2780,7 @@ class ChatDataStore {
         this.activeChatId = chatId;
         this.isUserChatOpening = true;
         this.chatMessages = [];
+        this.vriSetupFiles.clear();
         this.applyUserChatContext(chat);
         MapStore.clearMapLayers();
 
