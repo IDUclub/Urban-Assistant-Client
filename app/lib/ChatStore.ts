@@ -1037,6 +1037,7 @@ class ChatDataStore {
         this.selectedChatTool = null;
         this.selectedPzzZoneSource = undefined;
         this.vriSetupFiles.clear();
+        this.parsedContext = null;
 
         MapStore.clearMapLayers();
     }
