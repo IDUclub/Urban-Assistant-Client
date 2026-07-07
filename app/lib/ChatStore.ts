@@ -1118,6 +1118,16 @@ class ChatDataStore {
         return false;
     }
 
+    private getActiveBackendChatId() {
+        return typeof this.activeChatId === "string" ? this.activeChatId : undefined;
+    }
+
+    private withActiveChatIdParams<T extends Record<string, unknown>>(params: T) {
+        const chatId = this.getActiveBackendChatId();
+
+        return chatId ? { ...params, chat_id: chatId } : params;
+    }
+
     private appendGeoJsonLayerLoadError(layerName: string) {
         this.chatMessages.push({
             type: "response",
@@ -1486,10 +1496,10 @@ class ChatDataStore {
                     headers: {
                         "Accept": "text/event-stream",
                     },
-                    params: {
+                    params: this.withActiveChatIdParams({
                         index_name: this.selectedStage,
                         user_request: message,
-                    },
+                    }),
                     responseType: "stream",
                     adapter: "fetch",
                     signal: this.abortController?.signal,
@@ -1556,11 +1566,11 @@ class ChatDataStore {
                     responseType: "stream",
                     adapter: "fetch",
                     signal: this.abortController?.signal,
-                    params: {
+                    params: this.withActiveChatIdParams({
                         model: "gpt-oss:20b",
                         scenario_id: this.selectedScenario,
                         request: message,
-                    }
+                    })
                 }
             )
             .then(
@@ -1622,11 +1632,11 @@ class ChatDataStore {
                     responseType: "stream",
                     adapter: "fetch",
                     signal: this.abortController?.signal,
-                    params: {
+                    params: this.withActiveChatIdParams({
                         model: "gpt-oss:20b",
                         scenario_id: this.selectedScenario,
                         request: message,
-                    }
+                    })
                 }
             )
             .then(
