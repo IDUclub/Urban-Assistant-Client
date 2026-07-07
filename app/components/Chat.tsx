@@ -518,7 +518,7 @@ const PzzSetupMessageCard = observer(({ setup }: { setup: PzzSetupData }) => {
                     />
                 </label>
                 <label className="flex min-w-0 flex-col gap-3 text-xs font-medium uppercase tracking-[0.12em] text-slate-500">
-                    Тип зоны
+                    Источник
                     <Select
                         value={selectedSource ?? ""}
                         options={sourceOptions.map((source) => ({
