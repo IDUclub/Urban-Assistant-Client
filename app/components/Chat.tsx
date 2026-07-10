@@ -818,6 +818,12 @@ const ChatInput = observer((
                     },
                 },
                 {
+                    label: "Зоны ограничений",
+                    onClickAction: () => {
+                        setSelectedChatTool("Зоны ограничений");
+                    },
+                },
+                {
                     label: "Проверка объектов по ПЗЗ",
                     onClickAction: () => {
                         setSelectedChatTool("Проверка объектов по ПЗЗ");

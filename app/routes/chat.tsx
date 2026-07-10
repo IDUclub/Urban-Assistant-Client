@@ -38,7 +38,6 @@ export async function clientLoader({
     }
 
     await DataStore.getUserProjects();
-    await DataStore.getNonProjectStages();
     await ChatStore.getUserChats();
 }
 

@@ -598,10 +598,9 @@ type ChatSession = {
     messages: ChatMessage[];
     selectedContext: string | number;
     selectedScenario: number | null;
-    selectedStage: string;
 };
 
-type ChatTool = "Обеспеченность" | "Проверка объектов по ПЗЗ" | "Проверка ВРИ";
+type ChatTool = "Обеспеченность" | "Проверка объектов по ПЗЗ" | "Проверка ВРИ" | "Зоны ограничений";
 
 function isPzzSetupMessage(message: ChatMessage["message"]): message is PzzSetupMessage {
     return message.type === "pzz_setup";
@@ -915,7 +914,6 @@ function getVriWarningText(payload: unknown, eventName?: string) {
 class ChatDataStore {
     selectedContext: string | number = "nonproject";
     selectedScenario: number | null = null;
-    selectedStage: string = "Общее";
     selectedChatTool: ChatTool | null = null;
     selectedPzzZoneSource?: PzzZoneSource;
     parsedContext: string | null = null;
@@ -1008,10 +1006,6 @@ class ChatDataStore {
         this.vriSetupFiles.clear();
     }
 
-    setSelectedStage(stage: string) {
-        this.selectedStage = stage;
-    }
-
     setSelectedChatTool(tool: ChatTool | null) {
         this.selectedChatTool = tool;
         if (tool !== "Проверка объектов по ПЗЗ") {
@@ -1030,7 +1024,6 @@ class ChatDataStore {
         this.isStreaming = false;
         this.selectedContext = "nonproject";
         this.selectedScenario = null;
-        this.selectedStage = "Общее";
         this.streamedResponse = "";
         this.currentStatus = undefined;
         this.activeChatId = undefined;
@@ -1085,7 +1078,6 @@ class ChatDataStore {
             scenario_id: this.selectedScenario,
             metadata: {
                 selectedContext: this.selectedContext,
-                selectedStage: this.selectedStage,
             },
             created_at: now,
             updated_at: now,
@@ -1402,7 +1394,7 @@ class ChatDataStore {
                         return [id, {
                             messages: session,
                             selectedContext: "nonproject",
-                            selectedStage: "Общее",
+                            selectedScenario: null,
                         }];
                     }
 
@@ -1467,7 +1459,6 @@ class ChatDataStore {
         this.chatMessages = [...chat.messages];
         this.selectedContext = chat.selectedContext;
         this.selectedScenario = chat.selectedScenario ?? null;
-        this.selectedStage = chat.selectedStage;
         this.selectedChatTool = null;
         this.vriSetupFiles.clear();
 
@@ -1490,16 +1481,17 @@ class ChatDataStore {
         }
     };
 
-    sendNonProjectContextMessage(message: string) {
+    sendDocumentMessage(message: string, scenarionId?: number) {
         return axios.get(
-            `${import.meta.env.VITE_LLM_API}/stream/generate`,
+            `${import.meta.env.VITE_LLM_RESTRICTIONS_API}/documents/qa/stream`,
                 {
                     headers: {
-                        "Accept": "text/event-stream",
+                        Accept: "text/event-stream",
+                        Authorization: `Bearer ${AuthStore.accessToken}`,
                     },
                     params: this.withActiveChatIdParams({
-                        index_name: this.selectedStage,
-                        user_request: message,
+                        request: message,
+                        scenario_id: scenarionId ?? undefined,
                     }),
                     responseType: "stream",
                     adapter: "fetch",
@@ -2484,7 +2476,7 @@ class ChatDataStore {
         if (this.selectedChatTool === "Проверка ВРИ") {
             return this.startVriCheckSetup(message);
         } else if (this.selectedContext === "nonproject") {
-            return this.sendNonProjectContextMessage(message);
+            return this.sendDocumentMessage(message);
         } else if (this.selectedContext !== "nonproject" && this.selectedScenario) {
             if (this.selectedChatTool === "Обеспеченность") {
                 return this.sendProvisionContextMessage(message);
@@ -2492,11 +2484,12 @@ class ChatDataStore {
                 if (this.selectedPzzZoneSource) {
                     return this.sendPzzCheckRequest(message, this.selectedPzzZoneSource);
                 }
-
                 return this.startPzzCheckSetup(message);
+            } else if (this.selectedChatTool === "Зоны ограничений") {
+                return this.sendRestrictionsContextMessage(message);
             }
 
-            return this.sendRestrictionsContextMessage(message);
+            return this.sendDocumentMessage(message, this.selectedScenario);
         }
 
         this.streamedResponse = "";
@@ -2649,7 +2642,6 @@ class ChatDataStore {
         if (projectId !== undefined) {
             this.selectedContext = projectId;
             this.selectedScenario = scenarioId ?? null;
-            this.selectedStage = "Общее";
 
             if (this.selectedScenario) {
                 void DataStore.getProjectScenarios(projectId);
@@ -2660,12 +2652,6 @@ class ChatDataStore {
 
         this.selectedContext = "nonproject";
         this.selectedScenario = null;
-        this.selectedStage =
-            toString(metadata.selected_stage) ??
-            toString(metadata.selectedStage) ??
-            toString(metadata.index_name) ??
-            toString(metadata.indexName) ??
-            "Общее";
     }
 
     private async getLayerForUserChatPart(
@@ -2822,7 +2808,6 @@ class ChatDataStore {
 
                         this.selectedContext = projectId;
                         this.selectedScenario = chat.scenario_id;
-                        this.selectedStage = "Общее";
                         void DataStore.getProjectScenarios(projectId);
                         this.currentStreamContext = this.createProjectBoundaryStreamContext(projectId);
                     });
@@ -2844,16 +2829,14 @@ class ChatDataStore {
                 messages: this.chatMessages.slice(),
                 selectedContext: this.selectedContext,
                 selectedScenario: this.selectedScenario,
-                selectedStage: this.selectedStage,
             }),
-            ({ activeChatId, messages, selectedContext, selectedScenario, selectedStage }) => {
+            ({ activeChatId, messages, selectedContext, selectedScenario }) => {
                 if (typeof activeChatId !== "number" || !messages.length) return;
 
                 this.chatMap.set(activeChatId, {
                     messages: [...messages],
                     selectedContext,
                     selectedScenario,
-                    selectedStage,
                 });
             }
         )

@@ -10,7 +10,7 @@ import MapView from "@components/MapView";
 
 const ChatSection = observer(() => {
     const { firstName } = NewUser;
-    const { chatMessages, parsedContext, selectedContext, selectedStage, selectedScenario, isUserChatOpening } = ChatStore;
+    const { chatMessages, parsedContext, selectedContext, selectedScenario, isUserChatOpening } = ChatStore;
     const { userProjects, projectScenarios } = DataStore;
     const { isMapLayersAvailable } = MapStore;
     const [isMapExpanded, setIsMapExpanded] = useState(false);
@@ -25,7 +25,7 @@ const ChatSection = observer(() => {
         : "4px";
     const selectedContextLabel = parsedContext ?? (
         selectedContext === "nonproject"
-        ? `Вне проекта / ${selectedStage}`
+        ? "Вне проекта"
         : `${selectedProject?.name ?? "Без названия"} / ${selectedSceanrioItem?.name ?? "Сценарий"}`
     );
 

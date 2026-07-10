@@ -7,7 +7,6 @@ class AppDataStore {
     projectScenarios: Map<number, any> = new Map();
     projectTerritories: Map<number, any | null> = new Map();
     projectTerritoryRequests: Map<number, Promise<any | null>> = new Map();
-    nonProjectStages?: string[];
 
     getUserProjects() {
         return axios.get(
@@ -75,24 +74,6 @@ class AppDataStore {
             console.error("Error fetching project scenarios:", error);
         })
     };
-
-    getNonProjectStages() {
-        return axios.get(
-            `${import.meta.env.VITE_LLM_API}/llm/indexes`,
-        )
-        .then(
-            action(
-                ({ data }) => {
-                    if (data && Array.isArray(data) && data.length) {
-                        this.nonProjectStages = data;
-                    }
-                }
-            )
-        )
-        .catch(error => {
-            console.error("Error fetching llm stages:", error);
-        })
-    }
 
     constructor() {
         makeAutoObservable(this);

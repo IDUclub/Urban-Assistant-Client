@@ -1,6 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect } from "react";
 import { observer } from "mobx-react-lite";
-import { IoCheckmark, IoChevronDown } from "react-icons/io5";
 import { MdOutlineCancel } from "react-icons/md";
 import DataStore from "@lib/DataStore";
 import ChatStore from "@lib/ChatStore";
@@ -8,11 +7,10 @@ import CustomSelect, { type SelectOption } from "@components/ui/Select";
 
 
 const ChatContextSelection = observer(() => {
-    const { userProjects, projectScenarios, nonProjectStages } = DataStore;
+    const { userProjects, projectScenarios } = DataStore;
     const {
         chatMessages,
         selectedContext,
-        selectedStage,
         selectedScenario,
         selectedChatTool,
         setSelectedChatTool
@@ -43,11 +41,6 @@ const ChatContextSelection = observer(() => {
     const scenarioOptions: SelectOption[] = (currentProjectScenarios as any[]).map((scenario) => ({
         label: scenario.name,
         value: scenario.id,
-    }));
-
-    const stageOptions: SelectOption[] = (nonProjectStages ?? []).map((stage) => ({
-        label: stage,
-        value: stage,
     }));
 
     useEffect(() => {
@@ -89,15 +82,6 @@ const ChatContextSelection = observer(() => {
                                 ChatStore.setSelectedScenario(Number(value));
                             }}
                             placeholder="Выберите сценарий"
-                        />
-                    )}
-                    {selectedContext === "nonproject" && stageOptions.length > 0 && (
-                        <CustomSelect
-                            value={selectedStage}
-                            options={stageOptions}
-                            onChange={(value) => {
-                                ChatStore.setSelectedStage(String(value));
-                            }}
                         />
                     )}
                 </>
