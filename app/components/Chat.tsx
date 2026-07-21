@@ -86,13 +86,13 @@ function parseMarkdownHeading(line: string) {
 function getMarkdownHeadingClassName(level: number) {
     switch (level) {
         case 1:
-            return "mt-2 text-2xl font-semibold leading-tight text-gray-950";
+            return "mt-2 text-2xl font-semibold leading-tight text-gray-950 customer-dark:text-content-primary";
         case 2:
-            return "mt-2 text-xl font-semibold leading-tight text-gray-950";
+            return "mt-2 text-xl font-semibold leading-tight text-gray-950 customer-dark:text-content-primary";
         case 3:
-            return "mt-1 text-lg font-semibold leading-snug text-gray-950";
+            return "mt-1 text-lg font-semibold leading-snug text-gray-950 customer-dark:text-content-primary";
         default:
-            return "mt-1 text-base font-semibold leading-snug text-gray-900";
+            return "mt-1 text-base font-semibold leading-snug text-gray-900 customer-dark:text-content-primary";
     }
 }
 
@@ -134,13 +134,13 @@ function renderFormattedText(text: string) {
             }
 
             blocks.push(
-                <div key={`code-${blocks.length}`} className="my-2 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 shadow-sm">
+                <div key={`code-${blocks.length}`} className="my-2 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 shadow-sm customer-dark:border-ui-border customer-dark:bg-surface-muted">
                     {language ? (
-                        <div className="border-b border-slate-200 bg-white px-4 py-2 text-xs font-medium uppercase tracking-[0.12em] text-slate-500">
+                        <div className="border-b border-slate-200 bg-white px-4 py-2 text-xs font-medium uppercase tracking-[0.12em] text-slate-500 customer-dark:border-ui-border customer-dark:bg-surface-raised customer-dark:text-content-muted">
                             {language}
                         </div>
                     ) : null}
-                    <pre className="overflow-x-auto px-4 py-4 text-sm leading-6 text-[#1f1555] bg-[#f8f9fa]">
+                    <pre className="overflow-x-auto bg-[#f8f9fa] px-4 py-4 text-sm leading-6 text-[#1f1555] customer-dark:bg-surface-muted customer-dark:text-content-primary">
                         <code>{codeLines.join("\n")}</code>
                     </pre>
                 </div>
@@ -182,11 +182,11 @@ function renderFormattedText(text: string) {
 
             blocks.push(
                 <div key={`table-${blocks.length}`} className="my-2 overflow-x-auto">
-                    <table className="min-w-full border-collapse overflow-hidden rounded-2xl border border-gray-200 text-left text-sm">
-                        <thead className="bg-gray-50">
-                            <tr className="bg-gray-400/10">
+                    <table className="min-w-full border-collapse overflow-hidden rounded-2xl border border-gray-200 text-left text-sm customer-dark:border-ui-border">
+                        <thead className="bg-gray-50 customer-dark:bg-surface-muted">
+                            <tr className="bg-gray-400/10 customer-dark:bg-surface-hover/60">
                                 {header.map((cell, cellIndex) => (
-                                    <th key={`header-${cellIndex}`} className="border-b border-gray-200 px-4 py-3 font-semibold text-gray-900">
+                                    <th key={`header-${cellIndex}`} className="border-b border-gray-200 px-4 py-3 font-semibold text-gray-900 customer-dark:border-ui-border customer-dark:text-content-primary">
                                         {renderInlineText(cell)}
                                     </th>
                                 ))}
@@ -194,9 +194,9 @@ function renderFormattedText(text: string) {
                         </thead>
                         <tbody>
                             {rows.map((row, rowIndex) => (
-                                <tr key={`row-${rowIndex}`} className="odd:bg-white even:bg-gray-50/50">
+                                <tr key={`row-${rowIndex}`} className="odd:bg-white even:bg-gray-50/50 customer-dark:odd:bg-surface-panel customer-dark:even:bg-surface-muted/50">
                                     {row.map((cell, cellIndex) => (
-                                        <td key={`cell-${rowIndex}-${cellIndex}`} className="border-t border-gray-200 px-4 py-3 align-top text-gray-800">
+                                        <td key={`cell-${rowIndex}-${cellIndex}`} className="border-t border-gray-200 px-4 py-3 align-top text-gray-800 customer-dark:border-ui-border customer-dark:text-content-primary">
                                             {renderInlineText(cell)}
                                         </td>
                                     ))}
@@ -329,17 +329,17 @@ function GeoJsonMessageActions({ name, layer }: { name: string; layer: unknown }
         <span ref={containerRef} className="relative inline-flex items-center">
             <button
                 type="button"
-                className="cursor-pointer rounded-full p-1 text-blue-600 transition-colors hover:bg-blue-50 hover:text-blue-700"
+                className="cursor-pointer rounded-full p-1 text-blue-600 transition-colors hover:bg-blue-50 hover:text-blue-700 customer:text-brand-primary customer:hover:bg-brand-soft customer:hover:text-brand-contrast"
                 onClick={() => setIsOpen((current) => !current)}
                 aria-label="Действия со слоем"
             >
                 <MdMoreHoriz size={18} />
             </button>
             {isOpen && (
-                <div className="absolute left-full top-1/2 z-20 ml-2 w-60 -translate-y-1/2 rounded-2xl border border-slate-200 bg-white p-2 text-sm text-slate-700 shadow-[0_18px_40px_-20px_rgba(15,23,42,0.35)]">
+                <div className="absolute left-full top-1/2 z-20 ml-2 w-60 -translate-y-1/2 rounded-2xl border border-slate-200 bg-white p-2 text-sm text-slate-700 shadow-[0_18px_40px_-20px_var(--shadow-popover)] customer-dark:border-ui-border customer-dark:bg-surface-raised customer-dark:text-content-secondary">
                     <button
                         type="button"
-                        className="flex w-full cursor-pointer items-center gap-2 rounded-xl px-3 py-2 text-left transition-colors hover:bg-slate-100"
+                        className="flex w-full cursor-pointer items-center gap-2 rounded-xl px-3 py-2 text-left transition-colors hover:bg-slate-100 customer-dark:hover:bg-surface-hover"
                         onClick={addLayerToMap}
                     >
                         <MdOutlineMap size={18} />
@@ -347,7 +347,7 @@ function GeoJsonMessageActions({ name, layer }: { name: string; layer: unknown }
                     </button>
                     <button
                         type="button"
-                        className="flex w-full cursor-pointer items-center gap-2 rounded-xl px-3 py-2 text-left transition-colors hover:bg-slate-100"
+                        className="flex w-full cursor-pointer items-center gap-2 rounded-xl px-3 py-2 text-left transition-colors hover:bg-slate-100 customer-dark:hover:bg-surface-hover"
                         onClick={handleDownload}
                     >
                         <MdDownload size={18} />
@@ -361,7 +361,7 @@ function GeoJsonMessageActions({ name, layer }: { name: string; layer: unknown }
 
 function GeoJsonLayerRow({ name, layer }: { name: string; layer: unknown }) {
     return (
-        <span className="inline-flex min-w-0 items-center gap-2 text-blue-600">
+        <span className="inline-flex min-w-0 items-center gap-2 text-blue-600 customer:text-brand-primary">
             <LuLayers3 className="shrink-0" />
             <span className="min-w-0 truncate">{name}</span>
             <GeoJsonMessageActions
@@ -392,19 +392,19 @@ function isGeoJsonResponseMessage(message: ChatStoreMessage): message is GeoJson
 
 function GeoJsonMessageAccordion({ messages }: { messages: GeoJsonResponseMessage[] }) {
     return (
-        <details className="group w-full rounded-2xl border border-blue-100 bg-blue-50/40 text-blue-700">
+        <details className="group w-full rounded-2xl border border-blue-100 bg-blue-50/40 text-blue-700 customer:border-brand-border customer:bg-brand-soft/40 customer:text-brand-contrast">
             <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 marker:hidden">
                 <span className="inline-flex min-w-0 items-center gap-2 font-medium">
                     <LuLayers3 className="shrink-0" />
                     <span className="min-w-0 truncate">GeoJSON-слои ({messages.length})</span>
                 </span>
-                <MdArrowForwardIos className="shrink-0 text-blue-500 transition-transform group-open:rotate-90" size={16} />
+                <MdArrowForwardIos className="shrink-0 text-blue-500 transition-transform group-open:rotate-90 customer:text-brand-primary" size={16} />
             </summary>
-            <div className="flex flex-col gap-2 border-t border-blue-100 px-4 py-3">
+            <div className="flex flex-col gap-2 border-t border-blue-100 px-4 py-3 customer:border-brand-border">
                 {messages.map((message, index) => (
                     <div
                         key={`geojson-layer-${message.message.name}-${index}`}
-                        className="flex min-w-0 items-center justify-between gap-3 rounded-xl bg-white/80 px-3 py-2"
+                        className="flex min-w-0 items-center justify-between gap-3 rounded-xl bg-white/80 px-3 py-2 customer-dark:bg-surface-raised/80"
                     >
                         <GeoJsonLayerRow
                             name={message.message.name}
@@ -494,17 +494,17 @@ const PzzSetupMessageCard = observer(({ setup }: { setup: PzzSetupData }) => {
     };
 
     return (
-        <div className="flex w-full flex-col gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-800">
+        <div className="flex w-full flex-col gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-800 customer-dark:border-ui-border customer-dark:bg-surface-muted customer-dark:text-content-primary">
             <div className="flex items-center justify-between gap-3">
-                <span className="font-medium text-slate-900">Проверка объектов по ПЗЗ</span>
+                <span className="font-medium text-slate-900 customer-dark:text-content-primary">Проверка объектов по ПЗЗ</span>
                 <div className="flex min-w-0 shrink-0 items-center gap-2">
-                    <span className="rounded-full bg-white px-2.5 py-1 text-xs text-slate-500">
+                    <span className="rounded-full bg-white px-2.5 py-1 text-xs text-slate-500 customer-dark:bg-surface-raised customer-dark:text-content-muted">
                         {statusLabel}
                     </span>
                 </div>
             </div>
             <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_auto]">
-                <label className="flex min-w-0 flex-col gap-3 text-xs font-medium uppercase tracking-[0.12em] text-slate-500">
+                <label className="flex min-w-0 flex-col gap-3 text-xs font-medium uppercase tracking-[0.12em] text-slate-500 customer-dark:text-content-muted">
                     Год
                     <Select
                         value={selectedYear ?? ""}
@@ -517,7 +517,7 @@ const PzzSetupMessageCard = observer(({ setup }: { setup: PzzSetupData }) => {
                         // disabled={isLoading || isLocked || !yearOptions.length}
                     />
                 </label>
-                <label className="flex min-w-0 flex-col gap-3 text-xs font-medium uppercase tracking-[0.12em] text-slate-500">
+                <label className="flex min-w-0 flex-col gap-3 text-xs font-medium uppercase tracking-[0.12em] text-slate-500 customer-dark:text-content-muted">
                     Источник
                     <Select
                         value={selectedSource ?? ""}
@@ -532,7 +532,7 @@ const PzzSetupMessageCard = observer(({ setup }: { setup: PzzSetupData }) => {
                 </label>
                 <button
                     type="button"
-                    className="inline-flex min-h-11 items-center justify-center gap-2 self-end rounded-2xl bg-[#0788CE] px-4 text-sm font-medium text-white transition-colors hover:bg-[#0676B3] disabled:cursor-not-allowed disabled:bg-slate-300"
+                    className="inline-flex min-h-11 items-center justify-center gap-2 self-end rounded-2xl bg-brand-primary px-4 text-sm font-medium text-white transition-colors hover:bg-brand-hover disabled:cursor-not-allowed disabled:bg-surface-disabled"
                     onClick={handleSubmit}
                     disabled={!canSubmit}
                 >
@@ -547,10 +547,10 @@ const PzzSetupMessageCard = observer(({ setup }: { setup: PzzSetupData }) => {
                 </button>
             </div>
             {isLoading && (
-                <div className="text-xs text-slate-500">Загрузка источников функциональных зон...</div>
+                <div className="text-xs text-slate-500 customer-dark:text-content-muted">Загрузка источников функциональных зон...</div>
             )}
             {setup.errorText && (
-                <div className="rounded-2xl border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700">
+                <div className="rounded-2xl border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700 customer:border-danger-border customer:bg-danger-soft customer:text-danger-content">
                     {setup.errorText}
                 </div>
             )}
@@ -596,9 +596,9 @@ function VriFileUpload({
 
     return (
         <label className="flex min-w-0 flex-col gap-2">
-            <span className="text-sm font-medium text-slate-900">{label}</span>
-            <span className="flex min-w-0 flex-col gap-2 rounded-2xl border border-dashed border-slate-300 bg-white px-4 py-4">
-                <span className="flex min-w-0 items-center gap-2 text-sm text-slate-600">
+            <span className="text-sm font-medium text-slate-900 customer-dark:text-content-primary">{label}</span>
+            <span className="flex min-w-0 flex-col gap-2 rounded-2xl border border-dashed border-slate-300 bg-white px-4 py-4 customer-dark:border-ui-border-strong customer-dark:bg-surface-raised">
+                <span className="flex min-w-0 items-center gap-2 text-sm text-slate-600 customer-dark:text-content-secondary">
                     <MdOutlineUploadFile className="shrink-0" size={20} />
                     <span className="min-w-0 truncate">
                         {fileName ?? "Выберите файл"}
@@ -606,7 +606,7 @@ function VriFileUpload({
                 </span>
                 <input
                     type="file"
-                    className="block w-full cursor-pointer text-sm text-slate-600 file:mr-3 file:cursor-pointer file:rounded-xl file:border-0 file:bg-[#0788CE] file:px-3 file:py-2 file:text-sm file:font-medium file:text-white disabled:cursor-not-allowed disabled:text-slate-300 disabled:file:bg-slate-300"
+                    className="block w-full cursor-pointer text-sm text-slate-600 file:mr-3 file:cursor-pointer file:rounded-xl file:border-0 file:bg-[#0788CE] file:px-3 file:py-2 file:text-sm file:font-medium file:text-white disabled:cursor-not-allowed disabled:text-slate-300 disabled:file:bg-slate-300 customer:file:bg-brand-primary customer-dark:text-content-secondary customer-dark:disabled:text-content-disabled customer-dark:disabled:file:bg-surface-disabled"
                     onChange={handleFileChange}
                     disabled={disabled}
                 />
@@ -628,11 +628,11 @@ function VriChoiceButtons({
 }) {
     return (
         <div className="flex flex-col gap-3">
-            <div className="text-sm font-medium text-slate-900">{question}</div>
+            <div className="text-sm font-medium text-slate-900 customer-dark:text-content-primary">{question}</div>
             <div className="flex flex-wrap gap-2">
                 <button
                     type="button"
-                    className="rounded-2xl bg-[#0788CE] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#0676B3] disabled:cursor-not-allowed disabled:bg-slate-300"
+                    className="rounded-2xl bg-brand-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-brand-hover disabled:cursor-not-allowed disabled:bg-surface-disabled"
                     onClick={onYes}
                     disabled={disabled}
                 >
@@ -640,7 +640,7 @@ function VriChoiceButtons({
                 </button>
                 <button
                     type="button"
-                    className="rounded-2xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-300"
+                    className="rounded-2xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-300 customer-dark:border-ui-border-strong customer-dark:bg-surface-raised customer-dark:text-content-secondary customer-dark:hover:bg-surface-hover customer-dark:disabled:text-content-disabled"
                     onClick={onNo}
                     disabled={disabled}
                 >
@@ -665,11 +665,11 @@ const VriSetupMessageCard = observer(({ setup }: { setup: VriSetupData }) => {
 
     const renderStep = () => {
         if (setup.status === "finished") {
-            return <div className="text-sm text-slate-600">Проверка ВРИ завершена.</div>;
+            return <div className="text-sm text-slate-600 customer-dark:text-content-secondary">Проверка ВРИ завершена.</div>;
         }
 
         if (setup.status === "submitting" || setup.status === "running") {
-            return <div className="text-sm text-slate-600">Проверка ВРИ выполняется...</div>;
+            return <div className="text-sm text-slate-600 customer-dark:text-content-secondary">Проверка ВРИ выполняется...</div>;
         }
 
         switch (setup.step) {
@@ -742,15 +742,15 @@ const VriSetupMessageCard = observer(({ setup }: { setup: VriSetupData }) => {
     };
 
     return (
-        <div className="flex w-full flex-col gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-800">
+        <div className="flex w-full flex-col gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-800 customer-dark:border-ui-border customer-dark:bg-surface-muted customer-dark:text-content-primary">
             <div className="flex items-center justify-between gap-3">
-                <span className="font-medium text-slate-900">Проверка ВРИ</span>
-                <span className="rounded-full bg-white px-2.5 py-1 text-xs text-slate-500">
+                <span className="font-medium text-slate-900 customer-dark:text-content-primary">Проверка ВРИ</span>
+                <span className="rounded-full bg-white px-2.5 py-1 text-xs text-slate-500 customer-dark:bg-surface-raised customer-dark:text-content-muted">
                     {getVriSetupStatusLabel(setup.status)}
                 </span>
             </div>
             {uploadedFiles.length > 0 && (
-                <div className="flex flex-col gap-1 rounded-2xl bg-white px-3 py-2 text-xs text-slate-500">
+                <div className="flex flex-col gap-1 rounded-2xl bg-white px-3 py-2 text-xs text-slate-500 customer-dark:bg-surface-raised customer-dark:text-content-muted">
                     {uploadedFiles.map((fileLabel) => (
                         <div key={fileLabel} className="min-w-0 truncate">{fileLabel}</div>
                     ))}
@@ -758,7 +758,7 @@ const VriSetupMessageCard = observer(({ setup }: { setup: VriSetupData }) => {
             )}
             {renderStep()}
             {/* {setup.errorText && (
-                <div className="rounded-2xl border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700">
+                <div className="rounded-2xl border border-danger-border bg-danger-soft px-3 py-2 text-xs text-danger-content">
                     {setup.errorText}
                 </div>
             )} */}
@@ -773,10 +773,10 @@ const ChatTools = observer(() => {
     return (
         <>
           {isOpen && (
-            <div className="absolute left-full top-1/2 z-20 ml-2 w-auto -translate-y-1/2 rounded-2xl border border-slate-200 bg-white p-2 text-sm text-slate-700 shadow-[0_18px_40px_-20px_rgba(15,23,42,0.35)]">
+            <div className="absolute left-full top-1/2 z-20 ml-2 w-auto -translate-y-1/2 rounded-2xl border border-slate-200 bg-white p-2 text-sm text-slate-700 shadow-[0_18px_40px_-20px_var(--shadow-popover)] customer-dark:border-ui-border customer-dark:bg-surface-raised customer-dark:text-content-secondary">
               <button
                 type="button"
-                className="flex w-full cursor-pointer items-center gap-2 rounded-xl px-3 py-2 text-left transition-colors hover:bg-slate-100"
+                className="flex w-full cursor-pointer items-center gap-2 rounded-xl px-3 py-2 text-left transition-colors hover:bg-slate-100 customer-dark:hover:bg-surface-hover"
                 onClick={() => setIsOpen(false)}
               >
                 <MdOutlineMap size={18} />
@@ -784,16 +784,16 @@ const ChatTools = observer(() => {
               </button>
               <button
                 type="button"
-                className="flex w-full cursor-pointer items-center gap-2 rounded-xl px-3 py-2 text-left transition-colors hover:bg-slate-100"
+                className="flex w-full cursor-pointer items-center gap-2 rounded-xl px-3 py-2 text-left transition-colors hover:bg-slate-100 customer-dark:hover:bg-surface-hover"
                 onClick={() => setIsOpen(false)}
               >
                 Сервисы
-                <MdArrowForwardIos size={14} className="text-slate-400" />
+                <MdArrowForwardIos size={14} className="text-slate-400 customer-dark:text-content-muted" />
               </button>
             </div>
           )}
           <button className="group" onClick={() => setIsOpen(!isOpen)} disabled={isStreaming}>
-            <span className={isStreaming ? "text-slate-300" : "text-gray-950 group-hover:text-[#0788CE]"}>
+            <span className={isStreaming ? "text-slate-300 customer-dark:text-content-disabled" : "text-gray-950 group-hover:text-[#0788CE] customer:group-hover:text-brand-primary customer-dark:text-content-primary"}>
               <AiOutlinePlusCircle size={"2rem"} />
             </span>
           </button>
@@ -871,11 +871,11 @@ const ChatInput = observer((
             w-full rounded-3xl py-4 px-6 mb-1.5
             flex flex-col items-center justify-center
             border drop-shadow-lg shadow-gray-300
-            text-gray-950
+            text-gray-950 customer-dark:text-content-primary
             transition-colors duration-200
             ${isStreaming
-                ? "bg-slate-100 border-slate-200 shadow-none"
-                : "bg-white border-gray-300"}
+                ? "bg-slate-100 border-slate-200 shadow-none customer-dark:bg-surface-muted customer-dark:border-ui-border"
+                : "bg-white border-gray-300 customer-dark:bg-surface-panel customer-dark:border-ui-border-strong"}
         `}>
                 <div className={`w-full ${isContextSelectionVisible ? "space-y-7.5" : ""}`}>
                     <div className={`
@@ -887,7 +887,9 @@ const ChatInput = observer((
                             rows={1}
                             className={`
                                 min-w-0 flex-1 resize-none overflow-y-auto bg-transparent leading-6 focus:outline-none transition-colors duration-200
-                                ${isStreaming ? "cursor-not-allowed text-slate-400 placeholder:text-slate-400" : "text-gray-950 placeholder:text-gray-500"}
+                                ${isStreaming
+                                  ? "cursor-not-allowed text-slate-400 placeholder:text-slate-400 customer-dark:text-content-muted customer-dark:placeholder:text-content-muted"
+                                  : "text-gray-950 placeholder:text-gray-500 customer-dark:text-content-primary customer-dark:placeholder:text-content-muted"}
                             `}
                             placeholder={isStreaming ? "Ответ генерируется..." : "Спросите Помощника"}
                             value={currentInput}
@@ -904,7 +906,7 @@ const ChatInput = observer((
                             <CascaderSelect
                                 items={toolMenuItems}
                                 rootNode={
-                                    <span className={isStreaming ? "text-slate-300" : "text-gray-950 hover:text-[#0788CE]"}>
+                                    <span className={isStreaming ? "text-slate-300 customer-dark:text-content-disabled" : "text-gray-950 hover:text-[#0788CE] customer:hover:text-brand-primary customer-dark:text-content-primary"}>
                                         <AiOutlinePlusCircle size={"2rem"} />
                                     </span>
                                 }
@@ -924,7 +926,9 @@ const ChatInput = observer((
                                     }
                                 }}
                             >
-                                <span className={isStreaming ? "text-[#D45D5D] group-hover:text-[#BF3F3F]" : "text-gray-950 group-hover:text-[#A5C21B]"}>
+                                <span className={isStreaming
+                                  ? "text-[#D45D5D] group-hover:text-[#BF3F3F] customer:text-danger customer:group-hover:text-danger-hover"
+                                  : "text-gray-950 group-hover:text-[#A5C21B] customer:group-hover:text-brand-accent customer-dark:text-content-primary"}>
                                     {isStreaming ? <FaStopCircle size={"2rem"} /> : <IoIosSend size={"2rem"} />}
                                 </span>
                             </button>
@@ -974,7 +978,7 @@ const ChatComponent = observer(function ChatComponent(
                 renderedMessages.push(
                     <div
                         key={`chat-message-geojson-group-${ind}`}
-                        className="w-full rounded-3xl py-4 pr-6 pl-1 text-gray-950"
+                        className="w-full rounded-3xl py-4 pr-6 pl-1 text-gray-950 customer-dark:text-content-primary"
                     >
                         <GeoJsonMessageAccordion messages={geoJsonMessages} />
                     </div>
@@ -990,24 +994,24 @@ const ChatComponent = observer(function ChatComponent(
                 className={
                     message.type === "response"
                         ? message.message.type === "error"
-                            ? "w-full rounded-3xl border border-red-200 bg-red-50 px-5 py-4 text-red-900"
+                            ? "w-full rounded-3xl border border-danger-border bg-danger-soft px-5 py-4 text-danger-content"
                             : message.message.type === "warning"
                                 ? "w-full rounded-3xl border border-amber-200 bg-amber-50 px-5 py-4 text-amber-950"
-                                : "w-full rounded-3xl pr-6 pl-1 py-4 text-gray-950"
-                        : "w-fit self-end-safe rounded-3xl border border-gray-200 bg-blue-100 px-6 py-4 text-gray-950 whitespace-pre-wrap relative"
+                                : "w-full rounded-3xl pr-6 pl-1 py-4 text-gray-950 customer-dark:text-content-primary"
+                        : "w-fit self-end-safe rounded-3xl border border-gray-200 bg-blue-100 px-6 py-4 text-gray-950 whitespace-pre-wrap relative customer:border-brand-border customer:bg-brand-soft customer-dark:text-content-primary"
                 }
             >
                 {message.message.type === "text" ? renderFormattedText(message.message.text) : ""}
                 {message.message.type === "error" && (
                     <div className="flex items-start gap-3">
-                        <span className="mt-0.5 shrink-0 text-red-500">
+                        <span className="mt-0.5 shrink-0 text-red-500 customer:text-danger">
                             <IoAlertCircleOutline size={22} />
                         </span>
                         <div className="min-w-0">
-                            <div className="text-sm font-semibold text-red-700">
+                            <div className="text-sm font-semibold text-red-700 customer:text-danger">
                                 Ошибка
                             </div>
-                            <div className="mt-1 whitespace-pre-wrap text-sm leading-6 text-red-900">
+                            <div className="mt-1 whitespace-pre-wrap text-sm leading-6 text-red-900 customer:text-danger-content">
                                 {message.message.text}
                             </div>
                         </div>
@@ -1067,12 +1071,12 @@ const ChatComponent = observer(function ChatComponent(
                         {ChatStore.isStreaming && ChatStore.currentStatus && (
                             <span>{ChatStore.currentStatus}</span>
                         )}
-                        <SyncLoader size={8} color="#0788CE" loading={ChatStore.isStreaming} cssOverride={{ marginBlock: 12, marginLeft: "0.25rem" }} />
+                        <SyncLoader size={8} color="var(--color-brand-primary)" loading={ChatStore.isStreaming} cssOverride={{ marginBlock: 12, marginLeft: "0.25rem" }} />
                     </div>
                     <div ref={messagesEndRef} />
                 </div>
             </div>
-            <div className="shrink-0 border-t border-gray-100 bg-white pt-4">
+            <div className="shrink-0 border-t border-gray-100 bg-white pt-4 customer-dark:border-ui-border customer-dark:bg-surface-page">
                 <ChatInput onSubmit={onSubmit}/>
             </div>
         </div>

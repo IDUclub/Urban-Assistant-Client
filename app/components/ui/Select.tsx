@@ -111,7 +111,7 @@ function CustomSelect({ value, options, onChange, placeholder, block }: CustomSe
                     ${block ? "w-full" : "w-fit"}
                 `}
             >
-                <div className="absolute -inset-0.75 -z-10 rounded-3xl bg-linear-to-r from-[#0788CE] via-[#17A3D0] to-[#A5C21B] opacity-30 blur-sm"></div>
+                <div className="absolute -inset-0.75 -z-10 rounded-3xl bg-linear-to-r from-brand-gradient-start via-brand-gradient-middle to-brand-gradient-end opacity-30 blur-sm"></div>
                 <button
                     type="button"
                     className={`
@@ -120,7 +120,8 @@ function CustomSelect({ value, options, onChange, placeholder, block }: CustomSe
                         px-6 py-2.5 text-left text-sm font-medium tracking-[0.01em] text-black
                         transition duration-200 hover:-translate-y-0.5
                         focus:outline-none focus:ring-2 focus:ring-white/70
-                        ${isOpen ? "ring-2 ring-white/70" : ""}
+                        customer:focus:ring-brand-primary/35 customer-dark:bg-surface-raised customer-dark:border-ui-border customer-dark:text-content-primary
+                        ${isOpen ? "ring-2 ring-white/70 customer:ring-brand-primary/35" : ""}
                     `}
                     onClick={() => setIsOpen((current) => !current)}
                     aria-expanded={isOpen}
@@ -128,7 +129,7 @@ function CustomSelect({ value, options, onChange, placeholder, block }: CustomSe
                 >
                     {/* <span className="pointer-events-none absolute inset-0 bg-linear-to-r from-white/12 via-transparent to-black/5" /> */}
                     <span className="relative truncate">{selectedOption?.label ?? placeholder ?? "Выберите значение"}</span>
-                    <span className={`relative shrink-0 text-black transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`}>
+                    <span className={`relative shrink-0 text-black transition-transform duration-200 customer-dark:text-content-primary ${isOpen ? "rotate-180" : ""}`}>
                         <IoChevronDown size={18} />
                     </span>
                 </button>
@@ -138,7 +139,8 @@ function CustomSelect({ value, options, onChange, placeholder, block }: CustomSe
                     style={menuStyle}
                     className="
                         absolute left-0 right-0 z-30 flex w-fit max-w-[min(60vw,24rem)] min-w-full flex-col overflow-hidden rounded-3xl
-                        border border-slate-200 bg-white/95 p-2 shadow-[0_24px_20px_-24px_rgba(15,23,42,0.32)] backdrop-blur
+                        border border-slate-200 bg-white/95 p-2 shadow-[0_24px_20px_-24px_var(--shadow-menu)] backdrop-blur
+                        customer-dark:border-ui-border customer-dark:bg-surface-raised/95
                     "
                 >
                     <div className="px-2 pb-2">
@@ -149,7 +151,7 @@ function CustomSelect({ value, options, onChange, placeholder, block }: CustomSe
                             onChange={(event) => setSearchQuery(event.target.value)}
                             onKeyDown={(event) => event.stopPropagation()}
                             placeholder="Поиск"
-                            className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition-colors focus:border-[#0788CE]"
+                            className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 outline-none transition-colors focus:border-[#0788CE] customer:focus:border-brand-primary customer-dark:border-ui-border customer-dark:bg-surface-panel customer-dark:text-content-secondary customer-dark:placeholder:text-content-muted"
                         />
                     </div>
                     <ul className="min-h-0 max-h-80 flex-1 overflow-y-auto" role="listbox">
@@ -164,8 +166,8 @@ function CustomSelect({ value, options, onChange, placeholder, block }: CustomSe
                                             flex w-full items-center justify-between gap-4 rounded-2xl px-4 py-3 text-left text-sm
                                             transition-colors duration-150
                                             ${isSelected
-                                                ? "bg-[#EAF5FF] text-[#0B5E8E]"
-                                                : "text-slate-700 hover:bg-slate-100"}
+                                                ? "bg-[#EAF5FF] text-[#0B5E8E] customer:bg-brand-soft customer:text-brand-contrast"
+                                                : "text-slate-700 hover:bg-slate-100 customer-dark:text-content-secondary customer-dark:hover:bg-surface-hover"}
                                         `}
                                         onClick={() => {
                                             onChange(option.value);
@@ -173,7 +175,7 @@ function CustomSelect({ value, options, onChange, placeholder, block }: CustomSe
                                         }}
                                     >
                                         <span className="truncate">{option.label}</span>
-                                        <span className={`shrink-0 ${isSelected ? "text-[#0B5E8E]" : "text-transparent"}`}>
+                                        <span className={`shrink-0 ${isSelected ? "text-[#0B5E8E] customer:text-brand-contrast" : "text-transparent"}`}>
                                             <IoCheckmark size={18} />
                                         </span>
                                     </button>
@@ -181,7 +183,7 @@ function CustomSelect({ value, options, onChange, placeholder, block }: CustomSe
                             );
                         })}
                         {filteredOptions.length === 0 && (
-                            <li className="px-4 py-3 text-sm text-slate-500">
+                            <li className="px-4 py-3 text-sm text-slate-500 customer-dark:text-content-muted">
                                 Ничего не найдено
                             </li>
                         )}

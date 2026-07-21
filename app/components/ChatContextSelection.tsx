@@ -90,10 +90,11 @@ const ChatContextSelection = observer(() => {
                 <div
                     className="
                         group flex items-center self-center gap-2 rounded-2xl bg-[#EAF5FF] px-4 py-2 text-sm font-medium text-[#0B5E8E]
+                        customer:bg-brand-soft customer:text-brand-contrast
                     "
                 >
                     <button
-                        className="group-hover:text-red-600"
+                        className="group-hover:text-red-600 customer:group-hover:text-danger"
                         onClick={() => setSelectedChatTool(null)}
                     >
                         <MdOutlineCancel size={18} />

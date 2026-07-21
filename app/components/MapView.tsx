@@ -544,11 +544,11 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
     }, [selectedFeature]);
 
     return (
-        <div className="relative h-full w-full overflow-hidden rounded-3xl border border-gray-200 bg-white shadow-sm">
+        <div className="relative h-full w-full overflow-hidden rounded-3xl border border-gray-200 bg-white shadow-sm customer-dark:border-ui-border customer-dark:bg-surface-panel">
             <div className="pointer-events-none absolute left-1/2 top-4 z-10 -translate-x-1/2">
                 <button
                     type="button"
-                    className="pointer-events-auto inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white/95 px-4 py-2 text-sm font-medium text-gray-700 shadow-sm backdrop-blur transition-colors hover:border-[#0788CE] hover:text-[#0788CE]"
+                    className="pointer-events-auto inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white/95 px-4 py-2 text-sm font-medium text-gray-700 shadow-sm backdrop-blur transition-colors hover:border-[#0788CE] hover:text-[#0788CE] customer:hover:border-brand-primary customer:hover:text-brand-primary customer-dark:border-ui-border customer-dark:bg-surface-raised/95 customer-dark:text-content-secondary"
                     onClick={onToggleExpanded}
                 >
                     {isExpanded ? <IoChevronDown size={18} /> : <IoChevronUp size={18} />}
@@ -556,7 +556,7 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                 </button>
             </div>
             {!isMounted ? (
-                <div className="flex h-full items-center justify-center text-sm text-gray-500">
+                <div className="flex h-full items-center justify-center text-sm text-gray-500 customer-dark:text-content-muted">
                     Loading map...
                 </div>
             ) : (
@@ -648,8 +648,8 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
             )}
             {isMapLayersAvailable && (
                 <div className="pointer-events-auto absolute left-4 top-4 z-10 h-1/2 w-[min(18rem,calc(100%-2rem))] max-w-72">
-                    <div className="flex h-full flex-col overflow-hidden rounded-3xl border border-gray-200 bg-white/90 px-6 py-4 shadow-sm backdrop-blur-lg">
-                        <div className="mb-4 shrink-0 text-xs font-semibold uppercase tracking-[0.14em] text-gray-500">
+                    <div className="flex h-full flex-col overflow-hidden rounded-3xl border border-gray-200 bg-white/90 px-6 py-4 shadow-sm backdrop-blur-lg customer-dark:border-ui-border customer-dark:bg-surface-panel/90">
+                        <div className="mb-4 shrink-0 text-xs font-semibold uppercase tracking-[0.14em] text-gray-500 customer-dark:text-content-muted">
                             Отображаемые слои
                         </div>
                         <div className="min-h-0 flex flex-1 flex-col gap-2 overflow-y-auto">
@@ -662,12 +662,14 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                                         key={layer.id}
                                         className={`
                                             flex items-center gap-3 rounded-2xl py-2 text-sm
-                                            ${layer.isVisible ? "text-gray-700" : "text-gray-400"}
+                                            ${layer.isVisible
+                                              ? "text-gray-700 customer-dark:text-content-secondary"
+                                              : "text-gray-400 customer-dark:text-content-muted"}
                                         `}
                                     >
                                         <button
                                             type="button"
-                                            className="cursor-pointer text-lg text-gray-500 transition-colors hover:text-[#0788CE]"
+                                            className="cursor-pointer text-lg text-gray-500 transition-colors hover:text-[#0788CE] customer:hover:text-brand-primary customer-dark:text-content-muted"
                                             onClick={() => MapStore.toggleLayerVisibility(layer.id)}
                                             aria-label={layer.isVisible ? "Скрыть слой" : "Показать слой"}
                                         >
@@ -681,7 +683,7 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                                         />
                                         <button
                                             type="button"
-                                            className="min-w-0 flex-1 cursor-pointer truncate text-left transition-colors hover:text-[#0788CE]"
+                                            className="min-w-0 flex-1 cursor-pointer truncate text-left transition-colors hover:text-[#0788CE] customer:hover:text-brand-primary"
                                             onClick={() => zoomToLayer(layer.layer)}
                                             title={layer.name || "Без названия"}
                                         >
@@ -689,7 +691,7 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                                         </button>
                                         <button
                                             type="button"
-                                            className="cursor-pointer text-lg text-gray-500 transition-colors hover:text-[#0788CE]"
+                                            className="cursor-pointer text-lg text-gray-500 transition-colors hover:text-[#0788CE] customer:hover:text-brand-primary customer-dark:text-content-muted"
                                             onClick={() => downloadLayer(layer.name, layer.layer)}
                                             aria-label="Скачать слой"
                                         >
@@ -703,23 +705,23 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                 </div>
             )}
             {selectedFeature && (
-                <div className="pointer-events-auto absolute top-4 right-4 z-10 flex max-h-[calc(100%-2rem)] w-[min(24rem,calc(100%-2rem))] flex-col overflow-hidden rounded-3xl border border-gray-200 bg-white/95 p-4 shadow-lg backdrop-blur">
+                <div className="pointer-events-auto absolute top-4 right-4 z-10 flex max-h-[calc(100%-2rem)] w-[min(24rem,calc(100%-2rem))] flex-col overflow-hidden rounded-3xl border border-gray-200 bg-white/95 p-4 shadow-lg backdrop-blur customer-dark:border-ui-border customer-dark:bg-surface-panel/95">
                     <div className="mb-3 flex shrink-0 items-start justify-between gap-3">
                         <div className="min-w-0">
-                            <div className="truncate text-sm font-semibold text-slate-900">
+                            <div className="truncate text-sm font-semibold text-slate-900 customer-dark:text-content-primary">
                                 {selectedFeature.layerName}
                             </div>
                         </div>
                         <button
                             type="button"
-                            className="shrink-0 cursor-pointer rounded-full px-2 py-1 text-sm text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800"
+                            className="shrink-0 cursor-pointer rounded-full px-2 py-1 text-sm text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800 customer-dark:text-content-muted customer-dark:hover:bg-surface-hover customer-dark:hover:text-content-primary"
                             onClick={() => setSelectedFeature(null)}
                             aria-label="Закрыть свойства"
                         >
                             ×
                         </button>
                     </div>
-                    <div className="relative overflow-hidden rounded-2xl bg-slate-50">
+                    <div className="relative overflow-hidden rounded-2xl bg-slate-50 customer-dark:bg-surface-muted">
                         <div
                             className="max-h-[max(8rem,calc(50vh-7rem))] overflow-y-auto overscroll-contain px-3 pb-8 pt-2"
                             ref={propertyListRef}
@@ -729,11 +731,11 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                         >
                             {Object.keys(selectedFeature.properties).length ? (
                                 Object.entries(selectedFeature.properties).map(([key, propertyValue]) => (
-                                    <div key={key} className="border-b border-slate-200 py-2 last:border-b-0">
-                                        <div className="text-xs font-medium uppercase tracking-[0.08em] text-slate-500">
+                                    <div key={key} className="border-b border-slate-200 py-2 last:border-b-0 customer-dark:border-ui-border">
+                                        <div className="text-xs font-medium uppercase tracking-[0.08em] text-slate-500 customer-dark:text-content-muted">
                                             {key}
                                         </div>
-                                        <div className="mt-1 wrap-break-word text-sm text-slate-800">
+                                        <div className="mt-1 wrap-break-word text-sm text-slate-800 customer-dark:text-content-primary">
                                             {typeof propertyValue === "object"
                                                 ? JSON.stringify(propertyValue)
                                                 : String(propertyValue)}
@@ -741,7 +743,7 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                                     </div>
                                 ))
                             ) : (
-                                <div className="text-sm text-slate-500">
+                                <div className="text-sm text-slate-500 customer-dark:text-content-muted">
                                     У объекта нет свойств
                                 </div>
                             )}

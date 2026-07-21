@@ -32,11 +32,11 @@ const ChatSection = observer(() => {
     console.log(selectedContextLabel);
 
     return (
-        <section className="relative flex h-screen w-full flex-col overflow-hidden bg-white">
+        <section className="relative flex h-screen w-full flex-col overflow-hidden bg-white customer:bg-surface-page">
             {chatMessages.length ? (
-                <div className="sticky top-0 z-10 shrink-0 border-b border-gray-200 bg-white/95 px-8 py-4 backdrop-blur">
+                <div className="sticky top-0 z-10 shrink-0 border-b border-gray-200 bg-white/95 px-8 py-4 backdrop-blur customer-dark:border-ui-border customer-dark:bg-surface-panel/95">
                     <div className="mx-auto flex w-fit max-w-7xl items-center gap-6">
-                        <span className="truncate text-sm font-medium text-gray-500">
+                        <span className="truncate text-sm font-medium text-gray-500 customer-dark:text-content-muted">
                             {selectedContextLabel}
                         </span>
                     </div>
@@ -50,15 +50,15 @@ const ChatSection = observer(() => {
                     <div className="min-h-0 flex-1 overflow-hidden">
                         <div className="mx-auto flex h-full w-full max-w-5xl flex-col">
                             {isUserChatOpening ? (
-                                <div className="flex h-full items-center justify-center text-sm font-medium text-gray-500">
+                                <div className="flex h-full items-center justify-center text-sm font-medium text-gray-500 customer-dark:text-content-muted">
                                     Загрузка чата...
                                 </div>
                             ) : (
                                 <ChatComponent
                                     emptyState={
                                         <div className="flex flex-col items-center gap-8 py-4 text-center">
-                                            <h1 className="mb-1.5 max-w-full font-cabin text-[22px] font-normal leading-tight text-[#383432] sm:text-[14px] md:text-[26px] lg:text-[32px] xl:text-[42px]">
-                                                <span className="bg-linear-to-r from-[#0788CE] via-[#17A3D0] to-[#A5C21B] bg-clip-text text-transparent">
+                                            <h1 className="mb-1.5 max-w-full font-cabin text-[22px] font-normal leading-tight text-[#383432] customer-dark:text-content-primary sm:text-[14px] md:text-[26px] lg:text-[32px] xl:text-[42px]">
+                                                <span className="brand-text-gradient bg-clip-text text-transparent">
                                                     Привет{firstName ? `, ${firstName}` : ""}!
                                                 </span>
                                                 <span> Чем я могу помочь?</span>
