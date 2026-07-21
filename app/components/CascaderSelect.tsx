@@ -183,7 +183,8 @@ const CascaderSelect = observer(({
             className="
                 fixed z-50 flex w-max max-w-[min(80vw,48rem)] overflow-hidden rounded-2xl
                 border border-slate-200 bg-white p-2 text-sm text-slate-700
-                shadow-[0_18px_40px_-20px_rgba(15,23,42,0.35)]
+                customer-dark:border-ui-border customer-dark:bg-surface-raised customer-dark:text-content-secondary
+                shadow-[0_18px_40px_-20px_var(--shadow-popover)]
             "
             role="menu"
             style={menuStyle}
@@ -193,7 +194,7 @@ const CascaderSelect = observer(({
                     key={`cascader-column-${depth}`}
                     className={`
                         min-w-52 overflow-y-auto p-1
-                        ${depth > 0 ? "border-l border-slate-100" : ""}
+                        ${depth > 0 ? "border-l border-slate-100 customer-dark:border-ui-border" : ""}
                     `}
                 >
                     {columnItems.map((item, itemIndex) => {
@@ -207,7 +208,9 @@ const CascaderSelect = observer(({
                                 className={`
                                     flex w-full cursor-pointer items-center justify-between gap-3 rounded-xl px-3 py-2
                                     text-left transition-colors
-                                    ${isActive ? "bg-[#EAF5FF] text-[#0B5E8E]" : "hover:bg-slate-100"}
+                                    ${isActive
+                                      ? "bg-[#EAF5FF] text-[#0B5E8E] customer:bg-brand-soft customer:text-brand-contrast"
+                                      : "hover:bg-slate-100 customer-dark:hover:bg-surface-hover"}
                                     ${item.disabled ? "cursor-not-allowed opacity-50" : ""}
                                 `}
                                 onMouseEnter={() => setActiveItem(depth, itemIndex)}
@@ -224,7 +227,7 @@ const CascaderSelect = observer(({
                                     <span className="truncate">{item.label}</span>
                                 </span>
                                 {hasChildren && (
-                                    <MdArrowForwardIos size={14} className="shrink-0 text-slate-400" />
+                                    <MdArrowForwardIos size={14} className="shrink-0 text-slate-400 customer-dark:text-content-muted" />
                                 )}
                             </button>
                         );

@@ -87,31 +87,31 @@ const ChatStory = observer(() => {
 
   if (!chatStoryPreview.length) {
     return (
-      <div className="px-4 py-3 text-sm text-gray-400">
+      <div className="px-4 py-3 text-sm text-gray-400 customer-dark:text-content-muted">
         {isUserChatsLoading ? "Загрузка истории..." : "История пока пуста"}
       </div>
     );
   }
 
   return (
-    <div className="mt-8 pt-5 flex w-full min-w-0 min-h-0 flex-1 flex-col overflow-hidden border-t border-gray-900/30">
-      <div className="px-4 text-sm font-medium uppercase tracking-[0.14em] text-gray-500">
+    <div className="mt-8 pt-5 flex w-full min-w-0 min-h-0 flex-1 flex-col overflow-hidden border-t border-[var(--sidebar-divider-color)]">
+      <div className="px-4 text-sm font-medium uppercase tracking-[0.14em] text-[var(--history-heading-color)]">
         История чатов
       </div>
-      <div className="bg-white/95 px-2 py-2 backdrop-blur">
-        <label className="flex min-h-11 items-center gap-2 rounded-3xl border border-slate-200 bg-white px-3 text-sm text-slate-600 shadow-sm focus-within:border-[#0788CE]">
-          <MdSearch className="shrink-0 text-slate-400" size={20} />
+      <div className="bg-white/95 px-2 py-2 backdrop-blur customer-dark:bg-surface-panel/95">
+        <label className="flex min-h-11 items-center gap-2 rounded-3xl border border-slate-200 bg-white px-3 text-sm text-slate-600 shadow-sm focus-within:border-[#0788CE] customer:focus-within:border-brand-primary customer-dark:border-ui-border customer-dark:bg-surface-raised customer-dark:text-content-secondary">
+          <MdSearch className="shrink-0 text-slate-400 customer-dark:text-content-muted" size={20} />
           <input
             type="text"
             value={searchQuery}
             onChange={(event) => setSearchQuery(event.target.value)}
             placeholder="Поиск по истории"
-            className="min-w-0 flex-1 bg-transparent py-2 text-sm text-slate-800 outline-none placeholder:text-slate-400"
+            className="min-w-0 flex-1 bg-transparent py-2 text-sm text-slate-800 outline-none placeholder:text-slate-400 customer-dark:text-content-primary customer-dark:placeholder:text-content-muted"
           />
           {searchQuery && (
             <button
               type="button"
-              className="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+              className="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 customer-dark:text-content-muted customer-dark:hover:bg-surface-hover customer-dark:hover:text-content-secondary"
               onClick={() => setSearchQuery("")}
               aria-label="Очистить поиск"
             >
@@ -122,22 +122,22 @@ const ChatStory = observer(() => {
       </div>
       <div className="mt-2 flex min-w-0 flex-1 flex-col space-y-2 overflow-y-auto px-2">
         {visibleChatStoryPreview.length === 0 ? (
-          <div className="px-4 py-3 text-sm text-gray-400">
+          <div className="px-4 py-3 text-sm text-gray-400 customer-dark:text-content-muted">
             Ничего не найдено
           </div>
         ) : (
           visibleChatStoryPreview.map((group) => (
             <details
               key={group.id}
-              className="group/project rounded-3xl bg-gray-50/70"
+              className="group/project rounded-3xl bg-gray-50/70 customer-dark:bg-surface-muted/70"
               open={openGroupIds.has(group.id)}
               onToggle={(event) =>
                 handleProjectToggle(group.id, event.currentTarget.open)
               }
             >
-              <summary className="sticky top-0 z-10 flex cursor-pointer list-none items-center justify-between gap-2 rounded-3xl bg-gray-50/95 px-4 py-3 text-sm font-medium text-gray-700 backdrop-blur marker:hidden [&::-webkit-details-marker]:hidden">
+              <summary className="sticky top-0 z-10 flex cursor-pointer list-none items-center justify-between gap-2 rounded-3xl bg-gray-50/95 px-4 py-3 text-sm font-medium text-gray-700 backdrop-blur marker:hidden customer-dark:bg-surface-muted/95 customer-dark:text-content-secondary [&::-webkit-details-marker]:hidden">
                 <span className="min-w-0 truncate">{group.name}</span>
-                <span className="flex shrink-0 items-center gap-1 text-xs text-gray-400">
+                <span className="flex shrink-0 items-center gap-1 text-xs text-gray-400 customer-dark:text-content-muted">
                   {group.chats.length}
                   <MdKeyboardArrowRight
                     size={18}
@@ -155,8 +155,8 @@ const ChatStory = observer(() => {
                     gap-2 rounded-3xl px-3 py-2 text-sm transition-colors
                     ${
                       activeChatId === chat.id
-                        ? "bg-[#EAF5FF] text-[#0B5E8E]"
-                        : "text-gray-700 hover:bg-gray-100"
+                        ? "bg-[#EAF5FF] text-[#0B5E8E] customer:bg-brand-soft customer:text-brand-contrast"
+                        : "text-gray-700 hover:bg-gray-100 customer-dark:text-content-secondary customer-dark:hover:bg-surface-hover"
                     }
                 `}
                   >
@@ -170,7 +170,7 @@ const ChatStory = observer(() => {
                     </button>
                     <button
                       type="button"
-                      className="cursor-pointer text-2xl text-red-700 opacity-0 transition-opacity group-hover:opacity-100 hover:text-red-800"
+                      className="cursor-pointer text-2xl text-red-700 opacity-0 transition-opacity group-hover:opacity-100 hover:text-red-800 customer:text-danger customer:hover:text-danger-hover"
                       onClick={() => ChatStore.deleteChat(chat.id)}
                       aria-label="Удалить чат"
                     >

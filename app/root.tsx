@@ -11,7 +11,10 @@ import { observer } from "mobx-react-lite";
 import type { Route } from "./+types/root";
 import AuthStore from "@lib/AuthStore";
 import PageLoader from "@components/PageLoader";
+import ThemeToggle from "@components/ThemeToggle";
 import "./app.css";
+
+const brandTheme = import.meta.env.VITE_BRAND_THEME === "customer" ? "customer" : "default";
 
 export const links: Route.LinksFunction = () => [
   {
@@ -32,7 +35,7 @@ export const links: Route.LinksFunction = () => [
 
 export function Layout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="ru" data-brand={brandTheme} data-color-scheme="light">
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -40,6 +43,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <Links />
       </head>
       <body>
+        {brandTheme === "customer" ? <ThemeToggle /> : null}
         {children}
         <ScrollRestoration />
         <Scripts />

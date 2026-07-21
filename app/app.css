@@ -1,5 +1,8 @@
 @import "tailwindcss";
 
+@custom-variant customer (&:where(html[data-brand="customer"] *));
+@custom-variant customer-dark (&:where(html[data-brand="customer"][data-color-scheme="dark"] *));
+
 @font-face {
   font-family: "Inter";
   src: url("/fonts/inter/Inter-Thin.ttf") format("truetype");
@@ -76,6 +79,117 @@
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif,
     "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
   --font-cabin: "Inter", ui-sans-serif, system-ui, sans-serif;
+
+  --color-brand-primary: #0788ce;
+  --color-brand-secondary: #17a3d0;
+  --color-brand-accent: #a5c21b;
+  --color-brand-hover: #0676b3;
+  --color-brand-soft: #eaf5ff;
+  --color-brand-contrast: #0b5e8e;
+  --color-brand-border: #dbe3ec;
+  --color-brand-gradient-start: #0788ce;
+  --color-brand-gradient-middle: #17a3d0;
+  --color-brand-gradient-end: #a5c21b;
+
+  --color-surface-page: #ffffff;
+  --color-surface-panel: #ffffff;
+  --color-surface-raised: #ffffff;
+  --color-surface-muted: #f8fafc;
+  --color-surface-hover: #f1f5f9;
+  --color-surface-disabled: #cbd5e1;
+  --color-content-primary: #111827;
+  --color-content-secondary: #475569;
+  --color-content-muted: #94a3b8;
+  --color-content-disabled: #cbd5e1;
+  --color-ui-border: #e2e8f0;
+  --color-ui-border-strong: #cbd5e1;
+  --color-danger: #dc2626;
+  --color-danger-hover: #b91c1c;
+  --color-danger-soft: #fef2f2;
+  --color-danger-border: #fecaca;
+  --color-danger-content: #7f1d1d;
+}
+
+:root {
+  --brand-primary-rgb: 7 136 206;
+  --brand-secondary-rgb: 23 163 208;
+  --brand-accent-rgb: 165 194 27;
+  --brand-gradient-middle-rgb: 23 163 208;
+  --brand-gradient-end-rgb: 165 194 27;
+  --brand-shadow-strong: rgb(var(--brand-primary-rgb) / 55%);
+  --brand-shadow-medium: rgb(var(--brand-gradient-middle-rgb) / 50%);
+  --brand-shadow-soft: rgb(var(--brand-primary-rgb) / 18%);
+  --shadow-sidebar: rgb(15 23 42 / 28%);
+  --shadow-card: rgb(15 23 42 / 55%);
+  --shadow-popover: rgb(15 23 42 / 35%);
+  --shadow-menu: rgb(15 23 42 / 32%);
+  --shadow-logo: rgb(15 23 42 / 18%);
+  --history-heading-color: #6b7280;
+  --sidebar-divider-color: rgb(17 24 39 / 30%);
+}
+
+html[data-brand="customer"] {
+  /* Customer brand palette */
+  --color-brand-primary: #c8141e;
+  --color-brand-secondary: #781019;
+  --color-brand-accent: #a61926;
+  --color-brand-hover: #a61926;
+  --color-brand-soft: #f9e8ea;
+  --color-brand-contrast: #781019;
+  --color-brand-border: #c8141e;
+  --color-brand-gradient-start: #c8141e;
+  --color-brand-gradient-middle: #d52d38;
+  --color-brand-gradient-end: #e24a53;
+
+  --brand-primary-rgb: 200 20 30;
+  --brand-secondary-rgb: 120 16 25;
+  --brand-accent-rgb: 166 25 38;
+  --brand-gradient-middle-rgb: 213 45 56;
+  --brand-gradient-end-rgb: 226 74 83;
+  --brand-shadow-strong: rgb(var(--brand-primary-rgb) / 42%);
+  --brand-shadow-medium: rgb(var(--brand-gradient-middle-rgb) / 38%);
+  --brand-shadow-soft: rgb(var(--brand-primary-rgb) / 15%);
+  --history-heading-color: var(--color-content-muted);
+  --sidebar-divider-color: var(--color-ui-border-strong);
+}
+
+html[data-brand="customer"][data-color-scheme="dark"] {
+  /* Customer red gradient for dark mode */
+  --color-brand-gradient-start: #c8141e;
+  --color-brand-gradient-middle: #d52d38;
+  --color-brand-gradient-end: #e24a53;
+  --color-brand-soft: #412126;
+  --color-brand-contrast: #f08088;
+
+  /* Customer graphite surfaces */
+  --color-surface-page: #202124;
+  --color-surface-panel: #292a2f;
+  --color-surface-raised: #33343a;
+  --color-surface-muted: #36373d;
+  --color-surface-hover: #414249;
+  --color-surface-disabled: #52535c;
+  --color-content-primary: #e2e2e5;
+  --color-content-secondary: #d6d6d8;
+  --color-content-muted: #a4a4aa;
+  --color-content-disabled: #74747d;
+  --color-ui-border: #4a4b53;
+  --color-ui-border-strong: #60616b;
+  --color-danger: #ff5c65;
+  --color-danger-hover: #ff7a82;
+  --color-danger-soft: #2e1114;
+  --color-danger-border: #6d2026;
+  --color-danger-content: #ffb4b9;
+
+  --brand-gradient-middle-rgb: 213 45 56;
+  --brand-gradient-end-rgb: 226 74 83;
+  --brand-shadow-strong: rgb(var(--brand-primary-rgb) / 42%);
+  --brand-shadow-medium: rgb(var(--brand-gradient-middle-rgb) / 38%);
+  --brand-shadow-soft: rgb(var(--brand-primary-rgb) / 15%);
+  --shadow-sidebar: rgb(0 0 0 / 55%);
+  --shadow-card: rgb(0 0 0 / 65%);
+  --shadow-popover: rgb(0 0 0 / 65%);
+  --shadow-menu: rgb(0 0 0 / 65%);
+  --shadow-logo: rgb(0 0 0 / 40%);
 }
 
 @layer components {
@@ -84,17 +198,68 @@
     -webkit-appearance: none;
     -moz-appearance: none;
   }
+
+  .brand-text-gradient {
+    background-image: linear-gradient(
+      to right,
+      var(--color-brand-gradient-start) 0%,
+      var(--color-brand-gradient-middle) 50%,
+      var(--color-brand-gradient-end) 100%
+    );
+  }
+}
+
+html[data-brand="customer"] .brand-text-gradient {
+  background-image: linear-gradient(
+    to right,
+    var(--color-brand-gradient-start) 0%,
+    var(--color-brand-gradient-start) 70%,
+    var(--color-brand-gradient-middle) 85%,
+    var(--color-brand-gradient-end) 100%
+  );
+}
+
+html[data-brand="customer"] .brand-welcome-panel {
+  border: 1px solid var(--color-ui-border);
+  background-color: color-mix(
+    in srgb,
+    var(--color-surface-panel) 95%,
+    transparent
+  );
+  box-shadow: 0 0 80px 0 rgb(0 0 0 / 55%);
 }
 
 html,
 body {
-  @apply bg-white dark:bg-gray-950;
   font-family: var(--font-sans);
   scrollbar-width: none;
+}
+
+html[data-brand="default"],
+html[data-brand="default"] body {
+  @apply bg-white dark:bg-gray-950;
 
   @media (prefers-color-scheme: dark) {
     color-scheme: dark;
   }
+}
+
+html[data-brand="customer"],
+html[data-brand="customer"] body {
+  @apply bg-surface-page text-content-primary;
+}
+
+html[data-brand="customer"][data-color-scheme="dark"] {
+  color-scheme: dark;
+}
+
+html[data-brand="customer"][data-color-scheme="dark"] .brand-logo {
+  filter: invert(1);
+}
+
+html[data-brand="customer"][data-color-scheme="dark"] .brand-cover {
+  filter: invert(1);
+  opacity: 0.45;
 }
 
 html::-webkit-scrollbar,
