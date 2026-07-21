@@ -12,7 +12,7 @@ import type { Route } from "./+types/root";
 import AuthStore from "@lib/AuthStore";
 import PageLoader from "@components/PageLoader";
 import ThemeToggle from "@components/ThemeToggle";
-import { BRAND_THEME } from "@/config/brandTheme";
+import { BRAND_THEME } from "@/config";
 import "./app.css";
 
 export const links: Route.LinksFunction = () => [
