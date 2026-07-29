@@ -29,8 +29,6 @@ const ChatSection = observer(() => {
         : `${selectedProject?.name ?? "Без названия"} / ${selectedSceanrioItem?.name ?? "Сценарий"}`
     );
 
-    console.log(selectedContextLabel);
-
     return (
         <section className="relative flex h-screen w-full flex-col overflow-hidden bg-white customer:bg-surface-page">
             {chatMessages.length ? (

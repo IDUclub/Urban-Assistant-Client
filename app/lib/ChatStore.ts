@@ -1364,8 +1364,6 @@ class ChatDataStore {
     }
 
     private tryAddProjectBoundaryLayer(streamContext?: StreamContext) {
-        console.log("Trying to add project boundary layer with stream context", streamContext);
-        console.log("Current stream context", this.currentStreamRequestId);
         if (
             !streamContext ||
             streamContext.requestId !== this.currentStreamRequestId ||
@@ -1375,8 +1373,6 @@ class ChatDataStore {
         ) {
             return;
         }
-
-        console.log("Adding project boundary layer with stream context", streamContext);
 
         MapStore.addLayerToMap({
             name: PROJECT_BOUNDARY_LAYER_NAME,
@@ -1391,8 +1387,6 @@ class ChatDataStore {
             hasReceivedMapLayer: false,
             hasAddedProjectBoundary: false,
         };
-
-        console.log("Fetching project boundary for project", projectId);
 
         streamContext.projectBoundaryPromise = DataStore.getProjectTerritory(projectId)
             .then((geometry) => {
@@ -2640,14 +2634,11 @@ class ChatDataStore {
         .then(
             action(
                 ({ data }) => {
-                    console.log("Fetched user chats:", data);
                     const chats = Array.isArray(data?.items) ? data.items as UserChat[] : [];
                     const fetchedChatIds = new Set(chats.map((chat) => chat.chat_id));
                     const localOnlyChats = this.userChats.filter(
                         (chat) => !fetchedChatIds.has(chat.chat_id),
                     );
-
-                    console.log("Local only chats:", localOnlyChats);
 
                     this.userChats = [...chats, ...localOnlyChats];
                     this.resolveMissingUserChatProjectIds(this.userChats);
@@ -2870,7 +2861,6 @@ class ChatDataStore {
 
             if (chat && chat.scenario_id) {
                 const chatContext = await DataStore.getProjectScenarioName(chat.scenario_id);
-                console.log("Fetched chat context:", chatContext);
                 runInAction(() => {
                     this.parsedContext = chatContext;
                 });
