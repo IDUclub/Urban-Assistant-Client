@@ -554,6 +554,7 @@ type VriSetupMessage = {
     request: string;
     status: VriSetupStatus;
     step: VriSetupStep;
+    submitted?: boolean;
     landPlotsFileName?: string;
     classifierFileName?: string;
     pzzZonesFileName?: string;
@@ -1006,13 +1007,79 @@ class ChatDataStore {
         this.vriSetupFiles.clear();
     }
 
+    private removeIncompleteToolSetup(tool: ChatTool | null) {
+        const removedVriSetupIds: string[] = [];
+
+        this.chatMessages = this.chatMessages.filter((chatMessage) => {
+            if (chatMessage.type !== "response") return true;
+
+            if (
+                tool === "Проверка объектов по ПЗЗ"
+                && isPzzSetupMessage(chatMessage.message)
+            ) {
+                const setup = chatMessage.message;
+                const hasBeenSubmitted = setup.selectedYear !== undefined
+                    && !!setup.selectedSource;
+
+                return hasBeenSubmitted || (
+                    setup.status !== "loading"
+                    && setup.status !== "ready"
+                    && setup.status !== "error"
+                );
+            }
+
+            if (
+                tool === "Проверка ВРИ"
+                && isVriSetupMessage(chatMessage.message)
+            ) {
+                const shouldRemove = !chatMessage.message.submitted
+                    && (
+                        chatMessage.message.status === "ready"
+                        || chatMessage.message.status === "error"
+                    );
+
+                if (shouldRemove) {
+                    removedVriSetupIds.push(chatMessage.message.id);
+                }
+
+                return !shouldRemove;
+            }
+
+            return true;
+        });
+
+        removedVriSetupIds.forEach((setupId) => {
+            this.vriSetupFiles.delete(setupId);
+        });
+    }
+
     setSelectedChatTool(tool: ChatTool | null) {
+        const previousTool = this.selectedChatTool;
+
+        if (previousTool !== tool) {
+            this.removeIncompleteToolSetup(previousTool);
+        }
+
         this.selectedChatTool = tool;
         if (tool !== "Проверка объектов по ПЗЗ") {
             this.selectedPzzZoneSource = undefined;
         }
         if (tool !== "Проверка ВРИ") {
             this.vriSetupFiles.clear();
+        }
+
+        if (
+            tool === "Проверка объектов по ПЗЗ"
+            && !this.hasActivePzzSetup()
+        ) {
+            this.startPzzCheckSetup("Проверка объектов по ПЗЗ");
+        }
+
+        if (
+            tool === "Проверка ВРИ"
+            && !this.hasActiveVriSetup()
+        ) {
+            this.startVriCheckSetup("Проверка ВРИ");
         }
     }
 
@@ -2318,6 +2385,8 @@ class ChatDataStore {
             return;
         }
 
+        setupMessage.submitted = true;
+
         const formData = new FormData();
         formData.append(VRI_FORM_FIELDS.landPlots, files.landPlots, files.landPlots.name);
         formData.set("user_query", setupMessage.request);
@@ -2453,6 +2522,20 @@ class ChatDataStore {
     }
 
     sendChatMessage = async (message: string) => {
+        if (
+            this.selectedChatTool === "Проверка ВРИ"
+            && this.hasActiveVriSetup()
+        ) {
+            return;
+        }
+
+        if (
+            this.selectedChatTool === "Проверка объектов по ПЗЗ"
+            && this.hasActivePzzSetup()
+        ) {
+            return;
+        }
+
         this.abortController?.abort();
         this.abortController = new AbortController();
         this.currentStreamRequestId += 1;
