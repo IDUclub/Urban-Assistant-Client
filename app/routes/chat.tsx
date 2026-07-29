@@ -8,10 +8,7 @@ import iduLogo from "/png/idu_logo.png";
 import aiInstitute from "/png/ai_institute.png";
 import ChatSection from "@components/ChatSection";
 import { IoIosMail } from "react-icons/io";
-import { IoLogOutOutline, IoPersonCircleOutline } from "react-icons/io5";
 import ChatStore from "@lib/ChatStore";
-import { observer } from "mobx-react-lite";
-import { MdDeleteForever } from "react-icons/md";
 import ChatStory from "@components/ChatStory";
 
 export function meta({}: Route.MetaArgs) {
@@ -41,94 +38,44 @@ export async function clientLoader({
     await ChatStore.getUserChats();
 }
 
-const ChatPage = observer(() => {
-    const { logoutUser, firstName, lastName, isAuthenticated } = AuthStore;
-    const { chatStoryPreview, activeChatId, isUserChatsLoading, isUserChatOpening } = ChatStore;
-    
+const ChatPage = () => {
     return (
         <main className="flex h-dvh w-screen items-center justify-center overflow-hidden">
             <div className="grid h-dvh w-screen grid-cols-[1fr_2fr] lg:grid-cols-[1fr_3fr] 2xl:grid-cols-[1fr_4fr] overflow-hidden">
                 <aside className="z-20 flex h-dvh min-w-0 flex-col items-center overflow-hidden bg-white p-4 font-cabin text-gray-900 shadow-[20px_0_60px_-25px_var(--shadow-sidebar)] customer:bg-surface-panel customer:text-content-primary">
-                    <div className="flex flex-col items-center justify-center gap-4 lg:gap-6 xl:gap-6 2xl:gap-8">
-                        <div className="flex flex-col items-center justify-center gap-2">
-                            <div className="flex items-center justify-center gap-6">
-                                <img src={mskLogo} alt="Logo" className="brand-logo 2xl:w-14 xl:w-9 lg:w-7 w-4 h-auto" />
-                                <img src={msiLogo} alt="Logo" className="brand-logo 2xl:w-15 xl:w-10 lg:w-8 w-4 h-auto" />
-                                <img src={iduLogo} alt="Logo" className="brand-logo 2xl:w-15 xl:w-10 lg:w-8 w-4 h-auto" />
-                                {/* <img src={aiInstitute} alt="Logo" className="xl:w-50 w-24 h-auto" /> */}
-                            </div>
-                            <img src={aiInstitute} alt="Logo" className="brand-logo 2xl:w-70 xl:w-50 w-24 h-auto" />
-                        </div>
+                    <div className="flex w-full min-w-0 items-center gap-3 px-2 py-2">
+                        <span
+                            aria-hidden="true"
+                            className="
+                                h-10 w-1 shrink-0 rounded-full
+                                bg-linear-to-b from-brand-gradient-start via-brand-gradient-middle to-brand-gradient-end
+                                shadow-[0_0_12px_-2px_var(--brand-shadow-strong)]
+                            "
+                        />
                         <h1
                             className="
-                                max-w-full text-[10px] sm:text-[12px] md:text-[18px] lg:text-[20px] xl:text-[24px] font-medium text-center text-transparent leading-tight
-                                wrap-break-word
-                                brand-text-gradient bg-clip-text
+                                min-w-0 text-left text-[15px] font-semibold leading-tight text-content-primary
+                                sm:text-[16px] lg:text-[17px] xl:text-[18px]
                             "
                         >
-                                Помощник проектировщика
+                            <span className="block">Помощник</span>
+                            <span className="block text-brand-primary">проектировщика</span>
                         </h1>
                     </div>
-                    <button
-                        className="
-                            relative mt-10 w-[80%] cursor-pointer overflow-hidden rounded-[1.75rem]
-                            bg-linear-to-r from-brand-gradient-start via-brand-gradient-middle to-brand-gradient-end
-                            p-px shadow-[0_0_24px_-4px_var(--brand-shadow-strong)]
-                            transition duration-200 hover:-translate-y-0.5 hover:shadow-[0_8px_24px_-4px_var(--brand-shadow-medium)]
-                        "
-                        onClick={() => {
-                            ChatStore.clearChat();
-                        }}
-                    >
-                        <span
-                            className="
-                                flex w-full items-center justify-center rounded-[calc(1.75rem-1px)]
-                                bg-white/96 px-6 py-4 text-base font-medium tracking-[0.01em] text-gray-900 backdrop-blur
-                                customer:bg-surface-panel/96 customer:text-content-primary
-                            "
-                        >
-                            Новый чат
-                        </span>
-                    </button>
                     <ChatStory />
-                    <div className="w-full mt-auto">
-                        {isAuthenticated && (
-                            <div className="my-5 flex w-full items-center gap-3 rounded-[1.75rem] border border-slate-200 bg-slate-50/90 px-4 py-3 shadow-[0_16px_28px_-24px_var(--shadow-card)] customer-dark:border-ui-border customer-dark:bg-surface-muted/90">
-                                <div className="flex min-w-0 flex-1 items-center gap-3">
-                                    <span className="shrink-0 text-brand-primary">
-                                        <IoPersonCircleOutline size="2.25rem" />
-                                    </span>
-                                    <div className="min-w-0">
-                                        <p className="truncate text-sm font-medium text-slate-900 customer-dark:text-content-primary">
-                                            {`${firstName ?? ""} ${lastName ?? ""}`.trim() || "Пользователь"}
-                                        </p>
-                                    </div>
-                                </div>
-                                <div className="group relative shrink-0">
-                                    <button
-                                        type="button"
-                                        className="flex h-11 w-11 cursor-pointer items-center justify-center rounded-2xl border border-red-200 bg-white text-red-600 transition-colors hover:bg-red-50 hover:text-red-700 customer:border-danger-border customer:bg-surface-raised customer:text-danger customer:hover:bg-danger-soft customer:hover:text-danger-hover"
-                                        onClick={() => logoutUser()}
-                                        aria-label="Выйти"
-                                        aria-describedby="logout-tooltip"
-                                    >
-                                        <IoLogOutOutline size="1.2rem" />
-                                    </button>
-                                    <div
-                                        id="logout-tooltip"
-                                        role="tooltip"
-                                        className="pointer-events-none absolute right-full top-1/2 z-20 mr-3 -translate-y-1/2 whitespace-nowrap rounded-lg bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 customer-dark:bg-content-primary customer-dark:text-surface-panel"
-                                    >
-                                        Выйти
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-                        <div className="w-full border-t border-[var(--sidebar-divider-color)] pb-3 flex justify-center">
+                    <div className="mt-auto w-full border-t border-(--sidebar-divider-color) pt-4">
+                        <div className="flex w-full flex-nowrap items-center justify-center gap-3 xl:gap-4">
+                            <img src={mskLogo} alt="Logo" className="brand-logo h-auto w-4 lg:w-6 xl:w-7 2xl:w-9" />
+                            <img src={msiLogo} alt="Logo" className="brand-logo h-auto w-4 lg:w-6 xl:w-7 2xl:w-9" />
+                            <img src={iduLogo} alt="Logo" className="brand-logo h-auto w-4 lg:w-6 xl:w-7 2xl:w-9" />
+                            <img src={aiInstitute} alt="Logo" className="brand-logo h-auto w-20 lg:w-24 xl:w-28 2xl:w-32" />
+                        </div>
+                        <div className="flex w-full justify-center pb-3">
                             <a href="mailto:aicenter@str.mos.ru">
-                                <button className="py-5 flex items-center gap-2 cursor-pointer">
+                                <button className="grid cursor-pointer grid-cols-[1.5rem_auto_1.5rem] items-center gap-2 py-4">
                                     <span><IoIosMail size="1.5rem"/></span>
                                     <p>Написать нам</p>
+                                    <span aria-hidden="true" className="h-6 w-6" />
                                 </button>
                             </a>
                         </div>
@@ -138,6 +85,6 @@ const ChatPage = observer(() => {
             </div>
         </main>
     )
-});
+};
 
 export default ChatPage;

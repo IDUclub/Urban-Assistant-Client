@@ -1,1 +1,1 @@
-export const BRAND_THEME = "customer";
+export const BRAND_THEME = "default";
