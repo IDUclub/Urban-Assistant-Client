@@ -17,7 +17,6 @@ import { observer } from "mobx-react-lite";
 import ChatStore from "@lib/ChatStore";
 import { SyncLoader } from "react-spinners";
 import ChatContextSelection from "@components/ChatContextSelection";
-import CascaderSelect from "@components/CascaderSelect";
 import Select from "@components/ui/Select";
 
 
@@ -804,57 +803,8 @@ const ChatTools = observer(() => {
 const ChatInput = observer((
     { onSubmit }: { onSubmit: ChatComponentProps["onSubmit"]}
 ) => {
-    const { isStreaming, chatMessages, selectedContext, setSelectedChatTool } = ChatStore;
+    const { isStreaming } = ChatStore;
     const [currentInput, setCurrentInput] = useState<string>("");
-    const isContextSelectionVisible = !chatMessages.length;
-    const isProjectContext = selectedContext !== "nonproject";
-    const serviceItems = [
-        ...(isProjectContext
-            ? [
-                {
-                    label: "Обеспеченность",
-                    onClickAction: () => {
-                        setSelectedChatTool("Обеспеченность");
-                    },
-                },
-                {
-                    label: "Зоны ограничений",
-                    onClickAction: () => {
-                        setSelectedChatTool("Зоны ограничений");
-                    },
-                },
-                {
-                    label: "Проверка объектов по ПЗЗ",
-                    onClickAction: () => {
-                        setSelectedChatTool("Проверка объектов по ПЗЗ");
-                    },
-                },
-            ]
-            : []),
-        {
-            label: "Проверка ВРИ",
-            onClickAction: () => {
-                setSelectedChatTool("Проверка ВРИ");
-            },
-        },
-    ];
-    const toolMenuItems = [
-        ...(isProjectContext
-            ? [
-                {
-                    label: "Загрузить файл",
-                    icon: <MdOutlineUploadFile size={18} />,
-                    onClickAction: () => {},
-                    disabled: true,
-                },
-            ]
-            : []),
-        {
-            label: "Сервисы",
-            icon: <MdMoreHoriz size={18} />,
-            children: serviceItems,
-        },
-    ];
     const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
     useEffect(() => {
@@ -868,7 +818,7 @@ const ChatInput = observer((
 
     return (
         <div className={`
-            w-full rounded-3xl py-4 px-6 mb-1.5
+            chat-input-shell relative w-full rounded-3xl py-4 px-6 mb-1.5
             flex flex-col items-center justify-center
             border drop-shadow-lg shadow-gray-300
             text-gray-950 customer-dark:text-content-primary
@@ -877,10 +827,9 @@ const ChatInput = observer((
                 ? "bg-slate-100 border-slate-200 shadow-none customer-dark:bg-surface-muted customer-dark:border-ui-border"
                 : "bg-white border-gray-300 customer-dark:bg-surface-panel customer-dark:border-ui-border-strong"}
         `}>
-                <div className={`w-full ${isContextSelectionVisible ? "space-y-7.5" : ""}`}>
+                <div className="w-full">
                     <div className={`
                         w-full flex items-center gap-4
-                        ${isContextSelectionVisible ? "justify-between" : ""}
                     `}>
                         <textarea
                             ref={textareaRef}
@@ -902,16 +851,12 @@ const ChatInput = observer((
                             }}
                             disabled={isStreaming}
                         />
-                        <div className="flex items-center gap-3">
-                            <CascaderSelect
-                                items={toolMenuItems}
-                                rootNode={
-                                    <span className={isStreaming ? "text-slate-300 customer-dark:text-content-disabled" : "text-gray-950 hover:text-[#0788CE] customer:hover:text-brand-primary customer-dark:text-content-primary"}>
-                                        <AiOutlinePlusCircle size={"2rem"} />
-                                    </span>
-                                }
-                                disabled={isStreaming}
-                            />
+                    </div>
+                    <div className="mt-5 flex w-full items-end justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                            <ChatContextSelection />
+                        </div>
+                        <div className="flex shrink-0 items-center">
                             <button
                                 className={`group ${isStreaming ? "cursor-pointer" : ""}`}
                                 onClick={() => {
@@ -933,9 +878,6 @@ const ChatInput = observer((
                                 </span>
                             </button>
                         </div>
-                    </div>
-                    <div className="w-full flex items-center justify-between gap-2">
-                        <ChatContextSelection />
                     </div>
                 </div>
         </div>

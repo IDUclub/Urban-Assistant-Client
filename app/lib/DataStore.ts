@@ -1,6 +1,53 @@
 import axios from "axios";
 import { makeAutoObservable, action } from "mobx";
+import type { Geometry, Point, Polygon } from "geojson";
 import AuthStore from "@lib/AuthStore";
+
+export type ProjectCreationTerritoryOption = {
+    territory_id: number;
+    name: string;
+};
+
+export type ProjectCreationTerritory = ProjectCreationTerritoryOption & {
+    geometry: Geometry;
+    centre_point?: Point | null;
+};
+
+export type CreateProjectPayload = {
+    name: string;
+    territory_id: number;
+    public: false;
+    territory: {
+        geometry: Polygon;
+        centre_point: Point;
+        properties: Record<string, unknown>;
+    };
+};
+
+export type CreatedProject = {
+    project_id?: number;
+    id?: number;
+    name?: string;
+    base_scenario?: {
+        id?: number;
+        scenario_id?: number;
+        name?: string;
+    } | null;
+    base_scenario_id?: number;
+    scenario_id?: number;
+    project?: {
+        project_id?: number;
+        id?: number;
+        name?: string;
+        base_scenario?: {
+            id?: number;
+            scenario_id?: number;
+            name?: string;
+        } | null;
+        base_scenario_id?: number;
+        scenario_id?: number;
+    };
+};
 
 class AppDataStore {
     userProjects?: {name: string; id: number; }[] = [];
@@ -45,6 +92,93 @@ class AppDataStore {
             return [];
         });
     };
+
+    async getProjectCreationTerritories(): Promise<ProjectCreationTerritoryOption[]> {
+        const { data } = await axios.get(
+            `${import.meta.env.VITE_URBAN_API}/all_territories_without_geometry`,
+            {
+                headers: {
+                    Authorization: `Bearer ${AuthStore.accessToken}`,
+                },
+                params: {
+                    parent_id: 12639,
+                    get_all_levels: false,
+                    cities_only: false,
+                    ordering: "asc",
+                },
+            },
+        );
+
+        if (!Array.isArray(data)) return [];
+
+        return data
+            .flatMap((territory): ProjectCreationTerritoryOption[] => {
+                const territoryId = Number(territory?.territory_id);
+                const name = typeof territory?.name === "string"
+                    ? territory.name.trim()
+                    : "";
+
+                return Number.isFinite(territoryId) && name
+                    ? [{ territory_id: territoryId, name }]
+                    : [];
+            })
+            .sort((left, right) => (
+                left.name.localeCompare(right.name, "ru", {
+                    sensitivity: "base",
+                })
+            ));
+    }
+
+    async getProjectCreationTerritory(
+        territoryId: number,
+    ): Promise<ProjectCreationTerritory> {
+        const { data } = await axios.get(
+            `${import.meta.env.VITE_URBAN_API}/territory/${territoryId}`,
+            {
+                headers: {
+                    Authorization: `Bearer ${AuthStore.accessToken}`,
+                },
+            },
+        );
+
+        return data as ProjectCreationTerritory;
+    }
+
+    async createProject(payload: CreateProjectPayload): Promise<CreatedProject> {
+        const { data } = await axios.post(
+            `${import.meta.env.VITE_URBAN_API}/projects`,
+            payload,
+            {
+                headers: {
+                    Authorization: `Bearer ${AuthStore.accessToken}`,
+                    "Content-Type": "application/json",
+                },
+            },
+        );
+
+        const refreshedProjects = await this.getUserProjects();
+        const responseProject = data?.project ?? data;
+        const responseProjectId = Number(
+            responseProject?.project_id
+            ?? responseProject?.id,
+        );
+        const refreshedProject = refreshedProjects.find((project: any) => (
+            Number.isFinite(responseProjectId)
+                ? Number(project?.project_id ?? project?.id) === responseProjectId
+                : project?.name === payload.name
+        ));
+
+        return {
+            ...(data && typeof data === "object" ? data : {}),
+            project_id: Number.isFinite(responseProjectId)
+                ? responseProjectId
+                : Number(refreshedProject?.project_id ?? refreshedProject?.id),
+            name: responseProject?.name ?? refreshedProject?.name ?? payload.name,
+            base_scenario: responseProject?.base_scenario
+                ?? data?.base_scenario
+                ?? refreshedProject?.base_scenario,
+        } as CreatedProject;
+    }
 
     getProjectScenarios(projectId: number) {
         if (this.projectScenarios.has(projectId)) return;

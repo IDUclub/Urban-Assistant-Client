@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import {
+    type CSSProperties,
+    useEffect,
+    useRef,
+    useState,
+} from "react";
+import { createPortal } from "react-dom";
 import { observer } from "mobx-react-lite";
 import { IoCheckmark, IoChevronDown } from "react-icons/io5";
 
@@ -13,21 +19,27 @@ interface CustomSelectProps {
     onChange: (value: string | number) => void;
     placeholder?: string;
     block?: boolean;
+    compactGlow?: boolean;
 }
 
-function CustomSelect({ value, options, onChange, placeholder, block }: CustomSelectProps) {
+function CustomSelect({
+    value,
+    options,
+    onChange,
+    placeholder,
+    block,
+    compactGlow,
+}: CustomSelectProps) {
     const [isOpen, setIsOpen] = useState(false);
     const [searchQuery, setSearchQuery] = useState("");
     const containerRef = useRef<HTMLDivElement | null>(null);
     const triggerRef = useRef<HTMLDivElement | null>(null);
+    const menuRef = useRef<HTMLDivElement | null>(null);
     const searchInputRef = useRef<HTMLInputElement | null>(null);
-    const [menuStyle, setMenuStyle] = useState<{
-        maxHeight: string;
-        top?: string;
-        bottom?: string;
-    }>({
+    const [menuStyle, setMenuStyle] = useState<CSSProperties>({
+        position: "fixed",
+        visibility: "hidden",
         maxHeight: "min(24rem, 50vh)",
-        top: "calc(100% + 0.75rem)",
     });
     const selectedOption = options.find((option) => option.value == value);
     const normalizedSearchQuery = searchQuery.trim().toLowerCase();
@@ -42,7 +54,12 @@ function CustomSelect({ value, options, onChange, placeholder, block }: CustomSe
         searchInputRef.current?.focus();
 
         const handlePointerDown = (event: MouseEvent) => {
-            if (!containerRef.current?.contains(event.target as Node)) {
+            const eventTarget = event.target as Node;
+
+            if (
+                !containerRef.current?.contains(eventTarget)
+                && !menuRef.current?.contains(eventTarget)
+            ) {
                 setIsOpen(false);
             }
         };
@@ -74,15 +91,31 @@ function CustomSelect({ value, options, onChange, placeholder, block }: CustomSe
             const availableBelow = window.innerHeight - triggerRect.bottom - viewportPadding - menuGap;
             const availableAbove = triggerRect.top - viewportPadding - menuGap;
             const shouldOpenUpwards = availableBelow < 340 && availableAbove > availableBelow;
-            const nextMaxHeight = Math.max(
-                160,
+            const availableHeight = Math.max(
+                0,
                 shouldOpenUpwards ? availableAbove : availableBelow,
+            );
+            const menuWidth = Math.min(
+                triggerRect.width,
+                window.innerWidth - viewportPadding * 2,
+            );
+            const menuLeft = Math.min(
+                Math.max(triggerRect.left, viewportPadding),
+                window.innerWidth - viewportPadding - menuWidth,
             );
 
             setMenuStyle({
-                maxHeight: `${Math.floor(nextMaxHeight)}px`,
-                top: shouldOpenUpwards ? undefined : "calc(100% + 0.75rem)",
-                bottom: shouldOpenUpwards ? "calc(100% + 0.75rem)" : undefined,
+                position: "fixed",
+                visibility: "visible",
+                left: Math.floor(menuLeft),
+                width: Math.floor(menuWidth),
+                maxHeight: Math.floor(Math.min(384, availableHeight)),
+                top: shouldOpenUpwards
+                    ? undefined
+                    : Math.floor(triggerRect.bottom + menuGap),
+                bottom: shouldOpenUpwards
+                    ? Math.floor(window.innerHeight - triggerRect.top + menuGap)
+                    : undefined,
             });
         };
 
@@ -111,7 +144,15 @@ function CustomSelect({ value, options, onChange, placeholder, block }: CustomSe
                     ${block ? "w-full" : "w-fit"}
                 `}
             >
-                <div className="absolute -inset-0.75 -z-10 rounded-3xl bg-linear-to-r from-brand-gradient-start via-brand-gradient-middle to-brand-gradient-end opacity-30 blur-sm"></div>
+                <div
+                    className={`
+                        absolute -z-10 rounded-3xl bg-linear-to-r
+                        from-brand-gradient-start via-brand-gradient-middle to-brand-gradient-end
+                        ${compactGlow
+                            ? "-inset-0.5 opacity-30 blur-[3px]"
+                            : "-inset-0.75 opacity-30 blur-sm"}
+                    `}
+                />
                 <button
                     type="button"
                     className={`
@@ -123,7 +164,13 @@ function CustomSelect({ value, options, onChange, placeholder, block }: CustomSe
                         customer:focus:ring-brand-primary/35 customer-dark:bg-surface-raised customer-dark:border-ui-border customer-dark:text-content-primary
                         ${isOpen ? "ring-2 ring-white/70 customer:ring-brand-primary/35" : ""}
                     `}
-                    onClick={() => setIsOpen((current) => !current)}
+                    onClick={() => {
+                        setMenuStyle((current) => ({
+                            ...current,
+                            visibility: "hidden",
+                        }));
+                        setIsOpen((current) => !current);
+                    }}
                     aria-expanded={isOpen}
                     aria-haspopup="listbox"
                 >
@@ -134,11 +181,12 @@ function CustomSelect({ value, options, onChange, placeholder, block }: CustomSe
                     </span>
                 </button>
             </div>            
-            {isOpen && (
+            {isOpen && createPortal(
                 <div
+                    ref={menuRef}
                     style={menuStyle}
                     className="
-                        absolute left-0 right-0 z-30 flex w-fit max-w-[min(60vw,24rem)] min-w-full flex-col overflow-hidden rounded-3xl
+                        fixed z-200 flex flex-col overflow-hidden rounded-3xl
                         border border-slate-200 bg-white/95 p-2 shadow-[0_24px_20px_-24px_var(--shadow-menu)] backdrop-blur
                         customer-dark:border-ui-border customer-dark:bg-surface-raised/95
                     "
@@ -188,7 +236,8 @@ function CustomSelect({ value, options, onChange, placeholder, block }: CustomSe
                             </li>
                         )}
                     </ul>
-                </div>
+                </div>,
+                document.body,
             )}
         </div>
     );
