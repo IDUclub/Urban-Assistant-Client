@@ -12,6 +12,7 @@ import type { Route } from "./+types/root";
 import AuthStore from "@lib/AuthStore";
 import PageLoader from "@components/PageLoader";
 import ThemeToggle from "@components/ThemeToggle";
+import UserMenu from "@components/UserMenu";
 import { BRAND_THEME } from "@/config";
 import "./app.css";
 
@@ -42,7 +43,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <Links />
       </head>
       <body>
-        {BRAND_THEME === "customer" ? <ThemeToggle /> : null}
+        <div className="fixed right-4 top-4 z-50 flex items-start gap-2">
+          <UserMenu />
+          {String(BRAND_THEME) === "customer" ? <ThemeToggle /> : null}
+        </div>
         {children}
         <ScrollRestoration />
         <Scripts />

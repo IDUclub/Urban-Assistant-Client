@@ -18,6 +18,7 @@ class AuthDataStore {
     username?: string = undefined;
     firstName?: string = undefined;
     lastName?: string = undefined;
+    roles: string[] = [];
     private initPromise?: Promise<boolean> = undefined;
 
     constructor() {
@@ -32,6 +33,10 @@ class AuthDataStore {
 
     get isAuthenticated() {
         return this.isReady && this.authenticated;
+    }
+
+    get isAdmin() {
+        return this.roles.some((role) => role.toUpperCase() === "ADMIN");
     }
 
     init() {
@@ -127,6 +132,19 @@ class AuthDataStore {
 
     private syncFromKeycloak() {
         const tokenParsed = this.keycloakAdapter.tokenParsed;
+        const tokenClaims = tokenParsed as unknown as Record<string, any> | undefined;
+        const realmRoles = Array.isArray(tokenClaims?.realm_access?.roles)
+            ? tokenClaims.realm_access.roles
+            : [];
+        const resourceRoles = Object.values(tokenClaims?.resource_access ?? {})
+            .flatMap((access: any) => (
+                Array.isArray(access?.roles) ? access.roles : []
+            ));
+        const directRoles = Array.isArray(tokenClaims?.roles)
+            ? tokenClaims.roles
+            : typeof tokenClaims?.role === "string"
+                ? [tokenClaims.role]
+                : [];
 
         this.authenticated = !!this.keycloakAdapter.authenticated;
         this.accessToken = this.keycloakAdapter.token;
@@ -137,6 +155,13 @@ class AuthDataStore {
             tokenParsed?.sub;
         this.firstName = tokenParsed?.given_name;
         this.lastName = tokenParsed?.family_name;
+        this.roles = Array.from(
+            new Set(
+                [...realmRoles, ...resourceRoles, ...directRoles].filter(
+                    (role): role is string => typeof role === "string",
+                ),
+            ),
+        );
     }
 
     private clearSession() {
@@ -145,6 +170,7 @@ class AuthDataStore {
         this.username = undefined;
         this.firstName = undefined;
         this.lastName = undefined;
+        this.roles = [];
     }
 }
 
