@@ -44,6 +44,14 @@ const ChatContextSelection = observer(() => {
         if (!isOpen) return;
 
         const handlePointerDown = (event: MouseEvent) => {
+            const eventTarget = event.target;
+            if (
+                eventTarget instanceof Element
+                && eventTarget.closest("[data-custom-select-menu]")
+            ) {
+                return;
+            }
+
             if (!containerRef.current?.contains(event.target as Node)) {
                 setIsOpen(false);
                 setPanelView("menu");
@@ -234,17 +242,29 @@ const ChatContextSelection = observer(() => {
                 </button>
 
                 {!isChatVisible && (
-                    <div
+                    <button
+                        type="button"
                         className="
                             flex min-w-0 max-w-[min(60%,32rem)] items-center gap-2 rounded-2xl
                             bg-slate-100 px-4 py-2 text-sm font-medium text-slate-600
+                            transition-colors hover:bg-slate-200 hover:text-slate-900
+                            focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0788CE]/40
+                            disabled:cursor-not-allowed disabled:opacity-50
+                            customer:focus-visible:ring-brand-primary/40
                             customer-dark:bg-surface-muted customer-dark:text-content-secondary
+                            customer-dark:hover:bg-surface-hover customer-dark:hover:text-content-primary
                         "
+                        onClick={() => {
+                            setPanelView("context");
+                            setIsOpen(true);
+                        }}
+                        disabled={isStreaming}
                         title={activeContextLabel}
+                        aria-label={`Выбрать проект. Текущий контекст: ${activeContextLabel}`}
                     >
                         <LuLayers3 size={16} className="shrink-0" />
                         <span className="truncate">{activeContextLabel}</span>
-                    </div>
+                    </button>
                 )}
 
                 {selectedChatTool && (

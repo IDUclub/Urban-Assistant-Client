@@ -184,6 +184,7 @@ function CustomSelect({
             {isOpen && createPortal(
                 <div
                     ref={menuRef}
+                    data-custom-select-menu="true"
                     style={menuStyle}
                     className="
                         fixed z-200 flex flex-col overflow-hidden rounded-3xl
