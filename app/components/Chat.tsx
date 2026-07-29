@@ -147,6 +147,17 @@ function renderFormattedText(text: string) {
             continue;
         }
 
+        if (/^-{3,}$/.test(line.trim())) {
+            flushParagraph();
+            blocks.push(
+                <hr
+                    key={`divider-${blocks.length}`}
+                    className="my-1 border-0 border-t border-slate-200 customer-dark:border-ui-border"
+                />
+            );
+            continue;
+        }
+
         const heading = parseMarkdownHeading(line);
 
         if (heading) {
@@ -449,15 +460,34 @@ const PzzSetupMessageCard = observer(({ setup }: { setup: PzzSetupData }) => {
         .filter((source) => source.year === selectedYear)
         .map((source) => source.source);
     const [selectedSource, setSelectedSource] = useState<string | undefined>(setup.selectedSource ?? sourceOptions[0]);
-    const isLocked = setup.status === "submitting" ||
+    const isLocked = !!setup.submitted ||
+        setup.status === "submitting" ||
         setup.status === "queued" ||
         setup.status === "waiting_capacity" ||
         setup.status === "running" ||
         setup.status === "finished" ||
         setup.status === "failed";
-    const isLoading = setup.status === "loading";
-    const canSubmit = !isLocked && setup.status === "ready" && selectedYear !== undefined && !!selectedSource;
+    const isLoading = setup.mode === "scenario" && setup.status === "loading";
+    const canSubmit = setup.mode === "scenario"
+        && !isLocked
+        && setup.status === "ready"
+        && selectedYear !== undefined
+        && !!selectedSource;
     const statusLabel = getPzzSetupStatusLabel(setup.status);
+    const uploadedFiles = [
+        setup.pzzZonesFileName ? `Файл с ПЗЗ: ${setup.pzzZonesFileName}` : undefined,
+        setup.pzzDescriptionsFileName ? `Описание зон ПЗЗ: ${setup.pzzDescriptionsFileName}` : undefined,
+        setup.cadastralFileName ? `Файл с зданиями: ${setup.cadastralFileName}` : undefined,
+    ].filter(Boolean);
+    const filesStep = setup.filesStep ?? (
+        setup.cadastralFileName
+            ? "finished"
+            : setup.pzzDescriptionsFileName
+                ? "upload_cadastral"
+                : setup.pzzZonesFileName
+                    ? "upload_pzz_descriptions"
+                    : "upload_pzz_zones"
+    );
 
     useEffect(() => {
         if (setup.selectedYear !== undefined) {
@@ -487,9 +517,67 @@ const PzzSetupMessageCard = observer(({ setup }: { setup: PzzSetupData }) => {
     }, [selectedSource, setup.selectedSource, sourceOptions.join("|")]);
 
     const handleSubmit = () => {
-        if (!canSubmit || selectedYear === undefined || !selectedSource) return;
+        if (!canSubmit) return;
+        if (selectedYear === undefined || !selectedSource) return;
 
         ChatStore.submitPzzSetup(setup.id, selectedYear, selectedSource);
+    };
+
+    const renderFilesStep = () => {
+        if (setup.status === "finished") {
+            return <div className="text-sm text-slate-600 customer-dark:text-content-secondary">Проверка объектов по ПЗЗ завершена.</div>;
+        }
+
+        if (
+            setup.status === "submitting"
+            || setup.status === "queued"
+            || setup.status === "waiting_capacity"
+            || setup.status === "running"
+        ) {
+            return <div className="text-sm text-slate-600 customer-dark:text-content-secondary">Проверка объектов по ПЗЗ выполняется...</div>;
+        }
+
+        switch (filesStep) {
+            case "upload_pzz_zones":
+                return (
+                    <ToolFileUpload
+                        label="Загрузите файл с ПЗЗ"
+                        fileName={setup.pzzZonesFileName}
+                        disabled={setup.status !== "ready" || isLocked}
+                        onFileSelected={(file) => ChatStore.submitPzzZonesFile(setup.id, file)}
+                    />
+                );
+            case "upload_pzz_descriptions":
+                return (
+                    <div className="flex flex-col gap-3">
+                        <ToolFileUpload
+                            label="Загрузите описание зон ПЗЗ"
+                            fileName={setup.pzzDescriptionsFileName}
+                            disabled={setup.status !== "ready" || isLocked}
+                            onFileSelected={(file) => ChatStore.submitPzzDescriptionsFile(setup.id, file)}
+                        />
+                        <button
+                            type="button"
+                            className="self-start rounded-2xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-300 customer-dark:border-ui-border-strong customer-dark:bg-surface-raised customer-dark:text-content-secondary customer-dark:hover:bg-surface-hover customer-dark:disabled:text-content-disabled"
+                            onClick={() => ChatStore.skipPzzDescriptionsFile(setup.id)}
+                            disabled={setup.status !== "ready" || isLocked}
+                        >
+                            Пропустить
+                        </button>
+                    </div>
+                );
+            case "upload_cadastral":
+                return (
+                    <ToolFileUpload
+                        label="Загрузите файл со зданиями"
+                        fileName={setup.cadastralFileName}
+                        disabled={setup.status !== "ready" || isLocked}
+                        onFileSelected={(file) => ChatStore.submitPzzCadastralFile(setup.id, file)}
+                    />
+                );
+            default:
+                return null;
+        }
     };
 
     return (
@@ -502,49 +590,62 @@ const PzzSetupMessageCard = observer(({ setup }: { setup: PzzSetupData }) => {
                     </span>
                 </div>
             </div>
-            <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_auto]">
-                <label className="flex min-w-0 flex-col gap-3 text-xs font-medium uppercase tracking-[0.12em] text-slate-500 customer-dark:text-content-muted">
-                    Год
-                    <Select
-                        value={selectedYear ?? ""}
-                        options={yearOptions.map((year) => ({
-                            label: String(year),
-                            value: year,
-                        }))}
-                        onChange={(value) => setSelectedYear(Number(value))}
-                        block
-                        // disabled={isLoading || isLocked || !yearOptions.length}
-                    />
-                </label>
-                <label className="flex min-w-0 flex-col gap-3 text-xs font-medium uppercase tracking-[0.12em] text-slate-500 customer-dark:text-content-muted">
-                    Источник
-                    <Select
-                        value={selectedSource ?? ""}
-                        options={sourceOptions.map((source) => ({
-                            label: source,
-                            value: source,
-                        }))}
-                        onChange={(value) => setSelectedSource(String(value))}
-                        block
-                        // disabled={isLoading || isLocked || !sourceOptions.length}
-                    />
-                </label>
-                <button
-                    type="button"
-                    className="inline-flex min-h-11 items-center justify-center gap-2 self-end rounded-2xl bg-brand-primary px-4 text-sm font-medium text-white transition-colors hover:bg-brand-hover disabled:cursor-not-allowed disabled:bg-surface-disabled"
-                    onClick={handleSubmit}
-                    disabled={!canSubmit}
-                >
-                    <MdCheck size={18} />
-                    {setup.status === "finished"
-                        ? "Готово"
-                        : setup.status === "failed" || setup.status === "error"
-                            ? "Ошибка"
-                            : isLocked
-                                ? "Запущено"
-                                : "Запустить"}
-                </button>
-            </div>
+            {setup.mode === "files" ? (
+                <>
+                    {uploadedFiles.length > 0 && (
+                        <div className="flex flex-col gap-1 rounded-2xl bg-white px-3 py-2 text-xs text-slate-500 customer-dark:bg-surface-raised customer-dark:text-content-muted">
+                            {uploadedFiles.map((fileLabel) => (
+                                <div key={fileLabel} className="min-w-0 truncate">{fileLabel}</div>
+                            ))}
+                        </div>
+                    )}
+                    {renderFilesStep()}
+                </>
+            ) : (
+                <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_auto]">
+                    <label className="flex min-w-0 flex-col gap-3 text-xs font-medium uppercase tracking-[0.12em] text-slate-500 customer-dark:text-content-muted">
+                        Год
+                        <Select
+                            value={selectedYear ?? ""}
+                            options={yearOptions.map((year) => ({
+                                label: String(year),
+                                value: year,
+                            }))}
+                            onChange={(value) => setSelectedYear(Number(value))}
+                            block
+                            // disabled={isLoading || isLocked || !yearOptions.length}
+                        />
+                    </label>
+                    <label className="flex min-w-0 flex-col gap-3 text-xs font-medium uppercase tracking-[0.12em] text-slate-500 customer-dark:text-content-muted">
+                        Источник
+                        <Select
+                            value={selectedSource ?? ""}
+                            options={sourceOptions.map((source) => ({
+                                label: source,
+                                value: source,
+                            }))}
+                            onChange={(value) => setSelectedSource(String(value))}
+                            block
+                            // disabled={isLoading || isLocked || !sourceOptions.length}
+                        />
+                    </label>
+                    <button
+                        type="button"
+                        className="inline-flex min-h-11 items-center justify-center gap-2 self-end rounded-2xl bg-brand-primary px-4 text-sm font-medium text-white transition-colors hover:bg-brand-hover disabled:cursor-not-allowed disabled:bg-surface-disabled"
+                        onClick={handleSubmit}
+                        disabled={!canSubmit}
+                    >
+                        <MdCheck size={18} />
+                        {setup.status === "finished"
+                            ? "Готово"
+                            : setup.status === "failed" || setup.status === "error"
+                                ? "Ошибка"
+                                : isLocked
+                                    ? "Запущено"
+                                    : "Запустить"}
+                    </button>
+                </div>
+            )}
             {isLoading && (
                 <div className="text-xs text-slate-500 customer-dark:text-content-muted">Загрузка источников функциональных зон...</div>
             )}
@@ -574,7 +675,7 @@ function getVriSetupStatusLabel(status: VriSetupData["status"]) {
     }
 }
 
-function VriFileUpload({
+function ToolFileUpload({
     label,
     fileName,
     disabled,
@@ -674,7 +775,7 @@ const VriSetupMessageCard = observer(({ setup }: { setup: VriSetupData }) => {
         switch (setup.step) {
             case "upload_land_plots":
                 return (
-                    <VriFileUpload
+                    <ToolFileUpload
                         label="Загрузите земельные участки"
                         fileName={setup.landPlotsFileName}
                         disabled={!isReady || isLocked}
@@ -692,7 +793,7 @@ const VriSetupMessageCard = observer(({ setup }: { setup: VriSetupData }) => {
                 );
             case "upload_classifier":
                 return (
-                    <VriFileUpload
+                    <ToolFileUpload
                         label="Загрузите классификатор ВРИ"
                         fileName={setup.classifierFileName}
                         disabled={!isReady || isLocked}
@@ -710,7 +811,7 @@ const VriSetupMessageCard = observer(({ setup }: { setup: VriSetupData }) => {
                 );
             case "upload_pzz_zones":
                 return (
-                    <VriFileUpload
+                    <ToolFileUpload
                         label="Загрузите зоны ПЗЗ"
                         fileName={setup.pzzZonesFileName}
                         disabled={!isReady || isLocked}
@@ -728,7 +829,7 @@ const VriSetupMessageCard = observer(({ setup }: { setup: VriSetupData }) => {
                 );
             case "upload_pzz_zone_description":
                 return (
-                    <VriFileUpload
+                    <ToolFileUpload
                         label="Загрузите описание зон ПЗЗ"
                         fileName={setup.pzzZoneDescriptionFileName}
                         disabled={!isReady || isLocked}

@@ -10,6 +10,7 @@ import {
 import { LuLayers3 } from "react-icons/lu";
 import DataStore from "@lib/DataStore";
 import ChatStore from "@lib/ChatStore";
+import MapStore from "@lib/MapStore";
 import CustomSelect, { type SelectOption } from "@components/ui/Select";
 import CreateProjectModal from "@components/CreateProjectModal";
 
@@ -38,6 +39,7 @@ const ChatContextSelection = observer(() => {
         isStreaming,
         chatMessages,
     } = ChatStore;
+    const { isMapLayersAvailable } = MapStore;
     const isChatVisible = chatMessages.length > 0;
 
     useEffect(() => {
@@ -89,6 +91,11 @@ const ChatContextSelection = observer(() => {
         if (!isOpen) return;
 
         const updatePanelPlacement = () => {
+            if (isMapLayersAvailable) {
+                setPanelPlacement("top");
+                return;
+            }
+
             const container = containerRef.current;
             const panel = panelRef.current;
             if (!container || !panel) return;
@@ -125,7 +132,7 @@ const ChatContextSelection = observer(() => {
             window.removeEventListener("resize", updatePanelPlacement);
             window.removeEventListener("scroll", updatePanelPlacement, true);
         };
-    }, [isOpen, panelView]);
+    }, [isOpen, panelView, isMapLayersAvailable]);
 
     useEffect(() => {
         if (selectedContext === "nonproject") return;
@@ -167,7 +174,10 @@ const ChatContextSelection = observer(() => {
     const hasScenarioSelection = selectedContext !== "nonproject"
         && scenarioOptions.length > 0;
     const availableServices = selectedContext === "nonproject"
-        ? CHAT_SERVICES.filter((service) => service === "Проверка ВРИ")
+        ? CHAT_SERVICES.filter((service) => (
+            service === "Проверка объектов по ПЗЗ"
+            || service === "Проверка ВРИ"
+        ))
         : CHAT_SERVICES;
 
     useEffect(() => {
@@ -192,6 +202,7 @@ const ChatContextSelection = observer(() => {
         if (
             selectedContext === "nonproject"
             && selectedChatTool !== null
+            && selectedChatTool !== "Проверка объектов по ПЗЗ"
             && selectedChatTool !== "Проверка ВРИ"
         ) {
             ChatStore.setSelectedChatTool(null);

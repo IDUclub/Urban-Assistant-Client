@@ -522,18 +522,36 @@ type PzzZoneSource = {
 type PzzTaskStatus = "queued" | "running" | "finished" | "failed" | "waiting_capacity";
 
 type PzzSetupStatus = "loading" | "ready" | "submitting" | PzzTaskStatus | "error";
+type PzzSetupMode = "scenario" | "files";
+type PzzFilesSetupStep =
+    "upload_pzz_zones" |
+    "upload_pzz_descriptions" |
+    "upload_cadastral" |
+    "finished";
 
 type PzzSetupMessage = {
     type: "pzz_setup";
     id: string;
     request: string;
+    mode: PzzSetupMode;
     sources: PzzZoneSource[];
     status: PzzSetupStatus;
+    submitted?: boolean;
     selectedYear?: number;
     selectedSource?: string;
+    pzzZonesFileName?: string;
+    pzzDescriptionsFileName?: string;
+    cadastralFileName?: string;
+    filesStep?: PzzFilesSetupStep;
     errorText?: string;
     taskExternalId?: string;
     resultLoaded?: boolean;
+};
+
+type PzzSetupFiles = {
+    pzzZones?: File;
+    pzzDescriptions?: File;
+    cadastral?: File;
 };
 
 type VriSetupStatus = "ready" | "submitting" | "running" | "finished" | "error";
@@ -648,6 +666,15 @@ const VRI_FORM_FIELDS = {
     pzzZones: "pzz_zones_feature_collection_file",
     pzzZoneDescription: "pzz_zone_vri_labels_file",
 } as const;
+
+const PZZ_FILE_FORM_FIELDS = {
+    pzzZones: "pzz_zones_feature_collection_file",
+    pzzDescriptions: "pzz_descriptions_file",
+    cadastral: "cadastral_feature_collection_file",
+} as const;
+
+const PZZ_AUTO_CHAT_STREAM_URL =
+    "https://pzzcompare.idulab.ru/tasks/auto/chat/stream";
 
 const VRI_RESULT_EVENT_NAMES = new Set([
     "result",
@@ -931,6 +958,7 @@ class ChatDataStore {
     userChats: UserChat[] = [];
     isUserChatsLoading = false;
     isUserChatOpening = false;
+    private pzzSetupFiles: Map<string, PzzSetupFiles> = new Map();
     private vriSetupFiles: Map<string, VriSetupFiles> = new Map();
 
     chatMap: Map<number, ChatSession> = new Map();
@@ -998,16 +1026,19 @@ class ChatDataStore {
     setSelectedContext(value: string | number) {
         this.selectedContext = value;
         this.selectedPzzZoneSource = undefined;
+        this.pzzSetupFiles.clear();
         this.vriSetupFiles.clear();
     }
 
     setSelectedScenario(scenarioId: number | null) {
         this.selectedScenario = scenarioId;
         this.selectedPzzZoneSource = undefined;
+        this.pzzSetupFiles.clear();
         this.vriSetupFiles.clear();
     }
 
     private removeIncompleteToolSetup(tool: ChatTool | null) {
+        const removedPzzSetupIds: string[] = [];
         const removedVriSetupIds: string[] = [];
 
         this.chatMessages = this.chatMessages.filter((chatMessage) => {
@@ -1018,14 +1049,18 @@ class ChatDataStore {
                 && isPzzSetupMessage(chatMessage.message)
             ) {
                 const setup = chatMessage.message;
-                const hasBeenSubmitted = setup.selectedYear !== undefined
-                    && !!setup.selectedSource;
+                const shouldRemove = !setup.submitted
+                    && (
+                        setup.status === "loading"
+                        || setup.status === "ready"
+                        || setup.status === "error"
+                    );
 
-                return hasBeenSubmitted || (
-                    setup.status !== "loading"
-                    && setup.status !== "ready"
-                    && setup.status !== "error"
-                );
+                if (shouldRemove) {
+                    removedPzzSetupIds.push(setup.id);
+                }
+
+                return !shouldRemove;
             }
 
             if (
@@ -1048,6 +1083,9 @@ class ChatDataStore {
             return true;
         });
 
+        removedPzzSetupIds.forEach((setupId) => {
+            this.pzzSetupFiles.delete(setupId);
+        });
         removedVriSetupIds.forEach((setupId) => {
             this.vriSetupFiles.delete(setupId);
         });
@@ -1063,6 +1101,7 @@ class ChatDataStore {
         this.selectedChatTool = tool;
         if (tool !== "Проверка объектов по ПЗЗ") {
             this.selectedPzzZoneSource = undefined;
+            this.pzzSetupFiles.clear();
         }
         if (tool !== "Проверка ВРИ") {
             this.vriSetupFiles.clear();
@@ -1096,6 +1135,7 @@ class ChatDataStore {
         this.activeChatId = undefined;
         this.selectedChatTool = null;
         this.selectedPzzZoneSource = undefined;
+        this.pzzSetupFiles.clear();
         this.vriSetupFiles.clear();
         this.parsedContext = null;
 
@@ -1521,6 +1561,7 @@ class ChatDataStore {
         this.selectedContext = chat.selectedContext;
         this.selectedScenario = chat.selectedScenario ?? null;
         this.selectedChatTool = null;
+        this.pzzSetupFiles.clear();
         this.vriSetupFiles.clear();
 
         const lastRequestIndex = chat.messages.findLastIndex(message => message.type === "request");
@@ -1771,12 +1812,41 @@ class ChatDataStore {
     }
 
     private startPzzCheckSetup(message: string) {
-        const scenarioId = this.selectedScenario;
-
         this.isStreaming = false;
         this.currentStatus = undefined;
         this.abortController = undefined;
 
+        if (this.hasActivePzzSetup()) {
+            this.chatMessages.push({
+                type: "response",
+                message: {
+                    type: "error",
+                    text: "Завершите текущую настройку проверки ПЗЗ.",
+                },
+            });
+            return;
+        }
+
+        const setupId = this.getNextPzzSetupId();
+
+        if (this.selectedContext === "nonproject") {
+            this.pzzSetupFiles.set(setupId, {});
+            this.chatMessages.push({
+                type: "response",
+                message: {
+                    type: "pzz_setup",
+                    id: setupId,
+                    request: message,
+                    mode: "files",
+                    sources: [],
+                    status: "ready",
+                    filesStep: "upload_pzz_zones",
+                },
+            });
+            return;
+        }
+
+        const scenarioId = this.selectedScenario;
         if (!scenarioId) {
             this.chatMessages.push({
                 type: "response",
@@ -1788,25 +1858,13 @@ class ChatDataStore {
             return;
         }
 
-        if (this.hasActivePzzSetup()) {
-            this.chatMessages.push({
-                type: "response",
-                message: {
-                    type: "error",
-                    text: "Завершите выбор года и типа зоны для текущей проверки ПЗЗ.",
-                },
-            });
-            return;
-        }
-
-        const setupId = this.getNextPzzSetupId();
-
         this.chatMessages.push({
             type: "response",
             message: {
                 type: "pzz_setup",
                 id: setupId,
                 request: message,
+                mode: "scenario",
                 sources: [],
                 status: "loading",
             },
@@ -1989,6 +2047,7 @@ class ChatDataStore {
         const setupMessage = this.getPzzSetupMessage(setupId);
         if (
             !setupMessage ||
+            setupMessage.mode !== "scenario" ||
             setupMessage.status === "submitting" ||
             setupMessage.status === "queued" ||
             setupMessage.status === "waiting_capacity" ||
@@ -1999,12 +2058,202 @@ class ChatDataStore {
         const zoneSource = { year, source };
 
         setupMessage.status = "submitting";
+        setupMessage.submitted = true;
         setupMessage.selectedYear = year;
         setupMessage.selectedSource = source;
         setupMessage.errorText = undefined;
         this.selectedPzzZoneSource = zoneSource;
 
         return this.sendPzzCheckRequest(setupMessage.request, zoneSource, setupId);
+    }
+
+    private getPzzSetupFiles(setupId: string) {
+        const files = this.pzzSetupFiles.get(setupId) ?? {};
+        this.pzzSetupFiles.set(setupId, files);
+        return files;
+    }
+
+    private canUpdatePzzSetupFiles(setupId: string) {
+        const setupMessage = this.getPzzSetupMessage(setupId);
+        if (
+            !setupMessage
+            || setupMessage.mode !== "files"
+            || setupMessage.status !== "ready"
+            || setupMessage.submitted
+        ) return undefined;
+
+        return setupMessage;
+    }
+
+    submitPzzZonesFile(setupId: string, file: File) {
+        const setupMessage = this.canUpdatePzzSetupFiles(setupId);
+        if (!setupMessage) return;
+
+        const files = this.getPzzSetupFiles(setupId);
+        files.pzzZones = file;
+        setupMessage.pzzZonesFileName = file.name;
+        setupMessage.filesStep = "upload_pzz_descriptions";
+        setupMessage.errorText = undefined;
+    }
+
+    submitPzzDescriptionsFile(setupId: string, file: File) {
+        const setupMessage = this.canUpdatePzzSetupFiles(setupId);
+        if (!setupMessage) return;
+
+        const files = this.getPzzSetupFiles(setupId);
+        files.pzzDescriptions = file;
+        setupMessage.pzzDescriptionsFileName = file.name;
+        setupMessage.filesStep = "upload_cadastral";
+        setupMessage.errorText = undefined;
+    }
+
+    skipPzzDescriptionsFile(setupId: string) {
+        const setupMessage = this.canUpdatePzzSetupFiles(setupId);
+        if (!setupMessage) return;
+
+        const files = this.getPzzSetupFiles(setupId);
+        files.pzzDescriptions = undefined;
+        setupMessage.pzzDescriptionsFileName = undefined;
+        setupMessage.filesStep = "upload_cadastral";
+        setupMessage.errorText = undefined;
+    }
+
+    submitPzzCadastralFile(setupId: string, file: File) {
+        const setupMessage = this.canUpdatePzzSetupFiles(setupId);
+        if (!setupMessage) return;
+
+        const files = this.getPzzSetupFiles(setupId);
+        files.cadastral = file;
+        setupMessage.cadastralFileName = file.name;
+        setupMessage.filesStep = "finished";
+        setupMessage.errorText = undefined;
+
+        return this.submitPzzFilesSetup(setupId);
+    }
+
+    submitPzzFilesSetup(setupId: string) {
+        const setupMessage = this.getPzzSetupMessage(setupId);
+        const files = this.getPzzSetupFiles(setupId);
+
+        if (
+            !setupMessage
+            || setupMessage.mode !== "files"
+            || setupMessage.submitted
+        ) return;
+
+        if (!files.pzzZones || !files.cadastral) {
+            setupMessage.status = "error";
+            setupMessage.errorText = "Загрузите файл с ПЗЗ и файл с зданиями.";
+            return;
+        }
+
+        setupMessage.submitted = true;
+        setupMessage.status = "submitting";
+        setupMessage.errorText = undefined;
+
+        const formData = new FormData();
+        formData.append(
+            PZZ_FILE_FORM_FIELDS.pzzZones,
+            files.pzzZones,
+            files.pzzZones.name,
+        );
+        if (files.pzzDescriptions) {
+            formData.append(
+                PZZ_FILE_FORM_FIELDS.pzzDescriptions,
+                files.pzzDescriptions,
+                files.pzzDescriptions.name,
+            );
+        }
+        formData.append(
+            PZZ_FILE_FORM_FIELDS.cadastral,
+            files.cadastral,
+            files.cadastral.name,
+        );
+        formData.set("mode", "building_pzz_check");
+        formData.set("user_query", setupMessage.request);
+
+        if (typeof this.activeChatId === "string") {
+            formData.set("chat_id", this.activeChatId);
+        }
+
+        this.abortController?.abort();
+        this.abortController = new AbortController();
+        this.currentStreamRequestId += 1;
+        const requestId = this.currentStreamRequestId;
+        this.currentStreamContext = undefined;
+        this.streamedResponse = "";
+        this.isStreaming = true;
+        this.currentStatus = "Запуск проверки объектов по ПЗЗ";
+
+        return axios.post(
+            PZZ_AUTO_CHAT_STREAM_URL,
+            formData,
+            {
+                headers: {
+                    Accept: "text/event-stream",
+                    Authorization: `Bearer ${AuthStore.accessToken}`,
+                },
+                responseType: "stream",
+                adapter: "fetch",
+                signal: this.abortController.signal,
+            },
+        )
+        .then(async ({ data }) => {
+            const stream = data as ReadableStream<Uint8Array> | undefined;
+            if (!stream || typeof stream.getReader !== "function") {
+                throw new Error("PZZ file check stream response is not readable");
+            }
+
+            setupMessage.status = "running";
+            this.currentStatus = "Проверка объектов по ПЗЗ выполняется";
+
+            await readSseStream(stream, (streamEvent) => {
+                runInAction(() => {
+                    if (this.currentStreamRequestId !== requestId) return;
+                    this.appendStreamChunk(streamEvent.data, streamEvent.eventName);
+                });
+            });
+
+            runInAction(() => {
+                if (this.currentStreamRequestId !== requestId) return;
+
+                this.commitStreamedResponse();
+                setupMessage.status = "finished";
+                setupMessage.resultLoaded = true;
+                setupMessage.errorText = undefined;
+            });
+        })
+        .catch(action((error) => {
+            if (
+                axios.isCancel(error)
+                || error?.name === "AbortError"
+                || error?.name === "CanceledError"
+            ) {
+                this.commitStreamedResponse();
+                return;
+            }
+
+            console.error("Error streaming PZZ file check:", error);
+            this.setPzzSetupError(
+                setupId,
+                "Не удалось выполнить проверку объектов по ПЗЗ.",
+            );
+            this.chatMessages.push({
+                type: "response",
+                message: {
+                    type: "error",
+                    text: "Не удалось выполнить проверку объектов по ПЗЗ.",
+                },
+            });
+        }))
+        .finally(action(() => {
+            if (this.currentStreamRequestId !== requestId) return;
+
+            this.isStreaming = false;
+            this.currentStatus = undefined;
+            this.abortController = undefined;
+            void this.getUserChats();
+        }));
     }
 
     private getNextVriSetupId() {
@@ -2851,6 +3100,7 @@ class ChatDataStore {
         this.activeChatId = chatId;
         this.isUserChatOpening = true;
         this.chatMessages = [];
+        this.pzzSetupFiles.clear();
         this.vriSetupFiles.clear();
         this.applyUserChatContext(chat);
         MapStore.clearMapLayers();
