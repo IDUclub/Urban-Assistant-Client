@@ -90,8 +90,14 @@ function normalizeProjectScenario(value: any): ProjectScenario | null {
     };
 }
 
+type UserProjectSummary = {
+    name: string;
+    id: number;
+    territoryId?: number;
+};
+
 class AppDataStore {
-    userProjects?: {name: string; id: number; }[] = [];
+    userProjects?: UserProjectSummary[] = [];
     projectScenarios: Map<number, ProjectScenario[]> = new Map();
     functionalZoneTypes: FunctionalZoneType[] | null = null;
     projectTerritories: Map<number, any | null> = new Map();
@@ -120,6 +126,10 @@ class AppDataStore {
                             (project: any) => ({
                                 name: project.name,
                                 id: project.project_id,
+                                territoryId:
+                                    project.territory?.territory_id
+                                    ?? project.territory?.id
+                                    ?? project.territory_id,
                             })
                         )
                         this.userProjects = formattedProjects;
@@ -134,6 +144,55 @@ class AppDataStore {
             return [];
         });
     };
+
+    async getProjectTerritoryId(projectId: number) {
+        const cachedTerritoryId = this.userProjects?.find(
+            (project) => project.id === projectId,
+        )?.territoryId;
+
+        if (cachedTerritoryId !== undefined) {
+            return cachedTerritoryId;
+        }
+
+        const headers = {
+            Authorization: `Bearer ${AuthStore.accessToken}`,
+        };
+        let territoryId: number | undefined;
+
+        try {
+            const { data } = await axios.get(
+                `${import.meta.env.VITE_URBAN_API}/projects/${projectId}`,
+                { headers },
+            );
+            const project = data?.project ?? data;
+            territoryId =
+                project?.territory?.territory_id
+                ?? project?.territory?.id
+                ?? project?.territory_id;
+        } catch {
+            //
+        }
+
+        if (territoryId === undefined) {
+            const { data: territoryData } = await axios.get(
+                `${import.meta.env.VITE_URBAN_API}/projects/${projectId}/territory`,
+                { headers },
+            );
+            const territory = territoryData?.territory ?? territoryData;
+            territoryId = territory?.territory_id ?? territory?.id;
+        }
+
+        if (territoryId === undefined) {
+            throw new Error("Urban API не вернул territory_id проекта");
+        }
+
+        const project = this.userProjects?.find((item) => item.id === projectId);
+        if (project) {
+            project.territoryId = territoryId;
+        }
+
+        return territoryId;
+    }
 
     async getProjectCreationTerritories(): Promise<ProjectCreationTerritoryOption[]> {
         const { data } = await axios.get(

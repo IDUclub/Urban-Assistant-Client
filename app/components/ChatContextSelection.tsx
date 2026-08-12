@@ -18,6 +18,7 @@ import CreateScenarioModal from "@components/CreateScenarioModal";
 const CHAT_SERVICES = [
   "Зоны ограничений",
   "Проверка объектов по ПЗЗ",
+  "Сгенерировать застройку",
   "Обеспеченность",
   "Проверка ВРИ",
 ] as const;
@@ -183,6 +184,7 @@ const ChatContextSelection = observer(() => {
         ? CHAT_SERVICES.filter((service) => (
             service === "Проверка объектов по ПЗЗ"
             || service === "Проверка ВРИ"
+            || service === "Сгенерировать застройку"
         ))
         : CHAT_SERVICES;
 
@@ -210,6 +212,7 @@ const ChatContextSelection = observer(() => {
             && selectedChatTool !== null
             && selectedChatTool !== "Проверка объектов по ПЗЗ"
             && selectedChatTool !== "Проверка ВРИ"
+            && selectedChatTool !== "Сгенерировать застройку"
         ) {
             ChatStore.setSelectedChatTool(null);
         }

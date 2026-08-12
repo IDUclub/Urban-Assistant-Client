@@ -116,15 +116,63 @@ const PZZ_VERDICT_COLORS = [
 const PZZ_VERDICT_LEGEND_GRADIENT = `linear-gradient(to bottom, ${PZZ_VERDICT_COLORS.map(([, color]) => color).join(", ")})`;
 const PZZ_CLASSIFIER_CANDIDATES_VERDICT = "Только кандидаты классификатора";
 const VRI_TOP1_PROPERTY = "Топ1_возможный_ВРИ";
+const GENBUILDER_EXCLUDED_PROPERTY = "is_excluded";
+const GENBUILDER_BUILDING_COLORS = [
+    ["false", "#22C55E"],
+    ["true", "#F97316"],
+] as const;
 const DEFAULT_FILL_OPACITY = 0.24;
 const PZZ_VERDICT_FILL_OPACITY = 0.65;
 const VRI_TOP1_FILL_OPACITY = 0.65;
+const GENBUILDER_FILL_OPACITY = 0.65;
 
 function getPrimitivePropertyMatchValue(value: unknown) {
     if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") return undefined;
 
     const matchValue = String(value);
     return matchValue.trim() ? matchValue : undefined;
+}
+
+function formatFeaturePropertyValue(value: unknown): string {
+    if (value === null || value === undefined) {
+        return "—";
+    }
+
+    if (typeof value === "boolean") {
+        return value ? "Да" : "Нет";
+    }
+
+    if (Array.isArray(value)) {
+        return value.length ? value.map(formatFeaturePropertyValue).join(", ") : "—";
+    }
+
+    if (typeof value === "string") {
+        if (!value.trim()) return "—";
+
+        const normalizedValue = value.trim().toLowerCase();
+
+        if (normalizedValue === "true") return "Да";
+        if (normalizedValue === "false") return "Нет";
+
+        try {
+            const parsedValue: unknown = JSON.parse(value);
+
+            if (Array.isArray(parsedValue)) {
+                return parsedValue.length
+                    ? parsedValue.map(formatFeaturePropertyValue).join(", ")
+                    : "—";
+            }
+        } catch {
+        }
+
+        return value;
+    }
+
+    if (value && typeof value === "object") {
+        return JSON.stringify(value);
+    }
+
+    return String(value);
 }
 
 function normalizePropertyName(value: string) {
@@ -183,6 +231,13 @@ function isPzzCheckResponseLayer(name: string | undefined, layer: unknown) {
     return normalizedName.includes("результат проверки пзз") || hasLayerProperty(layer, PZZ_VERDICT_PROPERTY);
 }
 
+function isGenBuilderResponseLayer(name: string | undefined, layer: unknown) {
+    const normalizedName = name?.trim().toLowerCase() ?? "";
+
+    return normalizedName.includes("сгенерированная застройка") ||
+        hasLayerProperty(layer, GENBUILDER_EXCLUDED_PROPERTY);
+}
+
 function getStableValueColor(value: string) {
     let hash = 0;
 
@@ -227,9 +282,32 @@ type CategoricalLayerStyle = {
     valueColors: readonly (readonly [string, string])[];
     fillOpacity: number;
     legendGradient: string | undefined;
+    fallbackValue?: string;
+    legendTitle?: string;
 };
 
 function getCategoricalLayerStyle(name: string | undefined, layer: unknown): CategoricalLayerStyle | undefined {
+    if (isGenBuilderResponseLayer(name, layer)) {
+        const hasExcludedObjects = getFeaturePropertyValues(
+            layer,
+            GENBUILDER_EXCLUDED_PROPERTY,
+        ).includes("true");
+        const valueColors = hasExcludedObjects
+            ? GENBUILDER_BUILDING_COLORS
+            : GENBUILDER_BUILDING_COLORS.slice(0, 1);
+
+        return {
+            propertyName: GENBUILDER_EXCLUDED_PROPERTY,
+            valueColors,
+            fillOpacity: GENBUILDER_FILL_OPACITY,
+            legendGradient: getValueColorGradient(valueColors),
+            fallbackValue: "false",
+            legendTitle: hasExcludedObjects
+                ? "Сгенерированные — зелёные, исключённые — оранжевые"
+                : "Сгенерированные объекты",
+        };
+    }
+
     const pzzVerdictValues = getFeaturePropertyValues(layer, PZZ_VERDICT_PROPERTY);
     const vriTop1ValueColors = getVriTop1ValueColors(layer);
     const isPzzLayer = isPzzCheckResponseLayer(name, layer);
@@ -275,12 +353,13 @@ function filterLayerByPropertyValue(
     layer: unknown,
     propertyName: string,
     expectedValue: string,
+    fallbackValue?: string,
 ): any {
     const parsedLayer = parseFeatureCollection(layer);
     if (!parsedLayer || typeof parsedLayer !== "object" || typeof parsedLayer === "string") return layer;
 
     const matchesValue = (feature: any) => {
-        const value = getPrimitivePropertyMatchValue(getFeatureProperty(feature, propertyName));
+        const value = getPrimitivePropertyMatchValue(getFeatureProperty(feature, propertyName)) ?? fallbackValue;
         return value === expectedValue;
     };
 
@@ -595,7 +674,12 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                                         key={`geojson-category-source-${index}-${valueIndex}`}
                                         id={`geojson-category-source-${index}-${valueIndex}`}
                                         type="geojson"
-                                        data={filterLayerByPropertyValue(layer.layer, categoricalStyle.propertyName, value)}
+                                        data={filterLayerByPropertyValue(
+                                            layer.layer,
+                                            categoricalStyle.propertyName,
+                                            value,
+                                            categoricalStyle.fallbackValue,
+                                        )}
                                     >
                                         {!isBoundaryLayer && (
                                             <Layer
@@ -677,6 +761,7 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                                         </button>
                                         <span
                                             className="h-4 w-1.5 shrink-0 shadow-sm"
+                                            title={categoricalStyle?.legendTitle}
                                             style={legendGradient
                                                 ? { background: legendGradient }
                                                 : { backgroundColor: layer.style.color }}
@@ -736,9 +821,7 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                                             {key}
                                         </div>
                                         <div className="mt-1 wrap-break-word text-sm text-slate-800 customer-dark:text-content-primary">
-                                            {typeof propertyValue === "object"
-                                                ? JSON.stringify(propertyValue)
-                                                : String(propertyValue)}
+                                            {formatFeaturePropertyValue(propertyValue)}
                                         </div>
                                     </div>
                                 ))
