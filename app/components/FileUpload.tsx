@@ -27,17 +27,26 @@ export default function FileUpload({
     return (
         <label className="flex min-w-0 flex-col gap-2">
             <span className="text-sm font-medium text-slate-900 customer-dark:text-content-primary">{label}</span>
-            <span className="flex min-w-0 flex-col gap-2 rounded-2xl border border-dashed border-slate-300 bg-white px-4 py-4 customer-dark:border-ui-border-strong customer-dark:bg-surface-raised">
+            <span className="flex min-w-0 flex-col items-start gap-3 rounded-2xl border border-dashed border-slate-300 bg-white px-4 py-4 customer-dark:border-ui-border-strong customer-dark:bg-surface-raised">
                 <span className="flex min-w-0 items-center gap-2 text-sm text-slate-600 customer-dark:text-content-secondary">
                     <MdOutlineUploadFile className="shrink-0" size={20} />
                     <span className="min-w-0 truncate">
                         {fileName ?? "Выберите файл"}
                     </span>
                 </span>
+                <span
+                    className={`inline-flex rounded-xl px-3 py-2 text-sm font-medium text-white ${
+                        disabled
+                            ? "cursor-not-allowed bg-slate-300 customer-dark:bg-surface-disabled"
+                            : "cursor-pointer bg-[#0788CE] customer:bg-brand-primary"
+                    }`}
+                >
+                    {fileName ? "Выбрать другой файл" : "Выбрать файл"}
+                </span>
                 <input
                     type="file"
                     accept={accept}
-                    className="block w-full cursor-pointer text-sm text-slate-600 file:mr-3 file:cursor-pointer file:rounded-xl file:border-0 file:bg-[#0788CE] file:px-3 file:py-2 file:text-sm file:font-medium file:text-white disabled:cursor-not-allowed disabled:text-slate-300 disabled:file:bg-slate-300 customer:file:bg-brand-primary customer-dark:text-content-secondary customer-dark:disabled:text-content-disabled customer-dark:disabled:file:bg-surface-disabled"
+                    className="sr-only"
                     onChange={handleFileChange}
                     disabled={disabled}
                 />

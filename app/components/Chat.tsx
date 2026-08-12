@@ -23,6 +23,10 @@ import {
     GenBuilderSavePromptCard,
     GenBuilderSetupMessageCard,
 } from "@components/GenBuilderMessages";
+import {
+    GenPlannerCustomSetupCard,
+    GenPlannerSavePromptCard,
+} from "@components/GenPlannerMessages";
 
 
 type ChatMessageItemType = "title" | "plain" | "block" | "list";
@@ -1077,6 +1081,12 @@ const ChatComponent = observer(function ChatComponent(
                 )}
                 {message.message.type === "genbuilder_save_prompt" && (
                     <GenBuilderSavePromptCard prompt={message.message} />
+                )}
+                {message.message.type === "genplanner_save_prompt" && (
+                    <GenPlannerSavePromptCard prompt={message.message} />
+                )}
+                {message.message.type === "genplanner_custom_setup" && (
+                    <GenPlannerCustomSetupCard setup={message.message} />
                 )}
                 {message.type === "request" && (
                     <div className="absolute -bottom-1.5 right-4 w-0 h-0 border-l-8 border-l-transparent border-r-8 border-r-transparent border-t-8 border-t-blue-100"></div>
