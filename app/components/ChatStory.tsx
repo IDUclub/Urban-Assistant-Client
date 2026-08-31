@@ -1,5 +1,6 @@
 import { observer } from "mobx-react-lite";
 import ChatStore from "@lib/ChatStore";
+import DataStore from "@lib/DataStore";
 import {
   MdAdd,
   MdCheck,
@@ -118,7 +119,7 @@ function ChatHistoryFilterSelect({
       <button
         ref={triggerRef}
         type="button"
-        className="flex h-11 min-w-35 shrink-0 cursor-pointer items-center justify-start gap-1.5 whitespace-nowrap rounded-3xl bg-transparent py-2 pl-4 pr-3 text-sm text-slate-700 outline-none transition-colors hover:text-brand-primary customer-dark:text-content-secondary customer-dark:hover:text-brand-contrast"
+        className="flex h-11 w-fit shrink-0 cursor-pointer items-center justify-end gap-1 whitespace-nowrap rounded-3xl bg-transparent px-2 py-2 text-sm text-slate-700 outline-none transition-colors hover:text-brand-primary customer-dark:text-content-secondary customer-dark:hover:text-brand-contrast"
         onClick={() => {
           if (!isOpen && triggerRef.current) {
             setMenuPosition(getFilterMenuPosition(triggerRef.current));
@@ -131,7 +132,7 @@ function ChatHistoryFilterSelect({
         aria-expanded={isOpen}
         aria-controls="chat-history-filter-menu"
       >
-        <span>{selectedOption.label}</span>
+        <span className="text-right">{selectedOption.label}</span>
         <MdKeyboardArrowDown
           aria-hidden="true"
           size={18}
@@ -199,6 +200,7 @@ const ChatStory = observer(() => {
   const [openGroupIds, setOpenGroupIds] = useState<Set<string>>(() => new Set());
   const [searchQuery, setSearchQuery] = useState("");
   const [historyFilter, setHistoryFilter] = useState<ChatHistoryFilter>("all");
+  const [startingChatGroupId, setStartingChatGroupId] = useState<string | null>(null);
   const normalizedSearchQuery = searchQuery.trim().toLowerCase();
   const visibleChatStoryPreview = useMemo(() => {
     const filteredGroups = historyFilter === "all"
@@ -280,6 +282,37 @@ const ChatStory = observer(() => {
     });
   };
 
+  const handleStartGroupChat = async (group: {
+    id: string;
+    projectId: number | null;
+  }) => {
+    ChatStore.clearChat();
+
+    if (group.projectId === null) return;
+
+    const projectId = group.projectId;
+    setStartingChatGroupId(group.id);
+    ChatStore.setSelectedContext(projectId);
+
+    try {
+      const scenarios = await DataStore.getProjectScenarios(projectId);
+      const baseScenario = scenarios.find((scenario) => scenario.isBase)
+        ?? scenarios[0];
+
+      if (
+        baseScenario
+        && ChatStore.selectedContext === projectId
+        && ChatStore.activeChatId === undefined
+      ) {
+        ChatStore.setSelectedScenario(baseScenario.id);
+      }
+    } finally {
+      setStartingChatGroupId((currentGroupId) =>
+        currentGroupId === group.id ? null : currentGroupId
+      );
+    }
+  };
+
   const renderChatItem = (
     chat: { id: string; name: string },
     isStandalone = false,
@@ -338,12 +371,12 @@ const ChatStory = observer(() => {
         </div>
       ) : (
         <>
-          <div className="flex flex-wrap gap-2 bg-white/95 px-2 py-2 backdrop-blur customer-dark:bg-surface-panel/95">
+          <div className="flex flex-wrap gap-2 bg-white/95 px-2 py-2 backdrop-blur customer-dark:bg-surface-panel/95 xl:flex-nowrap 2xl:flex-wrap">
             <ChatHistoryFilterSelect
               value={historyFilter}
               onChange={setHistoryFilter}
             />
-            <label className="flex min-h-11 min-w-[min(12rem,100%)] flex-1 items-center gap-2 rounded-3xl border border-slate-200 bg-white px-3 text-sm text-slate-600 shadow-sm focus-within:border-[#0788CE] customer:focus-within:border-brand-primary customer-dark:border-ui-border customer-dark:bg-surface-raised customer-dark:text-content-secondary">
+            <label className="flex min-h-11 min-w-[min(12rem,100%)] flex-1 items-center gap-2 rounded-3xl border border-slate-200 bg-white px-3 text-sm text-slate-600 shadow-sm focus-within:border-[#0788CE] customer:focus-within:border-brand-primary customer-dark:border-ui-border customer-dark:bg-surface-raised customer-dark:text-content-secondary xl:min-w-0 2xl:min-w-[min(12rem,100%)]">
               <MdSearch className="shrink-0 text-slate-400 customer-dark:text-content-muted" size={20} />
               <input
                 type="text"
@@ -369,10 +402,6 @@ const ChatStory = observer(() => {
               <div className="px-4 py-3 text-sm text-gray-400 customer-dark:text-content-muted">
                 Ничего не найдено
               </div>
-            ) : historyFilter === "nonproject" ? (
-              visibleChatStoryPreview.flatMap((group) =>
-                group.chats.map((chat) => renderChatItem(chat, true))
-              )
             ) : (
               visibleChatStoryPreview.map((group) => (
                 <details
@@ -386,6 +415,24 @@ const ChatStory = observer(() => {
                   <summary className="sticky top-0 z-10 flex cursor-pointer list-none items-center justify-between gap-2 rounded-3xl bg-gray-50/95 px-4 py-3 text-sm font-medium text-gray-700 backdrop-blur marker:hidden customer-dark:bg-surface-muted/95 customer-dark:text-content-secondary [&::-webkit-details-marker]:hidden">
                     <span className="min-w-0 truncate">{group.name}</span>
                     <span className="flex shrink-0 items-center gap-1 text-xs text-gray-400 customer-dark:text-content-muted">
+                      <button
+                        type="button"
+                        className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-full text-brand-primary transition-colors hover:bg-brand-primary/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary/30 disabled:cursor-wait disabled:opacity-50"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          void handleStartGroupChat(group);
+                        }}
+                        disabled={startingChatGroupId === group.id}
+                        aria-label={group.projectId === null
+                          ? "Новый чат вне проекта"
+                          : `Новый чат в проекте «${group.name}»`}
+                        title={group.projectId === null
+                          ? "Новый чат вне проекта"
+                          : "Новый чат в базовом сценарии проекта"}
+                      >
+                        <MdAdd aria-hidden="true" size={18} />
+                      </button>
                       {group.chats.length}
                       <MdKeyboardArrowRight
                         size={18}
@@ -394,7 +441,9 @@ const ChatStory = observer(() => {
                     </span>
                   </summary>
                   <div className="flex min-w-0 flex-col gap-1 px-2 pb-2">
-                    {group.chats.map((chat) => renderChatItem(chat))}
+                    {group.chats.map((chat) =>
+                      renderChatItem(chat, group.projectId === null)
+                    )}
                   </div>
                 </details>
               ))
