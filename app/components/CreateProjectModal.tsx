@@ -12,11 +12,18 @@ import DataStore, {
     type ProjectCreationTerritory,
     type ProjectCreationTerritoryOption,
 } from "@lib/DataStore";
+import {
+    getProjectGeometryCentre,
+    parseProjectGeoJson,
+    type ProjectBoundaryGeometry,
+} from "@lib/ProjectGeoJson";
 
 interface CreateProjectModalProps {
     onClose: () => void;
     onCreated?: (project: CreatedProject) => void | Promise<void>;
 }
+
+const MAX_GEOJSON_FILE_SIZE = 10 * 1024 * 1024;
 
 function getPolygonCentre(points: PolygonPoint[]): PolygonPoint {
     let doubleArea = 0;
@@ -81,8 +88,12 @@ function CreateProjectModal({
     const [selectedTerritoryId, setSelectedTerritoryId] = useState<number | null>(null);
     const [selectedTerritory, setSelectedTerritory] = useState<ProjectCreationTerritory | null>(null);
     const [polygonPoints, setPolygonPoints] = useState<PolygonPoint[]>([]);
+    const [uploadedGeometry, setUploadedGeometry] = useState<ProjectBoundaryGeometry | null>(null);
+    const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
+    const [geoJsonError, setGeoJsonError] = useState<string | null>(null);
     const [isTerritoriesLoading, setIsTerritoriesLoading] = useState(true);
     const [isTerritoryLoading, setIsTerritoryLoading] = useState(false);
+    const [isGeoJsonLoading, setIsGeoJsonLoading] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [errorText, setErrorText] = useState<string | null>(null);
 
@@ -93,7 +104,8 @@ function CreateProjectModal({
     const canSubmit = !!name.trim()
         && selectedTerritoryId !== null
         && !!selectedTerritory
-        && polygonPoints.length >= 3
+        && (polygonPoints.length >= 3 || !!uploadedGeometry)
+        && !isGeoJsonLoading
         && !isSubmitting;
 
     useEffect(() => {
@@ -156,6 +168,9 @@ function CreateProjectModal({
         let isActive = true;
 
         setPolygonPoints([]);
+        setUploadedGeometry(null);
+        setUploadedFileName(null);
+        setGeoJsonError(null);
         setSelectedTerritory(null);
 
         if (selectedTerritoryId === null) {
@@ -189,22 +204,62 @@ function CreateProjectModal({
         };
     }, [selectedTerritoryId]);
 
+    const handlePointsChange = (points: PolygonPoint[]) => {
+        setPolygonPoints(points);
+        setUploadedGeometry(null);
+        setUploadedFileName(null);
+        setGeoJsonError(null);
+    };
+
+    const handleGeoJsonFileSelect = async (file: File) => {
+        setIsGeoJsonLoading(true);
+        setGeoJsonError(null);
+
+        try {
+            if (!file.size) {
+                throw new Error("Выбранный файл пуст.");
+            }
+
+            if (file.size > MAX_GEOJSON_FILE_SIZE) {
+                throw new Error("Размер GeoJSON-файла не должен превышать 10 МБ.");
+            }
+
+            const geometry = parseProjectGeoJson(await file.text());
+
+            setPolygonPoints([]);
+            setUploadedGeometry(geometry);
+            setUploadedFileName(file.name);
+            setErrorText(null);
+        } catch (error) {
+            setGeoJsonError(
+                error instanceof Error
+                    ? error.message
+                    : "Не удалось прочитать GeoJSON-файл.",
+            );
+        } finally {
+            setIsGeoJsonLoading(false);
+        }
+    };
+
     const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
         event.preventDefault();
 
         if (!canSubmit || selectedTerritoryId === null) return;
 
         const closedPolygon = [...polygonPoints, polygonPoints[0]];
-        const centrePoint = getPolygonCentre(polygonPoints);
+        const geometry: ProjectBoundaryGeometry = uploadedGeometry ?? {
+            type: "Polygon",
+            coordinates: [closedPolygon],
+        };
+        const centrePoint = uploadedGeometry
+            ? getProjectGeometryCentre(uploadedGeometry)
+            : getPolygonCentre(polygonPoints);
         const payload: CreateProjectPayload = {
             name: name.trim(),
             territory_id: selectedTerritoryId,
             public: false,
             territory: {
-                geometry: {
-                    type: "Polygon",
-                    coordinates: [closedPolygon],
-                },
+                geometry,
                 centre_point: {
                     type: "Point",
                     coordinates: centrePoint,
@@ -261,7 +316,7 @@ function CreateProjectModal({
                             Создать проект
                         </h2>
                         <p className="mt-1 text-sm text-slate-500 customer-dark:text-content-muted">
-                            Укажите название, территорию и нарисуйте границу проекта
+                            Укажите название, территорию и задайте границу проекта
                         </p>
                     </div>
                     <button
@@ -339,7 +394,12 @@ function CreateProjectModal({
                         <CreateProjectTerritoryMap
                             territory={selectedTerritory}
                             points={polygonPoints}
-                            onPointsChange={setPolygonPoints}
+                            uploadedGeometry={uploadedGeometry}
+                            uploadedFileName={uploadedFileName}
+                            geoJsonError={geoJsonError}
+                            isGeoJsonLoading={isGeoJsonLoading}
+                            onPointsChange={handlePointsChange}
+                            onGeoJsonFileSelect={handleGeoJsonFileSelect}
                         />
                     )}
 

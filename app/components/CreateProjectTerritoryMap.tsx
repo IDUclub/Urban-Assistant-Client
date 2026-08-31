@@ -10,8 +10,9 @@ import type {
     Polygon,
     Position,
 } from "geojson";
-import { MdOutlineDelete, MdUndo } from "react-icons/md";
+import { MdOutlineDelete, MdUndo, MdUploadFile } from "react-icons/md";
 import type { ProjectCreationTerritory } from "@lib/DataStore";
+import type { ProjectBoundaryGeometry } from "@lib/ProjectGeoJson";
 import "mapbox-gl/dist/mapbox-gl.css";
 
 export type PolygonPoint = [number, number];
@@ -19,7 +20,12 @@ export type PolygonPoint = [number, number];
 interface CreateProjectTerritoryMapProps {
     territory: ProjectCreationTerritory;
     points: PolygonPoint[];
+    uploadedGeometry: ProjectBoundaryGeometry | null;
+    uploadedFileName: string | null;
+    geoJsonError: string | null;
+    isGeoJsonLoading: boolean;
     onPointsChange: (points: PolygonPoint[]) => void;
+    onGeoJsonFileSelect: (file: File) => void | Promise<void>;
 }
 
 type Bounds = [[number, number], [number, number]];
@@ -81,6 +87,19 @@ function getTerritoryCentre(territory: ProjectCreationTerritory): PolygonPoint {
     ];
 }
 
+function getGeometryCentre(geometry: Geometry): PolygonPoint {
+    const bounds = collectBounds(
+        "coordinates" in geometry ? geometry.coordinates : undefined,
+    );
+
+    if (!bounds) return [37.6173, 55.7558];
+
+    return [
+        (bounds[0][0] + bounds[1][0]) / 2,
+        (bounds[0][1] + bounds[1][1]) / 2,
+    ];
+}
+
 function getTerritoryZoom(geometry: Geometry) {
     const bounds = collectBounds(
         "coordinates" in geometry ? geometry.coordinates : undefined,
@@ -101,10 +120,19 @@ function getTerritoryZoom(geometry: Geometry) {
     return 9;
 }
 
-function getDraftFeatures(points: PolygonPoint[]): FeatureCollection {
+function getDraftFeatures(
+    points: PolygonPoint[],
+    uploadedGeometry: ProjectBoundaryGeometry | null,
+): FeatureCollection {
     const features: Feature[] = [];
 
-    if (points.length >= 3) {
+    if (uploadedGeometry) {
+        features.push({
+            type: "Feature",
+            properties: {},
+            geometry: uploadedGeometry,
+        });
+    } else if (points.length >= 3) {
         const polygon: Polygon = {
             type: "Polygon",
             coordinates: [[...points, points[0]]],
@@ -150,22 +178,44 @@ function getDraftFeatures(points: PolygonPoint[]): FeatureCollection {
 function CreateProjectTerritoryMap({
     territory,
     points,
+    uploadedGeometry,
+    uploadedFileName,
+    geoJsonError,
+    isGeoJsonLoading,
     onPointsChange,
+    onGeoJsonFileSelect,
 }: CreateProjectTerritoryMapProps) {
     const mapboxToken = import.meta.env.VITE_MAPBOX_TOKEN;
-    const centre = useMemo(() => getTerritoryCentre(territory), [territory]);
-    const zoom = useMemo(
-        () => getTerritoryZoom(territory.geometry),
-        [territory.geometry],
+    const displayGeometry = uploadedGeometry ?? territory.geometry;
+    const centre = useMemo(
+        () => uploadedGeometry
+            ? getGeometryCentre(uploadedGeometry)
+            : getTerritoryCentre(territory),
+        [territory, uploadedGeometry],
     );
+    const zoom = useMemo(
+        () => getTerritoryZoom(displayGeometry),
+        [displayGeometry],
+    );
+    const displayBounds = useMemo(
+        () => collectBounds(
+            "coordinates" in displayGeometry
+                ? displayGeometry.coordinates
+                : undefined,
+        ),
+        [displayGeometry],
+    );
+    const mapKey = uploadedGeometry && displayBounds
+        ? `${territory.territory_id}-uploaded-${displayBounds.flat(2).join("-")}`
+        : `${territory.territory_id}-drawn`;
     const boundaryFeature = useMemo<Feature<Geometry>>(() => ({
         type: "Feature",
         properties: {},
         geometry: territory.geometry,
     }), [territory.geometry]);
     const draftFeatures = useMemo(
-        () => getDraftFeatures(points),
-        [points],
+        () => getDraftFeatures(points, uploadedGeometry),
+        [points, uploadedGeometry],
     );
 
     const handleMapClick = (event: MapMouseEvent) => {
@@ -177,18 +227,59 @@ function CreateProjectTerritoryMap({
 
     return (
         <div className="flex min-h-0 flex-1 flex-col gap-2">
-            <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                     <div className="text-sm font-medium text-slate-900 customer-dark:text-content-primary">
                         Граница проекта
                     </div>
                     <div className="mt-1 text-xs text-slate-500 customer-dark:text-content-muted">
-                        Расставьте на карте минимум три точки
+                        Расставьте минимум три точки или загрузите Polygon/MultiPolygon
                     </div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
+                    {uploadedFileName && (
+                        <span
+                            className="max-w-48 truncate text-xs font-medium text-emerald-700 customer-dark:text-emerald-400"
+                            title={uploadedFileName}
+                        >
+                            {uploadedFileName}
+                        </span>
+                    )}
+                    <label
+                        className={`
+                            flex h-9 cursor-pointer items-center gap-1.5 rounded-xl border border-slate-200
+                            bg-white px-3 text-xs font-medium text-slate-600 transition-colors
+                            hover:border-[#0788CE] hover:text-[#0788CE]
+                            customer:hover:border-brand-primary customer:hover:text-brand-primary
+                            customer-dark:border-ui-border customer-dark:bg-surface-panel customer-dark:text-content-secondary
+                            ${isGeoJsonLoading ? "pointer-events-none opacity-50" : ""}
+                        `}
+                    >
+                        <MdUploadFile aria-hidden="true" size={18} />
+                        <span>
+                            {isGeoJsonLoading
+                                ? "Загрузка..."
+                                : uploadedGeometry
+                                    ? "Заменить GeoJSON"
+                                    : "Загрузить GeoJSON"}
+                        </span>
+                        <input
+                            type="file"
+                            accept=".geojson,.json,application/geo+json,application/json"
+                            className="sr-only"
+                            disabled={isGeoJsonLoading}
+                            onChange={(event) => {
+                                const file = event.currentTarget.files?.[0];
+                                event.currentTarget.value = "";
+
+                                if (file) {
+                                    void onGeoJsonFileSelect(file);
+                                }
+                            }}
+                        />
+                    </label>
                     <span className="text-xs text-slate-500 customer-dark:text-content-muted">
-                        Точек: {points.length}
+                        {uploadedGeometry ? "Геометрия загружена" : `Точек: ${points.length}`}
                     </span>
                     <button
                         type="button"
@@ -212,18 +303,27 @@ function CreateProjectTerritoryMap({
                             customer-dark:text-content-muted customer-dark:hover:bg-danger-soft customer-dark:hover:text-danger
                         "
                         onClick={() => onPointsChange([])}
-                        disabled={!points.length}
-                        aria-label="Очистить полигон"
-                        title="Очистить полигон"
+                        disabled={!points.length && !uploadedGeometry}
+                        aria-label="Очистить границу проекта"
+                        title="Очистить границу проекта"
                     >
                         <MdOutlineDelete size={19} />
                     </button>
                 </div>
             </div>
 
+            {geoJsonError && (
+                <div
+                    className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 customer-dark:border-danger-border customer-dark:bg-danger-soft customer-dark:text-danger-content"
+                    role="alert"
+                >
+                    {geoJsonError}
+                </div>
+            )}
+
             <div className="relative min-h-48 flex-1 overflow-hidden rounded-2xl border border-slate-200 customer-dark:border-ui-border">
                 <Map
-                    key={territory.territory_id}
+                    key={mapKey}
                     initialViewState={{
                         longitude: centre[0],
                         latitude: centre[1],

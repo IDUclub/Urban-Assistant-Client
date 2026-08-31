@@ -1,6 +1,6 @@
 import axios from "axios";
 import { makeAutoObservable, action } from "mobx";
-import type { Geometry, Point, Polygon } from "geojson";
+import type { Geometry, MultiPolygon, Point, Polygon } from "geojson";
 import AuthStore from "@lib/AuthStore";
 
 export type ProjectCreationTerritoryOption = {
@@ -18,7 +18,7 @@ export type CreateProjectPayload = {
     territory_id: number;
     public: false;
     territory: {
-        geometry: Polygon;
+        geometry: Polygon | MultiPolygon;
         centre_point: Point;
         properties: Record<string, unknown>;
     };
