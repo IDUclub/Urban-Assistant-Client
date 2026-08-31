@@ -1,6 +1,8 @@
 import {
     type CSSProperties,
+    type ReactNode,
     useEffect,
+    useId,
     useRef,
     useState,
 } from "react";
@@ -20,6 +22,13 @@ interface CustomSelectProps {
     placeholder?: string;
     block?: boolean;
     compactGlow?: boolean;
+    trailingAction?: {
+        icon: ReactNode;
+        label: string;
+        title?: string;
+        disabled?: boolean;
+        onClick: () => void;
+    };
 }
 
 function CustomSelect({
@@ -29,9 +38,11 @@ function CustomSelect({
     placeholder,
     block,
     compactGlow,
+    trailingAction,
 }: CustomSelectProps) {
     const [isOpen, setIsOpen] = useState(false);
     const [searchQuery, setSearchQuery] = useState("");
+    const trailingActionTooltipId = useId();
     const containerRef = useRef<HTMLDivElement | null>(null);
     const triggerRef = useRef<HTMLDivElement | null>(null);
     const menuRef = useRef<HTMLDivElement | null>(null);
@@ -158,7 +169,7 @@ function CustomSelect({
                     className={`
                         relative flex ${block ? "w-full" : "w-fit max-w-70"} items-center justify-between gap-4 overflow-hidden rounded-[1.75rem]
                         bg-white border border-gray-500/30
-                        px-6 py-2.5 text-left text-sm font-medium tracking-[0.01em] text-black
+                        pl-6 ${trailingAction ? "pr-14" : "pr-6"} py-2.5 text-left text-sm font-medium tracking-[0.01em] text-black
                         transition duration-200 hover:-translate-y-0.5
                         focus:outline-none focus:ring-2 focus:ring-white/70
                         customer:focus:ring-brand-primary/35 customer-dark:bg-surface-raised customer-dark:border-ui-border customer-dark:text-content-primary
@@ -180,6 +191,31 @@ function CustomSelect({
                         <IoChevronDown size={18} />
                     </span>
                 </button>
+                {trailingAction && (
+                    <>
+                        <button
+                            type="button"
+                            className="peer absolute right-2 top-1/2 z-10 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full text-[#0788CE] transition-colors hover:bg-[#EAF5FF] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0788CE]/40 disabled:cursor-not-allowed disabled:opacity-40 customer:text-brand-primary customer:hover:bg-brand-soft customer:focus-visible:ring-brand-primary/40"
+                            onClick={(event) => {
+                                event.stopPropagation();
+                                setIsOpen(false);
+                                trailingAction.onClick();
+                            }}
+                            disabled={trailingAction.disabled}
+                            aria-label={trailingAction.label}
+                            aria-describedby={trailingActionTooltipId}
+                        >
+                            {trailingAction.icon}
+                        </button>
+                        <span
+                            id={trailingActionTooltipId}
+                            role="tooltip"
+                            className="pointer-events-none invisible absolute right-0 top-full z-20 mt-2 whitespace-nowrap rounded-lg bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-white opacity-0 shadow-lg peer-hover:visible peer-hover:opacity-100 peer-focus-visible:visible peer-focus-visible:opacity-100 customer-dark:bg-slate-100 customer-dark:text-slate-900"
+                        >
+                            {trailingAction.title ?? trailingAction.label}
+                        </span>
+                    </>
+                )}
             </div>            
             {isOpen && createPortal(
                 <div

@@ -1,5 +1,5 @@
 import axios from "axios";
-import { makeAutoObservable, action } from "mobx";
+import { makeAutoObservable, action, runInAction } from "mobx";
 import type { Geometry, MultiPolygon, Point, Polygon } from "geojson";
 import AuthStore from "@lib/AuthStore";
 
@@ -11,6 +11,26 @@ export type ProjectCreationTerritoryOption = {
 export type ProjectCreationTerritory = ProjectCreationTerritoryOption & {
     geometry: Geometry;
     centre_point?: Point | null;
+};
+
+export type ProjectScenario = {
+    id: number;
+    name: string;
+    isBase: boolean;
+};
+
+export type FunctionalZoneType = {
+    id: number;
+    name: string;
+    zoneNickname: string | null;
+    description: string | null;
+};
+
+export type CreateScenarioPayload = {
+    project_id: number;
+    functional_zone_type_id: number;
+    name: string;
+    properties: Record<string, unknown>;
 };
 
 export type CreateProjectPayload = {
@@ -49,9 +69,31 @@ export type CreatedProject = {
     };
 };
 
+function normalizeProjectScenario(value: any): ProjectScenario | null {
+    const scenarioId = Number(value?.scenario_id ?? value?.id);
+    const scenarioName = typeof value?.name === "string"
+        ? value.name.trim()
+        : "";
+
+    if (!Number.isFinite(scenarioId) || !scenarioName) return null;
+
+    return {
+        id: scenarioId,
+        name: scenarioName,
+        isBase: value?.is_based === true
+            || value?.is_base === true
+            || value?.is_base_scenario === true
+            || value?.is_baseline === true
+            || value?.is_default === true
+            || value?.base === true
+            || value?.type === "base",
+    };
+}
+
 class AppDataStore {
     userProjects?: {name: string; id: number; }[] = [];
-    projectScenarios: Map<number, any> = new Map();
+    projectScenarios: Map<number, ProjectScenario[]> = new Map();
+    functionalZoneTypes: FunctionalZoneType[] | null = null;
     projectTerritories: Map<number, any | null> = new Map();
     projectTerritoryRequests: Map<number, Promise<any | null>> = new Map();
 
@@ -180,8 +222,10 @@ class AppDataStore {
         } as CreatedProject;
     }
 
-    getProjectScenarios(projectId: number) {
-        if (this.projectScenarios.has(projectId)) return;
+    getProjectScenarios(projectId: number): Promise<ProjectScenario[]> {
+        const currentScenarios = this.projectScenarios.get(projectId);
+
+        if (currentScenarios) return Promise.resolve(currentScenarios);
 
         return axios.get(
             `${import.meta.env.VITE_URBAN_API}/projects/${projectId}/scenarios`,
@@ -193,21 +237,97 @@ class AppDataStore {
         )
         .then(
             action(
-                ({ data }) => {
-                    if (data && Array.isArray(data) && data.length) {
-                        const formattedScenarios = data.map((scenario: any) => ({
-                            id: scenario.scenario_id,
-                            name: scenario.name,
-                        }))
-                        this.projectScenarios.set(projectId, formattedScenarios);
-                    }
+                ({ data }): ProjectScenario[] => {
+                    if (!Array.isArray(data)) return [];
+
+                    const formattedScenarios = data.flatMap((scenario: any) => {
+                        const normalizedScenario = normalizeProjectScenario(scenario);
+                        return normalizedScenario ? [normalizedScenario] : [];
+                    });
+
+                    this.projectScenarios.set(projectId, formattedScenarios);
+                    return formattedScenarios;
                 }
             )
         )
         .catch(error => {
             console.error("Error fetching project scenarios:", error);
-        })
+            return [];
+        });
     };
+
+    async getFunctionalZoneTypes(): Promise<FunctionalZoneType[]> {
+        if (this.functionalZoneTypes) return this.functionalZoneTypes;
+
+        const { data } = await axios.get(
+            `${import.meta.env.VITE_URBAN_API}/functional_zones_types`,
+            {
+                headers: {
+                    Authorization: `Bearer ${AuthStore.accessToken}`,
+                },
+            },
+        );
+        const functionalZoneTypes = Array.isArray(data)
+            ? data.flatMap((zoneType: any) => {
+                const id = Number(zoneType?.functional_zone_type_id ?? zoneType?.id);
+                const name = typeof zoneType?.name === "string"
+                    ? zoneType.name.trim()
+                    : "";
+
+                if (!Number.isFinite(id) || !name) return [];
+
+                return [{
+                    id,
+                    name,
+                    zoneNickname: typeof zoneType?.zone_nickname === "string"
+                        && zoneType.zone_nickname.trim()
+                        ? zoneType.zone_nickname.trim()
+                        : null,
+                    description: typeof zoneType?.description === "string"
+                        && zoneType.description.trim()
+                        ? zoneType.description.trim()
+                        : null,
+                }];
+            })
+            : [];
+
+        runInAction(() => {
+            this.functionalZoneTypes = functionalZoneTypes;
+        });
+
+        return functionalZoneTypes;
+    }
+
+    async createProjectScenario(
+        baseScenarioId: number,
+        payload: CreateScenarioPayload,
+    ): Promise<ProjectScenario> {
+        const { data } = await axios.post(
+            `${import.meta.env.VITE_URBAN_API}/scenarios/${baseScenarioId}`,
+            payload,
+            {
+                headers: {
+                    Authorization: `Bearer ${AuthStore.accessToken}`,
+                    "Content-Type": "application/json",
+                },
+            },
+        );
+        const createdScenario = normalizeProjectScenario(data);
+
+        if (!createdScenario) {
+            throw new Error("Scenario creation response is invalid");
+        }
+
+        runInAction(() => {
+            const currentScenarios = this.projectScenarios.get(payload.project_id) ?? [];
+            this.projectScenarios.set(payload.project_id, [
+                ...currentScenarios.filter((scenario) => scenario.id !== createdScenario.id),
+                createdScenario,
+            ]);
+        });
+
+        return createdScenario;
+    }
 
     constructor() {
         makeAutoObservable(this);

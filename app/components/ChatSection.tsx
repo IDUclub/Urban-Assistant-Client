@@ -17,7 +17,9 @@ const ChatSection = observer(() => {
 
     // const hasGeoJsonMessages = chatMessages.some((message) => message.message.type === "geojson");
     const selectedProject = userProjects?.find((project) => project.id === Number(selectedContext));
-    const selectedSceanrioItem = selectedProject?.id && projectScenarios.get(selectedProject.id)?.find((scenario: any) => scenario.id == selectedScenario);
+    const selectedSceanrioItem = selectedProject?.id
+        ? projectScenarios.get(selectedProject.id)?.find((scenario) => scenario.id === selectedScenario)
+        : undefined;
     const mapHeight = "50vh";
     const collapsedMapOffset = "25vh";
     const visibleMapOffset = isMapLayersAvailable

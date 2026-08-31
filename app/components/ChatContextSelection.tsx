@@ -13,6 +13,7 @@ import ChatStore from "@lib/ChatStore";
 import MapStore from "@lib/MapStore";
 import CustomSelect, { type SelectOption } from "@components/ui/Select";
 import CreateProjectModal from "@components/CreateProjectModal";
+import CreateScenarioModal from "@components/CreateScenarioModal";
 
 const CHAT_SERVICES = [
   "Зоны ограничений",
@@ -29,6 +30,7 @@ const ChatContextSelection = observer(() => {
     const [panelView, setPanelView] = useState<PanelView>("menu");
     const [panelPlacement, setPanelPlacement] = useState<PanelPlacement>("bottom");
     const [isCreateProjectModalOpen, setIsCreateProjectModalOpen] = useState(false);
+    const [isCreateScenarioModalOpen, setIsCreateScenarioModalOpen] = useState(false);
     const containerRef = useRef<HTMLDivElement | null>(null);
     const panelRef = useRef<HTMLDivElement | null>(null);
     const { userProjects, projectScenarios } = DataStore;
@@ -155,10 +157,14 @@ const ChatContextSelection = observer(() => {
         ? []
         : (projectScenarios.get(Number(selectedContext)) ?? []);
 
-    const scenarioOptions: SelectOption[] = (currentProjectScenarios as any[]).map((scenario) => ({
+    const scenarioOptions: SelectOption[] = currentProjectScenarios.map((scenario) => ({
         label: scenario.name,
         value: scenario.id,
     }));
+    const selectedProjectId = selectedContext === "nonproject"
+        ? null
+        : Number(selectedContext);
+    const baseScenario = currentProjectScenarios.find((scenario) => scenario.isBase);
 
     const selectedContextLabel = contextOptions.find(
         (option) => option.value == selectedContext,
@@ -449,6 +455,19 @@ const ChatContextSelection = observer(() => {
                                             placeholder="Выберите сценарий"
                                             block
                                             compactGlow
+                                            trailingAction={{
+                                                icon: <MdAdd aria-hidden="true" size={20} />,
+                                                label: "Создать сценарий для выбранного проекта",
+                                                title: baseScenario
+                                                    ? "Новый сценарий"
+                                                    : "Базовый сценарий проекта не найден",
+                                                disabled: !baseScenario || selectedProjectId === null,
+                                                onClick: () => {
+                                                    setIsOpen(false);
+                                                    setPanelView("menu");
+                                                    setIsCreateScenarioModalOpen(true);
+                                                },
+                                            }}
                                         />
                                     )}
                                 </div>
@@ -497,10 +516,7 @@ const ChatContextSelection = observer(() => {
                         await DataStore.getProjectScenarios(projectId);
 
                         const firstScenario = DataStore.projectScenarios.get(projectId)?.[0];
-                        const firstScenarioId = Number(
-                            firstScenario?.id
-                            ?? firstScenario?.scenario_id,
-                        );
+                        const firstScenarioId = Number(firstScenario?.id);
 
                         if (
                             ChatStore.selectedContext === projectId
@@ -508,6 +524,19 @@ const ChatContextSelection = observer(() => {
                         ) {
                             ChatStore.setSelectedScenario(firstScenarioId);
                         }
+                    }}
+                />
+            )}
+
+            {isCreateScenarioModalOpen && selectedProjectId !== null && baseScenario && (
+                <CreateScenarioModal
+                    projectId={selectedProjectId}
+                    projectName={selectedContextLabel}
+                    baseScenarioId={baseScenario.id}
+                    onClose={() => setIsCreateScenarioModalOpen(false)}
+                    onCreated={(scenario) => {
+                        ChatStore.setSelectedContext(selectedProjectId);
+                        ChatStore.setSelectedScenario(scenario.id);
                     }}
                 />
             )}
