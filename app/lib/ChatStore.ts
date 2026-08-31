@@ -1662,7 +1662,6 @@ class ChatDataStore {
                     adapter: "fetch",
                     signal: this.abortController?.signal,
                     params: this.withActiveChatIdParams({
-                        model: "gpt-oss:20b",
                         scenario_id: this.selectedScenario,
                         request: message,
                     })
@@ -1728,7 +1727,6 @@ class ChatDataStore {
                     adapter: "fetch",
                     signal: this.abortController?.signal,
                     params: this.withActiveChatIdParams({
-                        model: "gpt-oss:20b",
                         scenario_id: this.selectedScenario,
                         request: message,
                     })
