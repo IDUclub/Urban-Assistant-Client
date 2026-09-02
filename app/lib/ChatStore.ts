@@ -12,6 +12,7 @@ import {
 } from "@lib/genbuilder/saveGeneratedBuildings";
 import {
     type FunctionalZoneSource,
+    type GenBuilderClarificationMessage,
     type GenBuilderSavePromptMessage,
     type GenBuilderSetupMessage,
 } from "@lib/genbuilder/types";
@@ -23,6 +24,15 @@ import MapStore from "@lib/MapStore";
 
 const URBAN_API_URL = import.meta.env.VITE_URBAN_API;
 const GENBUILDER_API_URL = import.meta.env.VITE_GENBUILDER_API;
+const AUTHENTICATED_LAYER_API_URLS = [
+    URBAN_API_URL,
+    GENBUILDER_API_URL,
+    import.meta.env.VITE_GENPLANNER_API,
+    import.meta.env.VITE_LLM_API,
+    import.meta.env.VITE_LLM_CHAT_HISTORY_API,
+    import.meta.env.VITE_LLM_RESTRICTIONS_API,
+    import.meta.env.VITE_PZZ_COMPARE_API,
+].filter((url): url is string => typeof url === "string" && !!url.trim());
 
 interface UserChat {
     chat_id: string;
@@ -206,9 +216,21 @@ function hasBoundaryLayerContent(layer: unknown): boolean {
     return typeof record.type === "string" && GEOJSON_TYPES.has(record.type) && "coordinates" in record;
 }
 
-async function downloadGeoJsonLayer(uri: string) {
+export async function downloadGeoJsonLayer(uri: string) {
+    const accessToken = AuthStore.accessToken;
+    const layerOrigin = new URL(uri).origin;
+    const shouldAuthorize = !!accessToken && AUTHENTICATED_LAYER_API_URLS.some((apiUrl) => {
+        try {
+            return new URL(apiUrl).origin === layerOrigin;
+        } catch {
+            return false;
+        }
+    });
     const response = await fetch(uri, {
         redirect: "follow",
+        ...(shouldAuthorize
+            ? { headers: { Authorization: `Bearer ${accessToken}` } }
+            : {}),
     });
 
     if (!response.ok) {
@@ -576,6 +598,7 @@ type PzzSetupFiles = {
 
 type GenBuilderSetupFiles = {
     blocks?: File;
+    existingBuildings?: File;
 };
 
 type VriSetupStatus = "ready" | "submitting" | "running" | "finished" | "error";
@@ -640,7 +663,7 @@ type AddGeoJsonLayerOptions = {
 
 type ChatMessage = {
     type: "request" | "response";
-    message: TextMessage | GeoJSONMessage | ErrorMessage | WarningMessage | InfoMessage | PzzSetupMessage | VriSetupMessage | GenBuilderSetupMessage | GenBuilderSavePromptMessage;
+    message: TextMessage | GeoJSONMessage | ErrorMessage | WarningMessage | InfoMessage | PzzSetupMessage | VriSetupMessage | GenBuilderSetupMessage | GenBuilderClarificationMessage | GenBuilderSavePromptMessage;
 };
 
 type ChatSession = {
@@ -667,6 +690,21 @@ function isGenBuilderSavePromptMessage(
     message: ChatMessage["message"],
 ): message is GenBuilderSavePromptMessage {
     return message.type === "genbuilder_save_prompt";
+}
+
+function isGenBuilderClarificationMessage(
+    message: ChatMessage["message"],
+): message is GenBuilderClarificationMessage {
+    return message.type === "genbuilder_clarification";
+}
+
+function requestsExistingBuildingsChoice(missing: unknown[] | undefined) {
+    return missing?.some((item) => {
+        const field = asRecord(item);
+
+        return field?.control === "file_or_skip" &&
+            field.field === "existing_buildings";
+    }) ?? false;
 }
 
 function normalizePzzTaskStatus(value: unknown): PzzTaskStatus | undefined {
@@ -1129,6 +1167,15 @@ class ChatDataStore {
             return true;
         });
 
+        if (removedGenBuilderSetupIds.length > 0) {
+            const removedSetupIds = new Set(removedGenBuilderSetupIds);
+            this.chatMessages = this.chatMessages.filter((chatMessage) =>
+                chatMessage.type !== "response"
+                || !isGenBuilderClarificationMessage(chatMessage.message)
+                || !removedSetupIds.has(chatMessage.message.setupId)
+            );
+        }
+
         removedPzzSetupIds.forEach((setupId) => {
             this.pzzSetupFiles.delete(setupId);
         });
@@ -1155,10 +1202,6 @@ class ChatDataStore {
         if (tool !== "Проверка ВРИ") {
             this.vriSetupFiles.clear();
         }
-        if (tool !== "Сгенерировать застройку") {
-            this.genBuilderSetupFiles.clear();
-        }
-
         if (
             tool === "Проверка объектов по ПЗЗ"
             && !this.hasActivePzzSetup()
@@ -1468,6 +1511,7 @@ class ChatDataStore {
         if (
             !streamContext ||
             streamContext.requestId !== this.currentStreamRequestId ||
+            !streamContext.hasReceivedMapLayer ||
             streamContext.hasAddedProjectBoundary ||
             !streamContext.projectBoundaryLayer ||
             !hasBoundaryLayerContent(streamContext.projectBoundaryLayer)
@@ -1892,6 +1936,22 @@ class ChatDataStore {
             : undefined;
     }
 
+    private getGenBuilderExistingBuildingsClarification(setupId: string) {
+        for (let index = this.chatMessages.length - 1; index >= 0; index -= 1) {
+            const chatMessage = this.chatMessages[index];
+
+            if (
+                chatMessage.type === "response" &&
+                isGenBuilderClarificationMessage(chatMessage.message) &&
+                chatMessage.message.setupId === setupId
+            ) {
+                return chatMessage.message;
+            }
+        }
+
+        return;
+    }
+
     requestGenBuilderParameters(setupId: string, year: number, source: string) {
         const setupMessage = this.getGenBuilderSetupMessage(setupId);
         const hasSelectedSource = setupMessage?.sources.some(
@@ -1952,13 +2012,55 @@ class ChatDataStore {
         });
     };
 
+    submitGenBuilderExistingBuildingsFile = (setupId: string, file: File) => {
+        const setupMessage = this.getGenBuilderSetupMessage(setupId);
+        const clarification = this.getGenBuilderExistingBuildingsClarification(setupId);
+        if (
+            !setupMessage ||
+            setupMessage.mode !== "files" ||
+            setupMessage.status !== "awaiting_parameters" ||
+            !clarification ||
+            clarification.submitted
+        ) return;
+
+        const files = this.genBuilderSetupFiles.get(setupId) ?? {};
+        files.existingBuildings = file;
+        this.genBuilderSetupFiles.set(setupId, files);
+
+        clarification.existingBuildingsChoice = "file";
+        clarification.existingBuildingsFileName = file.name;
+        setupMessage.errorText = undefined;
+    };
+
+    skipGenBuilderExistingBuildings = (setupId: string) => {
+        const setupMessage = this.getGenBuilderSetupMessage(setupId);
+        const clarification = this.getGenBuilderExistingBuildingsClarification(setupId);
+        if (
+            !setupMessage ||
+            setupMessage.mode !== "files" ||
+            setupMessage.status !== "awaiting_parameters" ||
+            !clarification ||
+            clarification.submitted
+        ) return;
+
+        const files = this.genBuilderSetupFiles.get(setupId);
+        if (files) {
+            delete files.existingBuildings;
+        }
+
+        clarification.existingBuildingsChoice = "skip";
+        clarification.existingBuildingsFileName = undefined;
+        setupMessage.errorText = undefined;
+    };
+
     private startGenBuilderSetup() {
         const scenarioId = this.selectedScenario;
         const projectId = typeof this.selectedContext === "number"
             ? this.selectedContext
             : undefined;
 
-        const setupId = `genbuilder-setup-${this.currentGenBuilderSetupId++}`;
+        const setupId = `genbuilder-setup-${this.currentGenBuilderSetupId}`;
+        this.currentGenBuilderSetupId += 1;
 
         if (projectId === undefined) {
             this.genBuilderSetupFiles.set(setupId, {});
@@ -2048,7 +2150,20 @@ class ChatDataStore {
                 setupMessage.errorText = undefined;
                 this.currentStatus = "Требуется уточнение";
 
-                if (streamEvent.content) {
+                const needsExistingBuildingsChoice =
+                    setupMessage.mode === "files" &&
+                    requestsExistingBuildingsChoice(streamEvent.missing);
+
+                if (needsExistingBuildingsChoice) {
+                    this.chatMessages.push({
+                        type: "response",
+                        message: {
+                            type: "genbuilder_clarification",
+                            setupId: setupMessage.id,
+                            text: streamEvent.content ?? "Выберите, нужно ли учитывать существующие здания.",
+                        },
+                    });
+                } else if (streamEvent.content) {
                     this.chatMessages.push({
                         type: "response",
                         message: { type: "info", text: streamEvent.content },
@@ -2098,7 +2213,22 @@ class ChatDataStore {
                 });
                 this.addGeoJsonLayerToMap(
                     { name: layerName, layer: layer.layer },
-                    { requestId, showError: true },
+                    {
+                        requestId,
+                        showError: true,
+                        onLayerAdded: () => {
+                            if (
+                                setupMessage.mode === "scenario" &&
+                                setupMessage.projectId !== undefined
+                            ) {
+                                this.restoreProjectBoundary(
+                                    setupMessage.projectId,
+                                    true,
+                                    requestId,
+                                );
+                            }
+                        },
+                    },
                 );
                 return;
             }
@@ -2160,7 +2290,8 @@ class ChatDataStore {
             setupMessage.status = "finished";
 
             if (setupMessage.mode === "scenario" && !setupMessage.savePromptId) {
-                const promptId = `genbuilder-save-${this.currentGenBuilderSavePromptId++}`;
+                const promptId = `genbuilder-save-${this.currentGenBuilderSavePromptId}`;
+                this.currentGenBuilderSavePromptId += 1;
                 setupMessage.savePromptId = promptId;
                 this.chatMessages.push({
                     type: "response",
@@ -2198,7 +2329,10 @@ class ChatDataStore {
         const backendChatId = setupMessage.backendChatId ?? this.getActiveBackendChatId();
 
         if (setupMessage.mode === "files") {
-            const blocksFile = this.genBuilderSetupFiles.get(setupMessage.id)?.blocks;
+            const files = this.genBuilderSetupFiles.get(setupMessage.id);
+            const blocksFile = files?.blocks;
+            const existingBuildingsClarification =
+                this.getGenBuilderExistingBuildingsClarification(setupMessage.id);
 
             if (this.selectedContext !== "nonproject") {
                 const errorText = "Контекст чата изменился. Запустите генерацию застройки заново.";
@@ -2218,11 +2352,32 @@ class ChatDataStore {
                 return;
             }
 
+            if (
+                existingBuildingsClarification &&
+                (
+                    !existingBuildingsClarification.existingBuildingsChoice ||
+                    (
+                        existingBuildingsClarification.existingBuildingsChoice === "file" &&
+                        !files?.existingBuildings
+                    )
+                )
+            ) {
+                setupMessage.errorText = "Загрузите GeoJSON существующих зданий или выберите продолжение без них.";
+                return;
+            }
+
             request = {
                 userQuery,
                 blocksFile,
                 chatId: backendChatId,
+                ...(existingBuildingsClarification?.existingBuildingsChoice === "file" && files?.existingBuildings
+                    ? { buildingsFile: files.existingBuildings }
+                    : {}),
+                ...(existingBuildingsClarification?.existingBuildingsChoice === "skip"
+                    ? { skipExistingBuildings: true }
+                    : {}),
             };
+
         } else {
             if (
                 setupMessage.projectId === undefined ||
@@ -2272,10 +2427,18 @@ class ChatDataStore {
             return;
         }
 
+        const submittedExistingBuildingsClarification = setupMessage.mode === "files"
+            ? this.getGenBuilderExistingBuildingsClarification(setupMessage.id)
+            : undefined;
+        if (submittedExistingBuildingsClarification) {
+            submittedExistingBuildingsClarification.submitted = true;
+        }
+
         this.abortController?.abort();
         this.abortController = new AbortController();
         this.currentStreamRequestId += 1;
         const requestId = this.currentStreamRequestId;
+        MapStore.clearMapLayers();
         this.currentStreamContext = undefined;
         this.streamedResponse = "";
         this.isStreaming = true;
@@ -2335,6 +2498,10 @@ class ChatDataStore {
             this.finalizeGenBuilderStream(setupMessage, streamState);
         }))
         .catch(action((error) => {
+            if (submittedExistingBuildingsClarification) {
+                submittedExistingBuildingsClarification.submitted = false;
+            }
+
             if (axios.isCancel(error) || error?.name === "AbortError" || error?.name === "CanceledError") {
                 setupMessage.status = "awaiting_parameters";
                 return;

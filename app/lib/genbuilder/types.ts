@@ -5,6 +5,8 @@ export type FunctionalZoneSource = {
 
 export type GenBuilderSetupMode = "scenario" | "files";
 
+export type ExistingBuildingsChoice = "file" | "skip";
+
 export type GenBuilderSetupStatus =
     | "loading"
     | "validating_file"
@@ -39,6 +41,15 @@ export type GenBuilderSetupMessage = {
     backendChatId?: string;
     errorText?: string;
     savePromptId?: string;
+};
+
+export type GenBuilderClarificationMessage = {
+    type: "genbuilder_clarification";
+    setupId: string;
+    text: string;
+    existingBuildingsChoice?: ExistingBuildingsChoice;
+    existingBuildingsFileName?: string;
+    submitted?: boolean;
 };
 
 export type GenBuilderSavePromptMessage = {

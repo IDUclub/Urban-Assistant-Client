@@ -4,6 +4,7 @@ import { MdCheck } from "react-icons/md";
 import { IoInformationCircleOutline } from "react-icons/io5";
 import ChatStore from "@lib/ChatStore";
 import type {
+    GenBuilderClarificationMessage,
     GenBuilderSavePromptMessage,
     GenBuilderSetupMessage,
 } from "@lib/genbuilder/types";
@@ -190,6 +191,57 @@ export const GenBuilderSetupMessageCard = observer(({
         </div>
     );
 });
+
+export const GenBuilderClarificationMessageCard = observer(({
+    clarification,
+}: {
+    clarification: GenBuilderClarificationMessage;
+}) => (
+    <div className="flex w-full flex-col gap-4">
+        <div className="flex items-start gap-3">
+            <span className="mt-0.5 shrink-0 text-blue-500 customer:text-brand-primary">
+                <IoInformationCircleOutline size={22} />
+            </span>
+            <div className="min-w-0">
+                <div className="text-sm font-semibold text-blue-800 customer-dark:text-content-primary">
+                    Уточнение
+                </div>
+                <div className="mt-1 whitespace-pre-wrap text-sm leading-6 text-blue-950 customer-dark:text-content-secondary">
+                    {clarification.text}
+                </div>
+            </div>
+        </div>
+        <div className="flex flex-col gap-3 border-t border-blue-200 pt-4 customer-dark:border-ui-border">
+            <div className="text-sm font-medium text-blue-950 customer-dark:text-content-primary">
+                Существующие здания
+            </div>
+            <FileUpload
+                label="GeoJSON существующих зданий"
+                fileName={clarification.existingBuildingsFileName}
+                disabled={!!clarification.submitted}
+                accept=".geojson,application/geo+json"
+                onFileSelected={(file) => ChatStore.submitGenBuilderExistingBuildingsFile(
+                    clarification.setupId,
+                    file,
+                )}
+            />
+            <button
+                type="button"
+                className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border px-4 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                    clarification.existingBuildingsChoice === "skip"
+                        ? "border-brand-primary bg-brand-primary text-white"
+                        : "border-blue-300 bg-white text-blue-800 hover:bg-blue-100 customer-dark:border-ui-border-strong customer-dark:bg-surface-raised customer-dark:text-content-secondary customer-dark:hover:bg-surface-hover"
+                }`}
+                onClick={() => ChatStore.skipGenBuilderExistingBuildings(clarification.setupId)}
+                disabled={!!clarification.submitted}
+                aria-pressed={clarification.existingBuildingsChoice === "skip"}
+            >
+                {clarification.existingBuildingsChoice === "skip" && <MdCheck size={18} />}
+                Не загружать существующие здания
+            </button>
+        </div>
+    </div>
+));
 
 export const GenBuilderSavePromptCard = observer(({
     prompt,

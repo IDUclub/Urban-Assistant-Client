@@ -13,12 +13,13 @@ import { IoAlertCircleOutline, IoInformationCircleOutline } from "react-icons/io
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { observer } from "mobx-react-lite";
-import ChatStore from "@lib/ChatStore";
+import ChatStore, { downloadGeoJsonLayer } from "@lib/ChatStore";
 import { SyncLoader } from "react-spinners";
 import ChatContextSelection from "@components/ChatContextSelection";
 import Select from "@components/ui/Select";
 import FileUpload from "@components/FileUpload";
 import {
+    GenBuilderClarificationMessageCard,
     GenBuilderSavePromptCard,
     GenBuilderSetupMessageCard,
 } from "@components/GenBuilderMessages";
@@ -273,19 +274,10 @@ function getGeoJsonFileName(name: string) {
         .replace(/^_+|_+$/g, "") || "layer"}.geojson`;
 }
 
-function downloadGeoJson(name: string, layer: unknown) {
-    if (isGeoJsonLayerUri(layer)) {
-        const anchor = document.createElement("a");
-
-        anchor.href = layer.trim();
-        anchor.download = getGeoJsonFileName(name);
-        anchor.target = "_blank";
-        anchor.rel = "noreferrer";
-        anchor.click();
-        return;
-    }
-
-    const parsedLayer = parseFeatureCollection(layer);
+async function downloadGeoJson(name: string, layer: unknown) {
+    const parsedLayer = isGeoJsonLayerUri(layer)
+        ? await downloadGeoJsonLayer(layer.trim())
+        : parseFeatureCollection(layer);
     if (!parsedLayer) return;
 
     const blob = new Blob([JSON.stringify(parsedLayer, null, 2)], {
@@ -335,7 +327,9 @@ function GeoJsonMessageActions({ name, layer }: { name: string; layer: unknown }
     };
 
     const handleDownload = () => {
-        downloadGeoJson(name, layer);
+        downloadGeoJson(name, layer).catch((error) => {
+            console.error("Error downloading GeoJSON layer:", error);
+        });
         setIsOpen(false);
     };
 
@@ -414,6 +408,7 @@ function getMessageContainerClassName(message: ChatStoreMessage) {
         case "warning":
             return "w-full rounded-3xl border border-amber-200 bg-amber-50 px-5 py-4 text-amber-950 customer-dark:border-ui-border customer-dark:bg-surface-muted customer-dark:text-content-primary";
         case "info":
+        case "genbuilder_clarification":
             return "w-full rounded-3xl border border-blue-200 bg-blue-50 px-5 py-4 text-blue-950 customer-dark:border-ui-border customer-dark:bg-surface-muted customer-dark:text-content-primary";
         default:
             return "w-full rounded-3xl pr-6 pl-1 py-4 text-gray-950 customer-dark:text-content-primary";
@@ -1076,6 +1071,9 @@ const ChatComponent = observer(function ChatComponent(
                 )}
                 {message.message.type === "genbuilder_setup" && (
                     <GenBuilderSetupMessageCard setup={message.message} />
+                )}
+                {message.message.type === "genbuilder_clarification" && (
+                    <GenBuilderClarificationMessageCard clarification={message.message} />
                 )}
                 {message.message.type === "genbuilder_save_prompt" && (
                     <GenBuilderSavePromptCard prompt={message.message} />

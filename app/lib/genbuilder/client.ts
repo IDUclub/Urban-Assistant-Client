@@ -14,6 +14,8 @@ export type GenBuilderScenarioChatRequest = GenBuilderChatRequestBase & {
 
 export type GenBuilderBlocksChatRequest = GenBuilderChatRequestBase & {
     blocksFile: File;
+    buildingsFile?: File;
+    skipExistingBuildings?: boolean;
 };
 
 export type GenBuilderChatRequest =
@@ -203,6 +205,16 @@ function createFormData(request: GenBuilderChatRequest) {
 
     if ("blocksFile" in request) {
         formData.set("blocks_file", request.blocksFile, request.blocksFile.name);
+
+        if (request.buildingsFile) {
+            formData.set(
+                "buildings_file",
+                request.buildingsFile,
+                request.buildingsFile.name,
+            );
+        } else if (request.skipExistingBuildings) {
+            formData.set("skip_existing_buildings", "true");
+        }
     } else {
         formData.set("scenario_id", String(request.scenarioId));
         formData.set("year", String(request.year));

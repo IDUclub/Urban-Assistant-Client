@@ -121,6 +121,39 @@ const GENBUILDER_BUILDING_COLORS = [
     ["false", "#22C55E"],
     ["true", "#F97316"],
 ] as const;
+const FUNCTIONAL_ZONE_PROPERTY = "territory_zone";
+const GENBUILDER_FUNCTIONAL_ZONE_PROPERTY = "zone";
+const FUNCTIONAL_ZONE_FALLBACK_COLOR = "#969696";
+const FUNCTIONAL_ZONE_COLORS_BY_ID: Record<number, string> = {
+    1: "#FFD700",
+    2: "#ADFF2F",
+    3: "#8B4513",
+    4: "#6A5ACD",
+    5: "#20B2AA",
+    6: "#A9A9A9",
+    7: "#FF8C00",
+    10: "#f5e345",
+    11: "#faaf1c",
+    12: "#f26142",
+    13: "#782b2b",
+};
+const FUNCTIONAL_ZONE_IDS_BY_CODE: Record<string, number> = {
+    residential: 1,
+    recreation: 2,
+    recreational: 2,
+    special: 3,
+    special_purpose: 3,
+    industrial: 4,
+    agricultural: 5,
+    agriculture: 5,
+    transport: 6,
+    business: 7,
+    public_business: 7,
+    individual_residential: 10,
+    lowrise_residential: 11,
+    midrise_residential: 12,
+    highrise_residential: 13,
+};
 const DEFAULT_FILL_OPACITY = 0.24;
 const PZZ_VERDICT_FILL_OPACITY = 0.65;
 const VRI_TOP1_FILL_OPACITY = 0.65;
@@ -235,7 +268,61 @@ function isGenBuilderResponseLayer(name: string | undefined, layer: unknown) {
     const normalizedName = name?.trim().toLowerCase() ?? "";
 
     return normalizedName.includes("сгенерированная застройка") ||
+        normalizedName === "buildings.geojson" ||
         hasLayerProperty(layer, GENBUILDER_EXCLUDED_PROPERTY);
+}
+
+function isFunctionalZoneLayer(name: string | undefined, layer: unknown) {
+    const normalizedName = name?.trim().toLowerCase() ?? "";
+
+    return normalizedName === "функциональные зоны" ||
+        normalizedName === "functional_zones.geojson" ||
+        hasLayerProperty(layer, FUNCTIONAL_ZONE_PROPERTY) ||
+        (
+            hasLayerProperty(layer, GENBUILDER_FUNCTIONAL_ZONE_PROPERTY) &&
+            hasLayerProperty(layer, "zone_nickname")
+        );
+}
+
+function getFunctionalZoneColor(value: string) {
+    const numericZoneId = Number(value);
+    const zoneId = Number.isFinite(numericZoneId)
+        ? numericZoneId
+        : FUNCTIONAL_ZONE_IDS_BY_CODE[value.trim().toLowerCase()];
+
+    return zoneId === undefined
+        ? FUNCTIONAL_ZONE_FALLBACK_COLOR
+        : FUNCTIONAL_ZONE_COLORS_BY_ID[zoneId] ?? FUNCTIONAL_ZONE_FALLBACK_COLOR;
+}
+
+function getFunctionalZoneStyle(name: string | undefined, layer: unknown): CategoricalLayerStyle | undefined {
+    if (!isFunctionalZoneLayer(name, layer)) {
+        return;
+    }
+
+    const genPlannerZoneValues = getFeaturePropertyValues(layer, FUNCTIONAL_ZONE_PROPERTY);
+    const propertyName = genPlannerZoneValues.length
+        ? FUNCTIONAL_ZONE_PROPERTY
+        : GENBUILDER_FUNCTIONAL_ZONE_PROPERTY;
+    const zoneValues = genPlannerZoneValues.length
+        ? genPlannerZoneValues
+        : getFeaturePropertyValues(layer, GENBUILDER_FUNCTIONAL_ZONE_PROPERTY);
+
+    if (!zoneValues.length) {
+        return;
+    }
+
+    const valueColors = zoneValues
+        .sort((left, right) => left.localeCompare(right, "ru", { numeric: true }))
+        .map((value) => [value, getFunctionalZoneColor(value)] as const);
+
+    return {
+        propertyName,
+        valueColors,
+        fillOpacity: GENBUILDER_FILL_OPACITY,
+        legendGradient: getValueColorGradient(valueColors),
+        legendTitle: "Цвета функциональных зон",
+    };
 }
 
 function getStableValueColor(value: string) {
@@ -287,6 +374,12 @@ type CategoricalLayerStyle = {
 };
 
 function getCategoricalLayerStyle(name: string | undefined, layer: unknown): CategoricalLayerStyle | undefined {
+    const functionalZoneStyle = getFunctionalZoneStyle(name, layer);
+
+    if (functionalZoneStyle) {
+        return functionalZoneStyle;
+    }
+
     if (isGenBuilderResponseLayer(name, layer)) {
         const hasExcludedObjects = getFeaturePropertyValues(
             layer,

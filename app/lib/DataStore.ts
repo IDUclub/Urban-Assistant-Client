@@ -96,6 +96,16 @@ type UserProjectSummary = {
     territoryId?: number;
 };
 
+function normalizeNumericId(value: unknown) {
+    if (value === null || value === undefined || value === "") {
+        return;
+    }
+
+    const numericId = Number(value);
+
+    return Number.isFinite(numericId) ? numericId : undefined;
+}
+
 class AppDataStore {
     userProjects?: UserProjectSummary[] = [];
     projectScenarios: Map<number, ProjectScenario[]> = new Map();
@@ -126,10 +136,11 @@ class AppDataStore {
                             (project: any) => ({
                                 name: project.name,
                                 id: project.project_id,
-                                territoryId:
+                                territoryId: normalizeNumericId(
                                     project.territory?.territory_id
                                     ?? project.territory?.id
                                     ?? project.territory_id,
+                                ),
                             })
                         )
                         this.userProjects = formattedProjects;
@@ -165,10 +176,11 @@ class AppDataStore {
                 { headers },
             );
             const project = data?.project ?? data;
-            territoryId =
+            territoryId = normalizeNumericId(
                 project?.territory?.territory_id
                 ?? project?.territory?.id
-                ?? project?.territory_id;
+                ?? project?.territory_id,
+            );
         } catch {
             //
         }
@@ -179,7 +191,7 @@ class AppDataStore {
                 { headers },
             );
             const territory = territoryData?.territory ?? territoryData;
-            territoryId = territory?.territory_id ?? territory?.id;
+            territoryId = normalizeNumericId(territory?.territory_id ?? territory?.id);
         }
 
         if (territoryId === undefined) {
