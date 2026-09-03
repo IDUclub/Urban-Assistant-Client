@@ -7,17 +7,22 @@ import {
     MdMoreHoriz,
     MdOutlineMap,
     MdArrowForwardIos,
-    MdOutlineUploadFile,
     MdCheck,
 } from "react-icons/md";
-import { IoAlertCircleOutline } from "react-icons/io5";
+import { IoAlertCircleOutline, IoInformationCircleOutline } from "react-icons/io5";
 import { useEffect, useRef, useState } from "react";
-import type { ChangeEvent, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { observer } from "mobx-react-lite";
-import ChatStore from "@lib/ChatStore";
+import ChatStore, { downloadGeoJsonLayer } from "@lib/ChatStore";
 import { SyncLoader } from "react-spinners";
 import ChatContextSelection from "@components/ChatContextSelection";
 import Select from "@components/ui/Select";
+import FileUpload from "@components/FileUpload";
+import {
+    GenBuilderClarificationMessageCard,
+    GenBuilderSavePromptCard,
+    GenBuilderSetupMessageCard,
+} from "@components/GenBuilderMessages";
 
 
 type ChatMessageItemType = "title" | "plain" | "block" | "list";
@@ -269,19 +274,10 @@ function getGeoJsonFileName(name: string) {
         .replace(/^_+|_+$/g, "") || "layer"}.geojson`;
 }
 
-function downloadGeoJson(name: string, layer: unknown) {
-    if (isGeoJsonLayerUri(layer)) {
-        const anchor = document.createElement("a");
-
-        anchor.href = layer.trim();
-        anchor.download = getGeoJsonFileName(name);
-        anchor.target = "_blank";
-        anchor.rel = "noreferrer";
-        anchor.click();
-        return;
-    }
-
-    const parsedLayer = parseFeatureCollection(layer);
+async function downloadGeoJson(name: string, layer: unknown) {
+    const parsedLayer = isGeoJsonLayerUri(layer)
+        ? await downloadGeoJsonLayer(layer.trim())
+        : parseFeatureCollection(layer);
     if (!parsedLayer) return;
 
     const blob = new Blob([JSON.stringify(parsedLayer, null, 2)], {
@@ -331,7 +327,9 @@ function GeoJsonMessageActions({ name, layer }: { name: string; layer: unknown }
     };
 
     const handleDownload = () => {
-        downloadGeoJson(name, layer);
+        downloadGeoJson(name, layer).catch((error) => {
+            console.error("Error downloading GeoJSON layer:", error);
+        });
         setIsOpen(false);
     };
 
@@ -395,9 +393,26 @@ type GeoJsonResponseMessage = ChatStoreMessage & {
 
 type PzzSetupData = Extract<ChatStoreMessage["message"], { type: "pzz_setup" }>;
 type VriSetupData = Extract<ChatStoreMessage["message"], { type: "vri_setup" }>;
-
 function isGeoJsonResponseMessage(message: ChatStoreMessage): message is GeoJsonResponseMessage {
     return message.type === "response" && message.message.type === "geojson";
+}
+
+function getMessageContainerClassName(message: ChatStoreMessage) {
+    if (message.type === "request") {
+        return "w-fit self-end-safe rounded-3xl border border-gray-200 bg-blue-100 px-6 py-4 text-gray-950 whitespace-pre-wrap relative customer:border-brand-border customer:bg-brand-soft customer-dark:text-content-primary";
+    }
+
+    switch (message.message.type) {
+        case "error":
+            return "w-full rounded-3xl border border-danger-border bg-danger-soft px-5 py-4 text-danger-content";
+        case "warning":
+            return "w-full rounded-3xl border border-amber-200 bg-amber-50 px-5 py-4 text-amber-950 customer-dark:border-ui-border customer-dark:bg-surface-muted customer-dark:text-content-primary";
+        case "info":
+        case "genbuilder_clarification":
+            return "w-full rounded-3xl border border-blue-200 bg-blue-50 px-5 py-4 text-blue-950 customer-dark:border-ui-border customer-dark:bg-surface-muted customer-dark:text-content-primary";
+        default:
+            return "w-full rounded-3xl pr-6 pl-1 py-4 text-gray-950 customer-dark:text-content-primary";
+    }
 }
 
 function GeoJsonMessageAccordion({ messages }: { messages: GeoJsonResponseMessage[] }) {
@@ -540,7 +555,7 @@ const PzzSetupMessageCard = observer(({ setup }: { setup: PzzSetupData }) => {
         switch (filesStep) {
             case "upload_pzz_zones":
                 return (
-                    <ToolFileUpload
+                    <FileUpload
                         label="Загрузите файл с ПЗЗ"
                         fileName={setup.pzzZonesFileName}
                         disabled={setup.status !== "ready" || isLocked}
@@ -550,7 +565,7 @@ const PzzSetupMessageCard = observer(({ setup }: { setup: PzzSetupData }) => {
             case "upload_pzz_descriptions":
                 return (
                     <div className="flex flex-col gap-3">
-                        <ToolFileUpload
+                        <FileUpload
                             label="Загрузите описание зон ПЗЗ"
                             fileName={setup.pzzDescriptionsFileName}
                             disabled={setup.status !== "ready" || isLocked}
@@ -568,7 +583,7 @@ const PzzSetupMessageCard = observer(({ setup }: { setup: PzzSetupData }) => {
                 );
             case "upload_cadastral":
                 return (
-                    <ToolFileUpload
+                    <FileUpload
                         label="Загрузите файл со зданиями"
                         fileName={setup.cadastralFileName}
                         disabled={setup.status !== "ready" || isLocked}
@@ -675,46 +690,6 @@ function getVriSetupStatusLabel(status: VriSetupData["status"]) {
     }
 }
 
-function ToolFileUpload({
-    label,
-    fileName,
-    disabled,
-    onFileSelected,
-}: {
-    label: string;
-    fileName?: string;
-    disabled: boolean;
-    onFileSelected: (file: File) => void;
-}) {
-    const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
-        const file = event.target.files?.[0];
-        if (file) {
-            onFileSelected(file);
-        }
-        event.currentTarget.value = "";
-    };
-
-    return (
-        <label className="flex min-w-0 flex-col gap-2">
-            <span className="text-sm font-medium text-slate-900 customer-dark:text-content-primary">{label}</span>
-            <span className="flex min-w-0 flex-col gap-2 rounded-2xl border border-dashed border-slate-300 bg-white px-4 py-4 customer-dark:border-ui-border-strong customer-dark:bg-surface-raised">
-                <span className="flex min-w-0 items-center gap-2 text-sm text-slate-600 customer-dark:text-content-secondary">
-                    <MdOutlineUploadFile className="shrink-0" size={20} />
-                    <span className="min-w-0 truncate">
-                        {fileName ?? "Выберите файл"}
-                    </span>
-                </span>
-                <input
-                    type="file"
-                    className="block w-full cursor-pointer text-sm text-slate-600 file:mr-3 file:cursor-pointer file:rounded-xl file:border-0 file:bg-[#0788CE] file:px-3 file:py-2 file:text-sm file:font-medium file:text-white disabled:cursor-not-allowed disabled:text-slate-300 disabled:file:bg-slate-300 customer:file:bg-brand-primary customer-dark:text-content-secondary customer-dark:disabled:text-content-disabled customer-dark:disabled:file:bg-surface-disabled"
-                    onChange={handleFileChange}
-                    disabled={disabled}
-                />
-            </span>
-        </label>
-    );
-}
-
 function VriChoiceButtons({
     question,
     disabled,
@@ -775,7 +750,7 @@ const VriSetupMessageCard = observer(({ setup }: { setup: VriSetupData }) => {
         switch (setup.step) {
             case "upload_land_plots":
                 return (
-                    <ToolFileUpload
+                    <FileUpload
                         label="Загрузите земельные участки"
                         fileName={setup.landPlotsFileName}
                         disabled={!isReady || isLocked}
@@ -793,7 +768,7 @@ const VriSetupMessageCard = observer(({ setup }: { setup: VriSetupData }) => {
                 );
             case "upload_classifier":
                 return (
-                    <ToolFileUpload
+                    <FileUpload
                         label="Загрузите классификатор ВРИ"
                         fileName={setup.classifierFileName}
                         disabled={!isReady || isLocked}
@@ -811,7 +786,7 @@ const VriSetupMessageCard = observer(({ setup }: { setup: VriSetupData }) => {
                 );
             case "upload_pzz_zones":
                 return (
-                    <ToolFileUpload
+                    <FileUpload
                         label="Загрузите зоны ПЗЗ"
                         fileName={setup.pzzZonesFileName}
                         disabled={!isReady || isLocked}
@@ -829,7 +804,7 @@ const VriSetupMessageCard = observer(({ setup }: { setup: VriSetupData }) => {
                 );
             case "upload_pzz_zone_description":
                 return (
-                    <ToolFileUpload
+                    <FileUpload
                         label="Загрузите описание зон ПЗЗ"
                         fileName={setup.pzzZoneDescriptionFileName}
                         disabled={!isReady || isLocked}
@@ -1034,15 +1009,7 @@ const ChatComponent = observer(function ChatComponent(
         renderedMessages.push(
             <div
                 key={`chat-message-${message.type}-${ind}`}
-                className={
-                    message.type === "response"
-                        ? message.message.type === "error"
-                            ? "w-full rounded-3xl border border-danger-border bg-danger-soft px-5 py-4 text-danger-content"
-                            : message.message.type === "warning"
-                                ? "w-full rounded-3xl border border-amber-200 bg-amber-50 px-5 py-4 text-amber-950"
-                                : "w-full rounded-3xl pr-6 pl-1 py-4 text-gray-950 customer-dark:text-content-primary"
-                        : "w-fit self-end-safe rounded-3xl border border-gray-200 bg-blue-100 px-6 py-4 text-gray-950 whitespace-pre-wrap relative customer:border-brand-border customer:bg-brand-soft customer-dark:text-content-primary"
-                }
+                className={getMessageContainerClassName(message)}
             >
                 {message.message.type === "text" ? renderFormattedText(message.message.text) : ""}
                 {message.message.type === "error" && (
@@ -1075,6 +1042,21 @@ const ChatComponent = observer(function ChatComponent(
                         </div>
                     </div>
                 )}
+                {message.message.type === "info" && (
+                    <div className="flex items-start gap-3">
+                        <span className="mt-0.5 shrink-0 text-blue-500">
+                            <IoInformationCircleOutline size={22} />
+                        </span>
+                        <div className="min-w-0">
+                            <div className="text-sm font-semibold text-blue-800">
+                                Уточнение
+                            </div>
+                            <div className="mt-1 whitespace-pre-wrap text-sm leading-6 text-blue-950">
+                                {message.message.text}
+                            </div>
+                        </div>
+                    </div>
+                )}
                 {message.message.type === "geojson" && (
                     <GeoJsonLayerRow
                         name={message.message.name}
@@ -1086,6 +1068,15 @@ const ChatComponent = observer(function ChatComponent(
                 )}
                 {message.message.type === "vri_setup" && (
                     <VriSetupMessageCard setup={message.message} />
+                )}
+                {message.message.type === "genbuilder_setup" && (
+                    <GenBuilderSetupMessageCard setup={message.message} />
+                )}
+                {message.message.type === "genbuilder_clarification" && (
+                    <GenBuilderClarificationMessageCard clarification={message.message} />
+                )}
+                {message.message.type === "genbuilder_save_prompt" && (
+                    <GenBuilderSavePromptCard prompt={message.message} />
                 )}
                 {message.type === "request" && (
                     <div className="absolute -bottom-1.5 right-4 w-0 h-0 border-l-8 border-l-transparent border-r-8 border-r-transparent border-t-8 border-t-blue-100"></div>
