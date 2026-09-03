@@ -12,6 +12,23 @@ import type { MapMouseEvent } from "react-map-gl/mapbox";
 import "mapbox-gl/dist/mapbox-gl.css";
 import ChatStore from "@lib/ChatStore";
 import MapStore from "@lib/MapStore";
+import {
+    FUNCTIONAL_ZONE_FALLBACK_COLOR,
+    FUNCTIONAL_ZONE_ID_PROPERTY,
+    FUNCTIONAL_ZONE_NAME_PROPERTY,
+    getFunctionalZoneColor,
+    getFunctionalZoneName,
+} from "@lib/functionalZones";
+import {
+    GENPLANNER_ROAD_COLORS_BY_ID,
+    GENPLANNER_ROAD_LEVEL_PROPERTY,
+    GENPLANNER_ROAD_TYPE_PROPERTY,
+    getGenPlannerRoadTypeId,
+} from "@lib/genplanner/roads";
+import {
+    GENPLANNER_ROAD_LAYER_NAME,
+    GENPLANNER_ZONE_LAYER_NAME,
+} from "@lib/genplanner/constants";
 
 function parseFeatureCollection(layer: unknown) {
     if (!layer) return undefined;
@@ -121,45 +138,13 @@ const GENBUILDER_BUILDING_COLORS = [
     ["false", "#22C55E"],
     ["true", "#F97316"],
 ] as const;
-const FUNCTIONAL_ZONE_PROPERTY = "territory_zone";
 const GENBUILDER_FUNCTIONAL_ZONE_PROPERTY = "zone";
-const FUNCTIONAL_ZONE_FALLBACK_COLOR = "#969696";
-const FUNCTIONAL_ZONE_COLORS_BY_ID: Record<number, string> = {
-    1: "#FFD700",
-    2: "#ADFF2F",
-    3: "#8B4513",
-    4: "#6A5ACD",
-    5: "#20B2AA",
-    6: "#A9A9A9",
-    7: "#FF8C00",
-    10: "#f5e345",
-    11: "#faaf1c",
-    12: "#f26142",
-    13: "#782b2b",
-};
-const FUNCTIONAL_ZONE_IDS_BY_CODE: Record<string, number> = {
-    residential: 1,
-    recreation: 2,
-    recreational: 2,
-    special: 3,
-    special_purpose: 3,
-    industrial: 4,
-    agricultural: 5,
-    agriculture: 5,
-    transport: 6,
-    business: 7,
-    public_business: 7,
-    individual_residential: 10,
-    lowrise_residential: 11,
-    midrise_residential: 12,
-    highrise_residential: 13,
-};
 const DEFAULT_FILL_OPACITY = 0.24;
 const PZZ_VERDICT_FILL_OPACITY = 0.65;
 const VRI_TOP1_FILL_OPACITY = 0.65;
-const GENBUILDER_FILL_OPACITY = 0.65;
+const GENERATED_LAYER_FILL_OPACITY = 0.65;
 
-function getPrimitivePropertyMatchValue(value: unknown) {
+function getPropertyMatchValue(value: unknown) {
     if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") return undefined;
 
     const matchValue = String(value);
@@ -233,7 +218,7 @@ function getFeaturePropertyValues(layer: unknown, propertyName: string): string[
     const record = parsedLayer as Record<string, any>;
     const values = new Set<string>();
     const collectValue = (feature: any) => {
-        const value = getPrimitivePropertyMatchValue(getFeatureProperty(feature, propertyName));
+        const value = getPropertyMatchValue(getFeatureProperty(feature, propertyName));
 
         if (value) {
             values.add(value);
@@ -250,12 +235,30 @@ function getFeaturePropertyValues(layer: unknown, propertyName: string): string[
         return Array.from(values);
     }
 
-    const value = getPrimitivePropertyMatchValue(getFeatureProperty(record, propertyName));
+    const value = getPropertyMatchValue(getFeatureProperty(record, propertyName));
     return value ? [value] : [];
 }
 
 function hasLayerProperty(layer: unknown, propertyName: string): boolean {
     return getFeaturePropertyValues(layer, propertyName).length > 0;
+}
+
+function hasFeaturesWithoutPropertyValue(layer: unknown, propertyName: string): boolean {
+    const parsedLayer = parseFeatureCollection(layer);
+    if (!parsedLayer || typeof parsedLayer !== "object" || typeof parsedLayer === "string") {
+        return false;
+    }
+
+    const record = parsedLayer as Record<string, any>;
+    const isMissingValue = (feature: any) => (
+        getPropertyMatchValue(getFeatureProperty(feature, propertyName)) === undefined
+    );
+
+    if (record.type === "FeatureCollection" && Array.isArray(record.features)) {
+        return record.features.some(isMissingValue);
+    }
+
+    return record.type === "Feature" && isMissingValue(record);
 }
 
 function isPzzCheckResponseLayer(name: string | undefined, layer: unknown) {
@@ -277,22 +280,12 @@ function isFunctionalZoneLayer(name: string | undefined, layer: unknown) {
 
     return normalizedName === "функциональные зоны" ||
         normalizedName === "functional_zones.geojson" ||
-        hasLayerProperty(layer, FUNCTIONAL_ZONE_PROPERTY) ||
+        hasLayerProperty(layer, FUNCTIONAL_ZONE_ID_PROPERTY) ||
+        hasLayerProperty(layer, FUNCTIONAL_ZONE_NAME_PROPERTY) ||
         (
             hasLayerProperty(layer, GENBUILDER_FUNCTIONAL_ZONE_PROPERTY) &&
             hasLayerProperty(layer, "zone_nickname")
         );
-}
-
-function getFunctionalZoneColor(value: string) {
-    const numericZoneId = Number(value);
-    const zoneId = Number.isFinite(numericZoneId)
-        ? numericZoneId
-        : FUNCTIONAL_ZONE_IDS_BY_CODE[value.trim().toLowerCase()];
-
-    return zoneId === undefined
-        ? FUNCTIONAL_ZONE_FALLBACK_COLOR
-        : FUNCTIONAL_ZONE_COLORS_BY_ID[zoneId] ?? FUNCTIONAL_ZONE_FALLBACK_COLOR;
 }
 
 function getFunctionalZoneStyle(name: string | undefined, layer: unknown): CategoricalLayerStyle | undefined {
@@ -300,28 +293,36 @@ function getFunctionalZoneStyle(name: string | undefined, layer: unknown): Categ
         return;
     }
 
-    const genPlannerZoneValues = getFeaturePropertyValues(layer, FUNCTIONAL_ZONE_PROPERTY);
-    const propertyName = genPlannerZoneValues.length
-        ? FUNCTIONAL_ZONE_PROPERTY
-        : GENBUILDER_FUNCTIONAL_ZONE_PROPERTY;
-    const zoneValues = genPlannerZoneValues.length
-        ? genPlannerZoneValues
-        : getFeaturePropertyValues(layer, GENBUILDER_FUNCTIONAL_ZONE_PROPERTY);
+    const functionalZoneProperty = [
+        FUNCTIONAL_ZONE_ID_PROPERTY,
+        FUNCTIONAL_ZONE_NAME_PROPERTY,
+        GENBUILDER_FUNCTIONAL_ZONE_PROPERTY,
+    ].map((propertyName) => ({
+        propertyName,
+        values: getFeaturePropertyValues(layer, propertyName),
+    })).find(({ values }) => values.length);
 
-    if (!zoneValues.length) {
+    if (!functionalZoneProperty) {
         return;
     }
 
-    const valueColors = zoneValues
+    const valueColors: CategoryColor[] = functionalZoneProperty.values
         .sort((left, right) => left.localeCompare(right, "ru", { numeric: true }))
         .map((value) => [value, getFunctionalZoneColor(value)] as const);
+    if (hasFeaturesWithoutPropertyValue(layer, functionalZoneProperty.propertyName)) {
+        valueColors.push([undefined, FUNCTIONAL_ZONE_FALLBACK_COLOR]);
+    }
+    const isGenPlannerLayer = name?.trim().toLowerCase() === GENPLANNER_ZONE_LAYER_NAME.toLowerCase();
 
     return {
-        propertyName,
+        propertyName: functionalZoneProperty.propertyName,
         valueColors,
-        fillOpacity: GENBUILDER_FILL_OPACITY,
+        fillOpacity: GENERATED_LAYER_FILL_OPACITY,
         legendGradient: getValueColorGradient(valueColors),
-        legendTitle: "Цвета функциональных зон",
+        lineColor: isGenPlannerLayer ? "#6B7280" : undefined,
+        legendTitle: isGenPlannerLayer
+            ? getGenPlannerLegendTitle(valueColors)
+            : "Цвета функциональных зон",
     };
 }
 
@@ -364,11 +365,85 @@ function getVriTop1ValueColors(layer: unknown) {
         .map((value) => [value, getStableValueColor(value)] as const);
 }
 
+function getGenPlannerRoadStyle(name: string | undefined, layer: unknown) {
+    const isGenPlannerRoadLayer = name?.trim().toLowerCase() === GENPLANNER_ROAD_LAYER_NAME.toLowerCase();
+    if (!isGenPlannerRoadLayer) {
+        return;
+    }
+
+    const roadTypeValues = getFeaturePropertyValues(layer, GENPLANNER_ROAD_TYPE_PROPERTY);
+    const propertyName = roadTypeValues.length
+        ? GENPLANNER_ROAD_TYPE_PROPERTY
+        : GENPLANNER_ROAD_LEVEL_PROPERTY;
+    const propertyValues = roadTypeValues.length
+        ? roadTypeValues
+        : getFeaturePropertyValues(layer, GENPLANNER_ROAD_LEVEL_PROPERTY);
+
+    if (!propertyValues.length) {
+        return;
+    }
+
+    const valueColors: CategoryColor[] = propertyValues
+        .sort((left, right) => left.localeCompare(right, "ru", { numeric: true }))
+        .map((value) => {
+            const roadTypeId = getGenPlannerRoadTypeId(value);
+            const color = roadTypeId !== undefined
+                ? GENPLANNER_ROAD_COLORS_BY_ID[roadTypeId]
+                : FUNCTIONAL_ZONE_FALLBACK_COLOR;
+
+            return [value, color] as const;
+        });
+    if (hasFeaturesWithoutPropertyValue(layer, propertyName)) {
+        valueColors.push([undefined, FUNCTIONAL_ZONE_FALLBACK_COLOR]);
+    }
+
+    return {
+        propertyName,
+        valueColors,
+    };
+}
+
+function formatSelectedFeaturePropertyValue(
+    layerName: string,
+    propertyName: string,
+    value: unknown,
+) {
+    const formattedValue = formatFeaturePropertyValue(value);
+    const normalizedPropertyName = normalizePropertyName(propertyName);
+    const normalizedLayerName = layerName.trim().toLowerCase();
+
+    if (
+        normalizedLayerName === GENPLANNER_ZONE_LAYER_NAME.toLowerCase()
+        && normalizedPropertyName === normalizePropertyName(FUNCTIONAL_ZONE_ID_PROPERTY)
+    ) {
+        const zoneName = getFunctionalZoneName(value);
+        return zoneName ? `${formattedValue} — ${zoneName}` : formattedValue;
+    }
+
+    return formattedValue;
+}
+
+function getGenPlannerLegendTitle(valueColors: readonly CategoryColor[]) {
+    const zoneNames = valueColors.map(([value]) => {
+        if (value === undefined) {
+            return "Неизвестная зона";
+        }
+
+        const zoneName = getFunctionalZoneName(value) ?? "Неизвестная зона";
+        return `${value} — ${zoneName}`;
+    });
+
+    return ["Функциональные зоны по типам", ...zoneNames].join("\n");
+}
+
+type CategoryColor = readonly [value: string | undefined, color: string];
+
 type CategoricalLayerStyle = {
     propertyName: string;
-    valueColors: readonly (readonly [string, string])[];
+    valueColors: readonly CategoryColor[];
     fillOpacity: number;
     legendGradient: string | undefined;
+    lineColor?: string;
     fallbackValue?: string;
     legendTitle?: string;
 };
@@ -392,12 +467,23 @@ function getCategoricalLayerStyle(name: string | undefined, layer: unknown): Cat
         return {
             propertyName: GENBUILDER_EXCLUDED_PROPERTY,
             valueColors,
-            fillOpacity: GENBUILDER_FILL_OPACITY,
+            fillOpacity: GENERATED_LAYER_FILL_OPACITY,
             legendGradient: getValueColorGradient(valueColors),
             fallbackValue: "false",
             legendTitle: hasExcludedObjects
                 ? "Сгенерированные — зелёные, исключённые — оранжевые"
                 : "Сгенерированные объекты",
+        };
+    }
+
+    const genPlannerRoadStyle = getGenPlannerRoadStyle(name, layer);
+    if (genPlannerRoadStyle) {
+        return {
+            propertyName: genPlannerRoadStyle.propertyName,
+            valueColors: genPlannerRoadStyle.valueColors,
+            fillOpacity: GENERATED_LAYER_FILL_OPACITY,
+            legendGradient: getValueColorGradient(genPlannerRoadStyle.valueColors),
+            legendTitle: "Дороги по типам",
         };
     }
 
@@ -445,14 +531,15 @@ function getCategoricalLayerStyle(name: string | undefined, layer: unknown): Cat
 function filterLayerByPropertyValue(
     layer: unknown,
     propertyName: string,
-    expectedValue: string,
+    expectedValue: string | undefined,
     fallbackValue?: string,
 ): any {
     const parsedLayer = parseFeatureCollection(layer);
     if (!parsedLayer || typeof parsedLayer !== "object" || typeof parsedLayer === "string") return layer;
 
     const matchesValue = (feature: any) => {
-        const value = getPrimitivePropertyMatchValue(getFeatureProperty(feature, propertyName)) ?? fallbackValue;
+        const value = getPropertyMatchValue(getFeatureProperty(feature, propertyName))
+            ?? fallbackValue;
         return value === expectedValue;
     };
 
@@ -475,7 +562,7 @@ function filterLayerByPropertyValue(
     return layer;
 }
 
-function getValueColorGradient(valueColors: readonly (readonly [string, string])[]) {
+function getValueColorGradient(valueColors: readonly CategoryColor[]) {
     if (!valueColors.length) return undefined;
 
     return `linear-gradient(to bottom, ${valueColors.map(([, color]) => color).join(", ")})`;
@@ -781,7 +868,7 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                                             />
                                         )}
                                         <Layer
-                                            {...createLineLayer(lineLayerId, color)}
+                                            {...createLineLayer(lineLayerId, categoricalStyle.lineColor ?? color)}
                                             layout={{ visibility: layer.isVisible ? "visible" : "none" }}
                                         />
                                         {!isBoundaryLayer && (
@@ -914,7 +1001,11 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                                             {key}
                                         </div>
                                         <div className="mt-1 wrap-break-word text-sm text-slate-800 customer-dark:text-content-primary">
-                                            {formatFeaturePropertyValue(propertyValue)}
+                                            {formatSelectedFeaturePropertyValue(
+                                                selectedFeature.layerName,
+                                                key,
+                                                propertyValue,
+                                            )}
                                         </div>
                                     </div>
                                 ))

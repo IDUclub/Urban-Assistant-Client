@@ -20,14 +20,31 @@ import {
     normalizeFunctionalZoneSources,
     validateGenBuilderBlocksFile,
 } from "@lib/genbuilder/utils";
+import {
+    GenPlannerHttpError,
+    streamGenPlannerCustomChat,
+    streamGenPlannerScenarioChat,
+    type GenPlannerStreamEvent,
+} from "@lib/genplanner/client";
+import { saveGeneratedPlan } from "@lib/genplanner/saveGeneratedPlan";
+import {
+    GENPLANNER_ROAD_LAYER_NAME,
+    GENPLANNER_ZONE_LAYER_NAME,
+} from "@lib/genplanner/constants";
+import {
+    type GenPlannerResult,
+    type GenPlannerCustomSetupMessage,
+    type GenPlannerSavePromptMessage,
+} from "@lib/genplanner/types";
 import MapStore from "@lib/MapStore";
 
 const URBAN_API_URL = import.meta.env.VITE_URBAN_API;
 const GENBUILDER_API_URL = import.meta.env.VITE_GENBUILDER_API;
+const GENPLANNER_API_URL = import.meta.env.VITE_GENPLANNER_API;
 const AUTHENTICATED_LAYER_API_URLS = [
     URBAN_API_URL,
     GENBUILDER_API_URL,
-    import.meta.env.VITE_GENPLANNER_API,
+    GENPLANNER_API_URL,
     import.meta.env.VITE_LLM_API,
     import.meta.env.VITE_LLM_CHAT_HISTORY_API,
     import.meta.env.VITE_LLM_RESTRICTIONS_API,
@@ -280,6 +297,34 @@ function toString(value: unknown) {
     return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function getGenPlannerErrorMessage(value: unknown, fallback: string) {
+    const parsed = parseJsonValue(value);
+    const record = asRecord(parsed);
+    const detail = record?.detail;
+
+    const message = (
+        toString(record?.msg) ??
+        toString(record?.message) ??
+        toString(detail) ??
+        toString(parsed)
+    );
+
+    if (message) {
+        return message;
+    }
+
+    const structuredDetail = detail ?? parsed;
+    if (structuredDetail && typeof structuredDetail === "object") {
+        try {
+            return JSON.stringify(structuredDetail);
+        } catch {
+            return fallback;
+        }
+    }
+
+    return fallback;
+}
+
 function isGeoJsonLayerUri(value: unknown) {
     const uri = toString(value);
     if (!uri) return false;
@@ -387,6 +432,37 @@ function extractLayerFromUnknown(
     }
 
     return undefined;
+}
+
+function extractGenPlannerResultLayers(value: unknown): UserChatLayer[] {
+    const response = asRecord(value);
+    if (!response) {
+        return [];
+    }
+
+    const content = asRecord(response.content);
+    const result = [
+        response,
+        asRecord(response.result),
+        content,
+        asRecord(content?.result),
+        asRecord(response.data),
+    ].find((resultWithLayers) => (
+        resultWithLayers && ("zones" in resultWithLayers || "roads" in resultWithLayers)
+    ));
+
+    if (!result) {
+        return [];
+    }
+
+    const zones = normalizeHistoryLayer(result.zones);
+    const roads = normalizeHistoryLayer(result.roads);
+    const layers: UserChatLayer[] = [
+        ...(zones ? [{ name: GENPLANNER_ZONE_LAYER_NAME, layer: zones }] : []),
+        ...(roads ? [{ name: GENPLANNER_ROAD_LAYER_NAME, layer: roads }] : []),
+    ];
+
+    return layers;
 }
 
 function extractTextFromPayload(payload: unknown) {
@@ -655,15 +731,40 @@ type GenBuilderStreamState = {
     hasStreamError: boolean;
 };
 
+type GenPlannerStreamState = {
+    hasReceivedResult: boolean;
+    hasReceivedDone: boolean;
+    hasStreamError: boolean;
+    mode: "scenario" | "custom";
+    projectId?: number;
+    scenarioId?: number;
+    setupId?: string;
+    resultId?: string;
+};
+
 type AddGeoJsonLayerOptions = {
     requestId?: number;
     showError?: boolean;
     onLayerAdded?: () => void;
 };
 
+type ChatMessagePayload =
+    | TextMessage
+    | GeoJSONMessage
+    | ErrorMessage
+    | WarningMessage
+    | InfoMessage
+    | PzzSetupMessage
+    | VriSetupMessage
+    | GenBuilderSetupMessage
+    | GenBuilderClarificationMessage
+    | GenBuilderSavePromptMessage
+    | GenPlannerCustomSetupMessage
+    | GenPlannerSavePromptMessage;
+
 type ChatMessage = {
     type: "request" | "response";
-    message: TextMessage | GeoJSONMessage | ErrorMessage | WarningMessage | InfoMessage | PzzSetupMessage | VriSetupMessage | GenBuilderSetupMessage | GenBuilderClarificationMessage | GenBuilderSavePromptMessage;
+    message: ChatMessagePayload;
 };
 
 type ChatSession = {
@@ -672,7 +773,13 @@ type ChatSession = {
     selectedScenario: number | null;
 };
 
-type ChatTool = "Обеспеченность" | "Проверка объектов по ПЗЗ" | "Проверка ВРИ" | "Зоны ограничений" | "Сгенерировать застройку";
+type ChatTool =
+    | "Обеспеченность"
+    | "Проверка объектов по ПЗЗ"
+    | "Проверка ВРИ"
+    | "Зоны ограничений"
+    | "Сгенерировать застройку"
+    | "Генерация функционального зонирования";
 
 function isPzzSetupMessage(message: ChatMessage["message"]): message is PzzSetupMessage {
     return message.type === "pzz_setup";
@@ -705,6 +812,18 @@ function requestsExistingBuildingsChoice(missing: unknown[] | undefined) {
         return field?.control === "file_or_skip" &&
             field.field === "existing_buildings";
     }) ?? false;
+}
+
+function isGenPlannerSavePromptMessage(
+    message: ChatMessage["message"],
+): message is GenPlannerSavePromptMessage {
+    return message.type === "genplanner_save_prompt";
+}
+
+function isGenPlannerCustomSetupMessage(
+    message: ChatMessage["message"],
+): message is GenPlannerCustomSetupMessage {
+    return message.type === "genplanner_custom_setup";
 }
 
 function normalizePzzTaskStatus(value: unknown): PzzTaskStatus | undefined {
@@ -1013,6 +1132,9 @@ class ChatDataStore {
     currentVriSetupId: number = 0;
     currentGenBuilderSetupId: number = 0;
     currentGenBuilderSavePromptId: number = 0;
+    nextGenPlannerResultId: number = 0;
+    nextGenPlannerSavePromptId: number = 0;
+    nextGenPlannerCustomSetupId: number = 0;
     currentStreamContext?: StreamContext;
     userChats: UserChat[] = [];
     isUserChatsLoading = false;
@@ -1021,6 +1143,9 @@ class ChatDataStore {
     private vriSetupFiles: Map<string, VriSetupFiles> = new Map();
     private genBuilderSetupFiles: Map<string, GenBuilderSetupFiles> = new Map();
     private genBuilderResults: Map<string, unknown> = new Map();
+    private genPlannerResults: Map<string, GenPlannerResult> = new Map();
+    private genPlannerTerritoryFiles: Map<string, File> = new Map();
+    private activeGenPlannerChatId?: string;
 
     chatMap: Map<number, ChatSession> = new Map();
 
@@ -1086,24 +1211,31 @@ class ChatDataStore {
 
     setSelectedContext(value: string | number) {
         this.selectedContext = value;
+        this.activeGenPlannerChatId = undefined;
         this.selectedPzzZoneSource = undefined;
         this.pzzSetupFiles.clear();
         this.vriSetupFiles.clear();
         this.genBuilderSetupFiles.clear();
+        this.genPlannerResults.clear();
+        this.genPlannerTerritoryFiles.clear();
     }
 
     setSelectedScenario(scenarioId: number | null) {
         this.selectedScenario = scenarioId;
+        this.activeGenPlannerChatId = undefined;
         this.selectedPzzZoneSource = undefined;
         this.pzzSetupFiles.clear();
         this.vriSetupFiles.clear();
         this.genBuilderSetupFiles.clear();
+        this.genPlannerResults.clear();
+        this.genPlannerTerritoryFiles.clear();
     }
 
     private removeIncompleteToolSetup(tool: ChatTool | null) {
         const removedPzzSetupIds: string[] = [];
         const removedVriSetupIds: string[] = [];
         const removedGenBuilderSetupIds: string[] = [];
+        const removedGenPlannerSetupIds: string[] = [];
 
         this.chatMessages = this.chatMessages.filter((chatMessage) => {
             if (chatMessage.type !== "response") return true;
@@ -1164,6 +1296,16 @@ class ChatDataStore {
                 return !shouldRemove;
             }
 
+            if (
+                tool === "Генерация функционального зонирования"
+                && isGenPlannerCustomSetupMessage(chatMessage.message)
+            ) {
+                if (chatMessage.message.backendChatId) return true;
+
+                removedGenPlannerSetupIds.push(chatMessage.message.id);
+                return false;
+            }
+
             return true;
         });
 
@@ -1184,6 +1326,9 @@ class ChatDataStore {
         });
         removedGenBuilderSetupIds.forEach((setupId) => {
             this.genBuilderSetupFiles.delete(setupId);
+        });
+        removedGenPlannerSetupIds.forEach((setupId) => {
+            this.genPlannerTerritoryFiles.delete(setupId);
         });
     }
 
@@ -1222,6 +1367,14 @@ class ChatDataStore {
         ) {
             this.startGenBuilderSetup();
         }
+
+        if (
+            tool === "Генерация функционального зонирования"
+            && this.selectedContext === "nonproject"
+            && !this.getActiveGenPlannerCustomSetup()
+        ) {
+            this.startGenPlannerCustomSetup();
+        }
     }
 
     clearChat() {
@@ -1235,12 +1388,15 @@ class ChatDataStore {
         this.streamedResponse = "";
         this.currentStatus = undefined;
         this.activeChatId = undefined;
+        this.activeGenPlannerChatId = undefined;
         this.selectedChatTool = null;
         this.selectedPzzZoneSource = undefined;
         this.pzzSetupFiles.clear();
         this.vriSetupFiles.clear();
         this.genBuilderSetupFiles.clear();
         this.genBuilderResults.clear();
+        this.genPlannerResults.clear();
+        this.genPlannerTerritoryFiles.clear();
         this.parsedContext = null;
 
         MapStore.clearMapLayers();
@@ -1662,6 +1818,7 @@ class ChatDataStore {
         this.isStreaming = false;
         this.currentStatus = undefined;
         this.activeChatId = id;
+        this.activeGenPlannerChatId = undefined;
         this.chatMessages = [...chat.messages];
         this.selectedContext = chat.selectedContext;
         this.selectedScenario = chat.selectedScenario ?? null;
@@ -1670,6 +1827,8 @@ class ChatDataStore {
         this.vriSetupFiles.clear();
         this.genBuilderSetupFiles.clear();
         this.genBuilderResults.clear();
+        this.genPlannerResults.clear();
+        this.genPlannerTerritoryFiles.clear();
 
         const lastRequestIndex = chat.messages.findLastIndex(message => message.type === "request");
         const lastResponseLayers = chat.messages.flatMap((message, ind) =>
@@ -1944,6 +2103,44 @@ class ChatDataStore {
                 chatMessage.type === "response" &&
                 isGenBuilderClarificationMessage(chatMessage.message) &&
                 chatMessage.message.setupId === setupId
+            ) {
+                return chatMessage.message;
+            }
+        }
+
+        return;
+    }
+
+    private getGenPlannerSavePromptMessage(promptId: string) {
+        const chatMessage = this.chatMessages.find(
+            (message) => message.type === "response" &&
+                isGenPlannerSavePromptMessage(message.message) &&
+                message.message.id === promptId,
+        );
+
+        return chatMessage && isGenPlannerSavePromptMessage(chatMessage.message)
+            ? chatMessage.message
+            : undefined;
+    }
+
+    private getGenPlannerCustomSetup(setupId: string) {
+        const chatMessage = this.chatMessages.find(
+            (message) => message.type === "response" &&
+                isGenPlannerCustomSetupMessage(message.message) &&
+                message.message.id === setupId,
+        );
+
+        return chatMessage && isGenPlannerCustomSetupMessage(chatMessage.message)
+            ? chatMessage.message
+            : undefined;
+    }
+
+    private getActiveGenPlannerCustomSetup() {
+        for (let index = this.chatMessages.length - 1; index >= 0; index -= 1) {
+            const chatMessage = this.chatMessages[index];
+            if (
+                chatMessage.type === "response" &&
+                isGenPlannerCustomSetupMessage(chatMessage.message)
             ) {
                 return chatMessage.message;
             }
@@ -3606,7 +3803,604 @@ class ChatDataStore {
         }));
     }
 
+    private startGenPlannerCustomSetup() {
+        const setupId = `genplanner-custom-${this.nextGenPlannerCustomSetupId}`;
+        this.nextGenPlannerCustomSetupId += 1;
+        this.chatMessages.push({
+            type: "response",
+            message: {
+                type: "genplanner_custom_setup",
+                id: setupId,
+                status: "awaiting_file",
+            },
+        });
+    }
+
+    submitGenPlannerTerritoryFile = (setupId: string, file: File) => {
+        const setup = this.getGenPlannerCustomSetup(setupId);
+        if (!setup || setup.backendChatId || setup.status === "running" || setup.status === "submitting") {
+            return;
+        }
+
+        this.genPlannerTerritoryFiles.set(setupId, file);
+        setup.territoryFileName = file.name;
+        setup.status = "ready";
+        setup.errorText = undefined;
+    };
+
+    private handleGenPlannerStreamEvent(
+        streamEvent: GenPlannerStreamEvent,
+        streamState: GenPlannerStreamState,
+        requestId: number,
+    ) {
+        switch (streamEvent.type) {
+            case "chat_created":
+                if (!streamEvent.chatId) {
+                    return;
+                }
+
+                this.activeGenPlannerChatId = streamEvent.chatId;
+                if (streamState.setupId) {
+                    const setup = this.getGenPlannerCustomSetup(streamState.setupId);
+                    if (setup) {
+                        setup.backendChatId = streamEvent.chatId;
+                    }
+                }
+                this.upsertCreatedUserChat({
+                    storage_event_type: "chat_created",
+                    chat_id: streamEvent.chatId,
+                    chat_title: streamEvent.title,
+                });
+                return;
+            case "token":
+                if (streamState.setupId) {
+                    const setup = this.getGenPlannerCustomSetup(streamState.setupId);
+                    if (setup) {
+                        setup.status = "running";
+                    }
+                }
+                this.streamedResponse += streamEvent.content;
+                this.currentStatus = "GenPlanner формирует ответ";
+                return;
+            case "warning":
+                if (streamEvent.stage === "run_generation") {
+                    this.currentStatus = "Параметры генерации требуют уточнения";
+                    return;
+                }
+
+                this.chatMessages.push({
+                    type: "response",
+                    message: {
+                        type: "warning",
+                        text: streamEvent.message ??
+                            "Не удалось сохранить или загрузить историю диалога. Ответ будет сформирован без неё.",
+                    },
+                });
+                return;
+            case "result": {
+                const zones = normalizeBoundaryLayer(streamEvent.zones);
+                const roads = streamEvent.roads === undefined
+                    ? undefined
+                    : normalizeBoundaryLayer(streamEvent.roads);
+
+                if (!zones || (streamState.mode === "scenario" && !roads)) {
+                    const errorText = streamState.mode === "custom"
+                        ? "GenPlanner вернул результат без корректного слоя функциональных зон."
+                        : "GenPlanner вернул результат без корректных слоёв функциональных зон или дорог.";
+
+                    streamState.hasStreamError = true;
+                    if (streamState.setupId) {
+                        const setup = this.getGenPlannerCustomSetup(streamState.setupId);
+                        if (setup) {
+                            setup.status = "error";
+                            setup.errorText = errorText;
+                        }
+                    }
+                    this.commitStreamedResponse();
+                    this.chatMessages.push({
+                        type: "response",
+                        message: { type: "error", text: errorText },
+                    });
+                    return;
+                }
+
+                streamState.hasReceivedResult = true;
+                if (streamState.mode === "scenario" && roads) {
+                    if (!streamState.resultId) {
+                        streamState.resultId = `genplanner-result-${this.nextGenPlannerResultId}`;
+                        this.nextGenPlannerResultId += 1;
+                    }
+
+                    this.genPlannerResults.set(streamState.resultId, { zones, roads });
+                }
+                this.currentStatus = "Функциональное зонирование сгенерировано";
+                this.commitStreamedResponse();
+                MapStore.clearMapLayers();
+
+                const resultLayers: UserChatLayer[] = [
+                    { name: GENPLANNER_ZONE_LAYER_NAME, layer: zones },
+                    ...(roads ? [{ name: GENPLANNER_ROAD_LAYER_NAME, layer: roads }] : []),
+                ];
+
+                resultLayers.forEach((layer) => {
+                    this.chatMessages.push({
+                        type: "response",
+                        message: {
+                            type: "geojson",
+                            name: layer.name,
+                            layer: layer.layer,
+                        },
+                    });
+                    this.addGeoJsonLayerToMap(layer, {
+                        requestId,
+                        showError: true,
+                        onLayerAdded: () => {
+                            if (streamState.mode !== "scenario") {
+                                return;
+                            }
+                            this.currentStreamContext = this.markStreamContextHasMapLayer(this.currentStreamContext);
+                            this.tryAddProjectBoundaryLayer(this.currentStreamContext);
+                        },
+                    });
+                });
+                return;
+            }
+            case "error": {
+                const errorText = getGenPlannerErrorMessage(
+                    streamEvent.detail,
+                    "Не удалось сгенерировать функциональное зонирование.",
+                );
+
+                streamState.hasStreamError = true;
+                if (streamState.setupId) {
+                    const setup = this.getGenPlannerCustomSetup(streamState.setupId);
+                    if (setup) {
+                        setup.status = "error";
+                        setup.errorText = errorText;
+                    }
+                }
+                this.commitStreamedResponse();
+                this.chatMessages.push({
+                    type: "response",
+                    message: { type: "error", text: errorText },
+                });
+                return;
+            }
+            case "done":
+                streamState.hasReceivedDone = true;
+                if (streamState.setupId) {
+                    const setup = this.getGenPlannerCustomSetup(streamState.setupId);
+                    if (setup && setup.status !== "error") {
+                        setup.status = "ready";
+                    }
+                    if (setup?.backendChatId) {
+                        this.genPlannerTerritoryFiles.delete(streamState.setupId);
+                    }
+                }
+                if (streamEvent.chatId) {
+                    this.activeGenPlannerChatId = streamEvent.chatId;
+                    this.activeChatId = streamEvent.chatId;
+                }
+                return;
+            case "unknown":
+                return;
+        }
+    }
+
+    private addGenPlannerSavePrompt(streamState: GenPlannerStreamState) {
+        if (
+            streamState.hasStreamError ||
+            !streamState.hasReceivedResult ||
+            !streamState.hasReceivedDone ||
+            streamState.mode !== "scenario" ||
+            !streamState.resultId ||
+            streamState.projectId === undefined ||
+            streamState.scenarioId === undefined
+        ) return;
+
+        const promptId = `genplanner-save-${this.nextGenPlannerSavePromptId}`;
+        this.nextGenPlannerSavePromptId += 1;
+        this.chatMessages.push({
+            type: "response",
+            message: {
+                type: "genplanner_save_prompt",
+                id: promptId,
+                resultId: streamState.resultId,
+                projectId: streamState.projectId,
+                scenarioId: streamState.scenarioId,
+                status: "pending",
+            },
+        });
+    }
+
+    private sendGenPlannerCustomChatRequest(message: string) {
+        const userQuery = message.trim();
+        const setup = this.getActiveGenPlannerCustomSetup();
+        const accessToken = AuthStore.accessToken;
+
+        if (!userQuery || !setup) {
+            return;
+        }
+
+        if (this.selectedContext !== "nonproject") {
+            setup.status = "error";
+            setup.errorText = "Контекст чата изменился. Запустите генерацию заново.";
+            return;
+        }
+
+        if (setup.status === "submitting" || setup.status === "running") {
+            return;
+        }
+
+        const chatId = setup.backendChatId;
+        const territoryFile = chatId
+            ? undefined
+            : this.genPlannerTerritoryFiles.get(setup.id);
+
+        if (!chatId && !territoryFile) {
+            setup.status = "awaiting_file";
+            setup.errorText = "Сначала загрузите файл границы территории.";
+            return;
+        }
+
+        if (!GENPLANNER_API_URL || !accessToken) {
+            setup.status = "error";
+            setup.errorText = !GENPLANNER_API_URL
+                ? "Не задан адрес сервиса GenPlanner (VITE_GENPLANNER_API)."
+                : "Не удалось получить токен пользователя. Авторизуйтесь заново.";
+            return;
+        }
+
+        this.abortController?.abort();
+        this.abortController = new AbortController();
+        this.currentStreamRequestId += 1;
+        const requestId = this.currentStreamRequestId;
+        this.currentStreamContext = undefined;
+        this.streamedResponse = "";
+        this.isStreaming = true;
+        this.currentStatus = "GenPlanner обрабатывает запрос";
+        setup.status = "submitting";
+        setup.errorText = undefined;
+        this.chatMessages.push({
+            type: "request",
+            message: { type: "text", text: userQuery },
+        });
+
+        const streamState: GenPlannerStreamState = {
+            hasReceivedResult: false,
+            hasReceivedDone: false,
+            hasStreamError: false,
+            mode: "custom",
+            setupId: setup.id,
+        };
+
+        return streamGenPlannerCustomChat({
+            baseUrl: GENPLANNER_API_URL,
+            accessToken,
+            request: {
+                userQuery,
+                chatId,
+                territoryFile,
+            },
+            signal: this.abortController.signal,
+            onOpen: () => {
+                runInAction(() => {
+                    if (this.currentStreamRequestId !== requestId) {
+                        return;
+                    }
+                    setup.status = "running";
+                    this.currentStatus = "GenPlanner формирует ответ";
+                });
+            },
+            onEvent: (streamEvent) => {
+                runInAction(() => {
+                    if (this.currentStreamRequestId !== requestId) {
+                        return;
+                    }
+                    this.handleGenPlannerStreamEvent(streamEvent, streamState, requestId);
+                });
+            },
+        })
+        .then(action(() => {
+            if (this.currentStreamRequestId !== requestId) {
+                return;
+            }
+
+            this.commitStreamedResponse();
+            if (!streamState.hasStreamError && !streamState.hasReceivedDone) {
+                streamState.hasStreamError = true;
+                setup.status = "error";
+                setup.errorText = "Поток GenPlanner завершился преждевременно.";
+                this.chatMessages.push({
+                    type: "response",
+                    message: { type: "error", text: setup.errorText },
+                });
+            }
+        }))
+        .catch(action((error) => {
+            if (this.currentStreamRequestId !== requestId) {
+                return;
+            }
+
+            if (error?.name === "AbortError" || error?.name === "CanceledError") {
+                this.commitStreamedResponse();
+                setup.status = chatId ? "ready" : "error";
+                return;
+            }
+
+            console.error("Error streaming custom GenPlanner generation:", error);
+            const errorText = error instanceof GenPlannerHttpError
+                ? getGenPlannerErrorMessage(
+                    error.data,
+                    `Не удалось подключиться к GenPlanner (ошибка ${error.status}).`,
+                )
+                : "Не удалось подключиться к сервису GenPlanner.";
+
+            setup.status = "error";
+            setup.errorText = errorText;
+            this.commitStreamedResponse();
+            this.chatMessages.push({
+                type: "response",
+                message: { type: "error", text: errorText },
+            });
+        }))
+        .finally(action(() => {
+            if (this.currentStreamRequestId !== requestId) {
+                return;
+            }
+
+            this.isStreaming = false;
+            this.currentStatus = undefined;
+            this.abortController = undefined;
+            this.getUserChats();
+        }));
+    }
+
+    private sendGenPlannerScenarioChatRequest(message: string) {
+        const userQuery = message.trim();
+        const scenarioId = this.selectedScenario;
+        const projectId = typeof this.selectedContext === "number"
+            ? this.selectedContext
+            : undefined;
+        const accessToken = AuthStore.accessToken;
+
+        if (!userQuery) {
+            return;
+        }
+
+        if (projectId === undefined || scenarioId === null) {
+            this.chatMessages.push({
+                type: "response",
+                message: {
+                    type: "error",
+                    text: "Для генерации функционального зонирования выберите проект и сценарий.",
+                },
+            });
+            return;
+        }
+
+        if (!GENPLANNER_API_URL || !accessToken) {
+            this.chatMessages.push({
+                type: "response",
+                message: {
+                    type: "error",
+                    text: !GENPLANNER_API_URL
+                        ? "Не задан адрес сервиса GenPlanner (VITE_GENPLANNER_API)."
+                        : "Не удалось получить токен пользователя. Авторизуйтесь заново.",
+                },
+            });
+            return;
+        }
+
+        this.abortController?.abort();
+        this.abortController = new AbortController();
+        this.currentStreamRequestId += 1;
+        const requestId = this.currentStreamRequestId;
+        this.currentStreamContext = this.createProjectBoundaryStreamContext(projectId);
+        this.streamedResponse = "";
+        this.isStreaming = true;
+        this.currentStatus = "GenPlanner обрабатывает запрос";
+        this.chatMessages.push({
+            type: "request",
+            message: { type: "text", text: userQuery },
+        });
+
+        const streamState: GenPlannerStreamState = {
+            hasReceivedResult: false,
+            hasReceivedDone: false,
+            hasStreamError: false,
+            mode: "scenario",
+            projectId,
+            scenarioId,
+        };
+
+        return streamGenPlannerScenarioChat({
+            baseUrl: GENPLANNER_API_URL,
+            accessToken,
+            request: {
+                scenarioId,
+                userQuery,
+                chatId: this.activeGenPlannerChatId ?? this.getActiveBackendChatId(),
+                test: false,
+            },
+            signal: this.abortController.signal,
+            onOpen: () => {
+                runInAction(() => {
+                    if (this.currentStreamRequestId !== requestId) {
+                        return;
+                    }
+                    this.currentStatus = "GenPlanner формирует ответ";
+                });
+            },
+            onEvent: (streamEvent) => {
+                runInAction(() => {
+                    if (this.currentStreamRequestId !== requestId) {
+                        return;
+                    }
+                    this.handleGenPlannerStreamEvent(streamEvent, streamState, requestId);
+                });
+            },
+        })
+        .then(action(() => {
+            if (this.currentStreamRequestId !== requestId) {
+                return;
+            }
+
+            this.commitStreamedResponse();
+            if (!streamState.hasStreamError && !streamState.hasReceivedDone) {
+                streamState.hasStreamError = true;
+                this.chatMessages.push({
+                    type: "response",
+                    message: {
+                        type: "error",
+                        text: "Поток GenPlanner завершился преждевременно. Попробуйте отправить запрос ещё раз.",
+                    },
+                });
+            }
+            this.addGenPlannerSavePrompt(streamState);
+        }))
+        .catch(action((error) => {
+            if (this.currentStreamRequestId !== requestId) {
+                return;
+            }
+
+            if (error?.name === "AbortError" || error?.name === "CanceledError") {
+                this.commitStreamedResponse();
+                return;
+            }
+
+            console.error("Error streaming GenPlanner generation:", error);
+
+            const errorText = error instanceof GenPlannerHttpError
+                ? error.status === 503
+                    ? "Чат GenPlanner сейчас недоступен. Попробуйте ещё раз позже."
+                    : getGenPlannerErrorMessage(
+                        error.data,
+                        `Не удалось подключиться к GenPlanner (ошибка ${error.status}).`,
+                    )
+                : "Не удалось подключиться к сервису GenPlanner.";
+
+            this.commitStreamedResponse();
+            this.chatMessages.push({
+                type: "response",
+                message: { type: "error", text: errorText },
+            });
+        }))
+        .finally(action(() => {
+            if (this.currentStreamRequestId !== requestId) {
+                return;
+            }
+
+            this.isStreaming = false;
+            this.currentStatus = undefined;
+            this.abortController = undefined;
+            this.getUserChats();
+        }));
+    }
+
+    saveGenPlannerResult = async (promptId: string) => {
+        const promptMessage = this.getGenPlannerSavePromptMessage(promptId);
+        if (
+            !promptMessage ||
+            promptMessage.status !== "pending"
+        ) return;
+
+        if (
+            this.selectedContext !== promptMessage.projectId ||
+            this.selectedScenario !== promptMessage.scenarioId
+        ) {
+            promptMessage.status = "error";
+            promptMessage.errorText = "Проект или сценарий изменился. Вернитесь к исходному сценарию, чтобы сохранить результат.";
+            return;
+        }
+
+        const accessToken = AuthStore.accessToken;
+        if (!URBAN_API_URL || !accessToken) {
+            promptMessage.status = "error";
+            promptMessage.errorText = "Не удалось определить адрес Urban API или токен пользователя.";
+            return;
+        }
+
+        const storedResult = this.genPlannerResults.get(promptMessage.resultId);
+        if (!storedResult) {
+            promptMessage.status = "error";
+            promptMessage.errorText = "Результат генерации недоступен для сохранения.";
+            return;
+        }
+
+        promptMessage.status = "saving";
+        promptMessage.errorText = undefined;
+
+        try {
+            const territoryId = await DataStore.getProjectTerritoryId(promptMessage.projectId);
+            const result = await saveGeneratedPlan({
+                baseUrl: URBAN_API_URL,
+                accessToken,
+                scenarioId: promptMessage.scenarioId,
+                territoryId,
+                result: storedResult,
+            });
+
+            runInAction(() => {
+                promptMessage.result = result;
+                const totalCount = result.zoneTotalCount + result.roadTotalCount;
+                const failedCount = result.zoneFailedCount + result.roadFailedCount;
+
+                if (totalCount === 0) {
+                    promptMessage.status = "error";
+                    promptMessage.errorText = "В результате не найдены зоны или дороги, которые можно сохранить.";
+                    return;
+                }
+
+                if (failedCount > 0) {
+                    promptMessage.status = "error";
+                    promptMessage.errorText = [
+                        `Сохранено зон: ${result.zoneSavedCount} из ${result.zoneTotalCount}; дорог: ${result.roadSavedCount} из ${result.roadTotalCount}.`,
+                        result.errors[0],
+                    ].filter(Boolean).join(" ");
+                    return;
+                }
+
+                promptMessage.status = "saved";
+                this.genPlannerResults.delete(promptMessage.resultId);
+            });
+        } catch (error) {
+            console.error("Error saving GenPlanner result:", error);
+            runInAction(() => {
+                promptMessage.status = "error";
+                promptMessage.errorText = error instanceof Error
+                    ? error.message
+                    : "Не удалось сохранить функциональное зонирование в сценарии.";
+            });
+        }
+    };
+
+    declineGenPlannerResult(promptId: string) {
+        const promptMessage = this.getGenPlannerSavePromptMessage(promptId);
+        if (
+            !promptMessage ||
+            (promptMessage.status !== "pending" && promptMessage.status !== "error")
+        ) return;
+
+        promptMessage.status = "declined";
+        this.genPlannerResults.delete(promptMessage.resultId);
+    }
+
     sendChatMessage = async (message: string) => {
+        if (this.selectedChatTool === "Генерация функционального зонирования") {
+            if (this.selectedContext === "nonproject") {
+                const setup = this.getActiveGenPlannerCustomSetup();
+                if (!setup) {
+                    this.startGenPlannerCustomSetup();
+                    return;
+                }
+
+                return this.sendGenPlannerCustomChatRequest(message);
+            }
+
+            return this.sendGenPlannerScenarioChatRequest(message);
+        }
+
         if (this.selectedChatTool === "Сгенерировать застройку") {
             const setupMessage = this.getActiveGenBuilderSetupMessage();
 
@@ -3812,6 +4606,7 @@ class ChatDataStore {
                 return {
                     name: Object.keys(data.result)[0],
                     layer: Object.values(data.result)[0],
+                    result: data.result,
                 };
             }
             return null;
@@ -3847,7 +4642,7 @@ class ChatDataStore {
         this.selectedScenario = null;
     }
 
-    private async getLayerForUserChatPart(
+    private async getLayersForUserChatPart(
         messageId: string,
         part: ToolCallPart,
     ) {
@@ -3862,12 +4657,17 @@ class ChatDataStore {
                 part.part_seq,
                 toolCall.step ?? index + 1,
             );
+            const genPlannerLayers = extractGenPlannerResultLayers(layerResponse);
+            if (genPlannerLayers.length) {
+                return genPlannerLayers;
+            }
+
             const layer = extractLayerFromUnknown(layerResponse, fallbackName);
 
-            if (layer) return layer;
+            if (layer) return [layer];
         }
 
-        return undefined;
+        return [];
     }
 
     private async createChatMessagesFromUserChatMessages(
@@ -3900,6 +4700,25 @@ class ChatDataStore {
                 .sort((left, right) => left.part_seq - right.part_seq);
 
             for (const part of sortedParts) {
+                const genPlannerResultLayers = userMessage.role === "assistant"
+                    ? extractGenPlannerResultLayers(part.payload)
+                    : [];
+
+                if (genPlannerResultLayers.length) {
+                    flushText();
+                    genPlannerResultLayers.forEach((layer) => {
+                        messages.push({
+                            type: "response",
+                            message: {
+                                type: "geojson",
+                                name: layer.name,
+                                layer: layer.layer,
+                            },
+                        });
+                    });
+                    continue;
+                }
+
                 const directLayer = userMessage.role === "assistant"
                     ? (
                         extractLayerFromUnknown(
@@ -3937,17 +4756,19 @@ class ChatDataStore {
                     continue;
                 }
 
-                const layer = await this.getLayerForUserChatPart(userMessage.message_id, part);
-                if (!layer) continue;
+                const layers = await this.getLayersForUserChatPart(userMessage.message_id, part);
+                if (!layers.length) continue;
 
                 flushText();
-                messages.push({
-                    type: "response",
-                    message: {
-                        type: "geojson",
-                        name: layer.name,
-                        layer: layer.layer,
-                    },
+                layers.forEach((layer) => {
+                    messages.push({
+                        type: "response",
+                        message: {
+                            type: "geojson",
+                            name: layer.name,
+                            layer: layer.layer,
+                        },
+                    });
                 });
             }
 
@@ -3968,12 +4789,15 @@ class ChatDataStore {
         this.isStreaming = false;
         this.currentStatus = undefined;
         this.activeChatId = chatId;
+        this.activeGenPlannerChatId = undefined;
         this.isUserChatOpening = true;
         this.chatMessages = [];
         this.pzzSetupFiles.clear();
         this.vriSetupFiles.clear();
         this.genBuilderSetupFiles.clear();
         this.genBuilderResults.clear();
+        this.genPlannerResults.clear();
+        this.genPlannerTerritoryFiles.clear();
         this.applyUserChatContext(chat);
         MapStore.clearMapLayers();
 

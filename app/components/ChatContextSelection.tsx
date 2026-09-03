@@ -19,6 +19,7 @@ const CHAT_SERVICES = [
   "Зоны ограничений",
   "Проверка объектов по ПЗЗ",
   "Сгенерировать застройку",
+  "Генерация функционального зонирования",
   "Обеспеченность",
   "Проверка ВРИ",
 ] as const;
@@ -179,14 +180,19 @@ const ChatContextSelection = observer(() => {
             ? `${selectedContextLabel} / ${selectedScenarioLabel}`
             : selectedContextLabel;
     const hasScenarioSelection = selectedContext !== "nonproject"
-        && scenarioOptions.length > 0;
+        && selectedScenario !== null
+        && scenarioOptions.some((option) => Number(option.value) === selectedScenario);
     const availableServices = selectedContext === "nonproject"
         ? CHAT_SERVICES.filter((service) => (
             service === "Проверка объектов по ПЗЗ"
             || service === "Проверка ВРИ"
             || service === "Сгенерировать застройку"
+            || service === "Генерация функционального зонирования"
         ))
-        : CHAT_SERVICES;
+        : CHAT_SERVICES.filter((service) => (
+            service !== "Генерация функционального зонирования"
+            || hasScenarioSelection
+        ));
 
     useEffect(() => {
         if (selectedContext === "nonproject") {
@@ -208,15 +214,12 @@ const ChatContextSelection = observer(() => {
 
     useEffect(() => {
         if (
-            selectedContext === "nonproject"
-            && selectedChatTool !== null
-            && selectedChatTool !== "Проверка объектов по ПЗЗ"
-            && selectedChatTool !== "Проверка ВРИ"
-            && selectedChatTool !== "Сгенерировать застройку"
+            selectedChatTool !== null
+            && !availableServices.includes(selectedChatTool)
         ) {
             ChatStore.setSelectedChatTool(null);
         }
-    }, [selectedChatTool, selectedContext]);
+    }, [selectedChatTool, selectedContext, hasScenarioSelection]);
 
     const togglePanel = () => {
         setIsOpen((current) => {
