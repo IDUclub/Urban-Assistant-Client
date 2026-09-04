@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { observer } from "mobx-react-lite";
-import { IoChevronDown, IoChevronUp } from "react-icons/io5";
+import { IoChevronDown, IoChevronUp, IoClose } from "react-icons/io5";
 import {
     MdOutlineVisibility,
     MdOutlineVisibilityOff,
@@ -9,6 +9,7 @@ import {
 import Map, { Layer, Source } from "react-map-gl/mapbox";
 import type { MapRef } from "react-map-gl/mapbox";
 import type { MapMouseEvent } from "react-map-gl/mapbox";
+import type { Feature, Geometry } from "geojson";
 import "mapbox-gl/dist/mapbox-gl.css";
 import ChatStore from "@lib/ChatStore";
 import MapStore from "@lib/MapStore";
@@ -22,6 +23,7 @@ import {
 import {
     GENPLANNER_ROAD_COLORS_BY_ID,
     GENPLANNER_ROAD_LEVEL_PROPERTY,
+    GENPLANNER_ROAD_NAMES_BY_ID,
     GENPLANNER_ROAD_TYPE_PROPERTY,
     getGenPlannerRoadTypeId,
 } from "@lib/genplanner/roads";
@@ -143,6 +145,8 @@ const DEFAULT_FILL_OPACITY = 0.24;
 const PZZ_VERDICT_FILL_OPACITY = 0.65;
 const VRI_TOP1_FILL_OPACITY = 0.65;
 const GENERATED_LAYER_FILL_OPACITY = 0.65;
+const SELECTED_FEATURE_COLOR = "#EF4444";
+const SELECTED_FEATURE_OUTLINE_COLOR = "#FFFFFF";
 
 function getPropertyMatchValue(value: unknown) {
     if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") return undefined;
@@ -448,6 +452,56 @@ type CategoricalLayerStyle = {
     legendTitle?: string;
 };
 
+type MapLegendItem = {
+    color: string;
+    label: string;
+};
+
+function getLegendValueLabel(
+    layerName: string,
+    propertyName: string,
+    value?: string,
+) {
+    if (value === undefined) {
+        return "Неизвестный тип";
+    }
+
+    if (
+        propertyName === FUNCTIONAL_ZONE_ID_PROPERTY
+        || propertyName === FUNCTIONAL_ZONE_NAME_PROPERTY
+        || propertyName === GENBUILDER_FUNCTIONAL_ZONE_PROPERTY
+    ) {
+        return getFunctionalZoneName(value) ?? value;
+    }
+
+    if (layerName.trim().toLowerCase() === GENPLANNER_ROAD_LAYER_NAME.toLowerCase()) {
+        const roadTypeId = getGenPlannerRoadTypeId(value);
+        return roadTypeId === undefined
+            ? value
+            : GENPLANNER_ROAD_NAMES_BY_ID[roadTypeId] ?? value;
+    }
+
+    if (propertyName === GENBUILDER_EXCLUDED_PROPERTY) {
+        return value === "true" ? "Исключённые объекты" : "Сгенерированные объекты";
+    }
+
+    return value;
+}
+
+function getMapLegendItems(
+    layer: { name: string; style: { color: string } },
+    categoricalStyle?: CategoricalLayerStyle,
+): MapLegendItem[] {
+    if (!categoricalStyle) {
+        return [{ color: layer.style.color, label: layer.name || "Без названия" }];
+    }
+
+    return categoricalStyle.valueColors.map(([value, color]) => ({
+        color,
+        label: getLegendValueLabel(layer.name, categoricalStyle.propertyName, value),
+    }));
+}
+
 function getCategoricalLayerStyle(name: string | undefined, layer: unknown): CategoricalLayerStyle | undefined {
     const functionalZoneStyle = getFunctionalZoneStyle(name, layer);
 
@@ -635,6 +689,7 @@ type SelectedFeatureState = {
     layerName: string;
     geometryType: string;
     properties: Record<string, unknown>;
+    feature: Feature<Geometry, Record<string, unknown>>;
 };
 
 type ScrollShadowState = {
@@ -658,6 +713,7 @@ function getScrollShadowState(element: HTMLElement | null): ScrollShadowState {
 const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
     const { mapLayers, isMapLayersAvailable } = MapStore;
     const [isMounted, setIsMounted] = useState(false);
+    const [isLegendExpanded, setIsLegendExpanded] = useState(true);
     const [selectedFeature, setSelectedFeature] = useState<SelectedFeatureState | null>(null);
     const [propertyScrollShadows, setPropertyScrollShadows] = useState<ScrollShadowState>({ top: false, bottom: false });
     const mapRef = useRef<MapRef | null>(null);
@@ -686,6 +742,13 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                 : getDefaultRenderedLayerIds(index);
         });
     }, [mapLayers]);
+    const topVisibleLayer = [...mapLayers].reverse().find((layer) => layer.isVisible);
+    const topVisibleLayerStyle = topVisibleLayer
+        ? getCategoricalLayerStyle(topVisibleLayer.name, topVisibleLayer.layer)
+        : undefined;
+    const mapLegendItems = topVisibleLayer
+        ? getMapLegendItems(topVisibleLayer, topVisibleLayerStyle)
+        : [];
 
     const downloadLayer = (name: string, layer: unknown) => {
         const fileName = `${(name || "layer")
@@ -740,10 +803,17 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
         const layerIndex = layerIndexMatch ? Number(layerIndexMatch[1]) : -1;
         const sourceLayer = mapLayers[layerIndex];
 
+        const properties = clickedFeature.properties ?? {};
+
         setSelectedFeature({
             layerName: sourceLayer?.name || "Без названия",
             geometryType: clickedFeature.geometry?.type || "Unknown",
-            properties: (clickedFeature.properties as Record<string, unknown> | undefined) ?? {},
+            properties,
+            feature: {
+                type: "Feature",
+                geometry: clickedFeature.geometry,
+                properties,
+            },
         });
     };
 
@@ -837,6 +907,7 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                     mapboxAccessToken={mapboxToken}
                     onClick={handleFeatureClick}
                     cursor={interactiveLayerIds.length ? "pointer" : "default"}
+                    style={{ borderRadius: "inherit", overflow: "hidden" }}
                 >
                     {mapLayers.map((layer, index) => {
                         if (!layer) return null;
@@ -908,15 +979,57 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                             </Source>
                         );
                     })}
+                    {selectedFeature && (
+                        <Source
+                            id="selected-feature-source"
+                            type="geojson"
+                            data={selectedFeature.feature}
+                        >
+                            <Layer
+                                id="selected-feature-line-outline"
+                                type="line"
+                                paint={{
+                                    "line-color": SELECTED_FEATURE_OUTLINE_COLOR,
+                                    "line-width": 7,
+                                }}
+                            />
+                            <Layer
+                                id="selected-feature-line"
+                                type="line"
+                                paint={{
+                                    "line-color": SELECTED_FEATURE_COLOR,
+                                    "line-width": 4,
+                                }}
+                            />
+                            <Layer
+                                id="selected-feature-point-outline"
+                                type="circle"
+                                paint={{
+                                    "circle-radius": 10,
+                                    "circle-color": SELECTED_FEATURE_OUTLINE_COLOR,
+                                }}
+                                filter={["==", "$type", "Point"]}
+                            />
+                            <Layer
+                                id="selected-feature-point"
+                                type="circle"
+                                paint={{
+                                    "circle-radius": 7,
+                                    "circle-color": SELECTED_FEATURE_COLOR,
+                                }}
+                                filter={["==", "$type", "Point"]}
+                            />
+                        </Source>
+                    )}
                 </Map>
             )}
             {isMapLayersAvailable && (
-                <div className="pointer-events-auto absolute left-4 top-4 z-10 h-1/2 w-[min(18rem,calc(100%-2rem))] max-w-72">
-                    <div className="flex h-full flex-col overflow-hidden rounded-3xl border border-gray-200 bg-white/90 px-6 py-4 shadow-sm backdrop-blur-lg customer-dark:border-ui-border customer-dark:bg-surface-panel/90">
-                        <div className="mb-4 shrink-0 text-xs font-semibold uppercase tracking-[0.14em] text-gray-500 customer-dark:text-content-muted">
+                <div className="pointer-events-auto absolute left-4 top-4 z-10 h-[40%] w-[min(18rem,calc(100%-2rem))] max-w-72">
+                    <div className="flex h-full flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white/30 px-4 py-3 shadow-sm backdrop-blur-lg customer-dark:border-ui-border customer-dark:bg-surface-panel/30">
+                        <div className="mb-3 shrink-0 text-xs font-semibold uppercase tracking-[0.14em] text-gray-500 customer-dark:text-content-muted">
                             Отображаемые слои
                         </div>
-                        <div className="min-h-0 flex flex-1 flex-col gap-2 overflow-y-auto">
+                        <div className="min-h-0 flex flex-1 flex-col gap-1.5 overflow-y-auto">
                             {mapLayers.map((layer) => {
                                 const categoricalStyle = getCategoricalLayerStyle(layer.name, layer.layer);
                                 const legendGradient = categoricalStyle?.legendGradient;
@@ -925,7 +1038,7 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                                     <div
                                         key={layer.id}
                                         className={`
-                                            flex items-center gap-3 rounded-2xl py-2 text-sm
+                                            flex items-center gap-2 rounded-2xl text-[13px]
                                             ${layer.isVisible
                                               ? "text-gray-700 customer-dark:text-content-secondary"
                                               : "text-gray-400 customer-dark:text-content-muted"}
@@ -969,26 +1082,59 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                     </div>
                 </div>
             )}
+            {topVisibleLayer && mapLegendItems.length > 0 && (
+                <div className="pointer-events-auto absolute bottom-8 left-4 z-10 flex max-h-[calc(60%-3.5rem)] w-[min(18rem,calc(100%-2rem))] flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white/30 shadow-lg backdrop-blur customer-dark:border-ui-border customer-dark:bg-surface-panel/30">
+                    <button
+                        type="button"
+                        className="flex w-full shrink-0 cursor-pointer items-center justify-between gap-3 px-4 py-2.5 text-left text-gray-500 transition-colors hover:bg-slate-50/70 customer-dark:text-content-muted customer-dark:hover:bg-surface-hover/70"
+                        onClick={() => setIsLegendExpanded((currentValue) => !currentValue)}
+                        aria-expanded={isLegendExpanded}
+                    >
+                        <span className="truncate text-xs font-semibold uppercase tracking-[0.14em]">
+                            {topVisibleLayer.name || "Без названия"}
+                        </span>
+                        {isLegendExpanded ? <IoChevronDown size={16} /> : <IoChevronUp size={16} />}
+                    </button>
+                    {isLegendExpanded && (
+                        <div className="map-legend-scroll min-h-0 max-h-28 overflow-y-auto border-t border-gray-200 px-4 py-2.5 customer-dark:border-ui-border">
+                            <div className="flex flex-col gap-1.5">
+                                {mapLegendItems.map((item, index) => (
+                                    <div
+                                        key={`${item.label}-${index}`}
+                                        className="flex items-center gap-2 text-[13px] text-slate-700 customer-dark:text-content-secondary"
+                                    >
+                                        <span
+                                            className="h-3 w-3 shrink-0 rounded-sm border border-black/10"
+                                            style={{ backgroundColor: item.color }}
+                                        />
+                                        <span>{item.label}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )}
             {selectedFeature && (
-                <div className="pointer-events-auto absolute top-4 right-4 z-10 flex max-h-[calc(100%-2rem)] w-[min(24rem,calc(100%-2rem))] flex-col overflow-hidden rounded-3xl border border-gray-200 bg-white/95 p-4 shadow-lg backdrop-blur customer-dark:border-ui-border customer-dark:bg-surface-panel/95">
-                    <div className="mb-3 flex shrink-0 items-start justify-between gap-3">
+                <div className="pointer-events-auto absolute top-4 right-4 z-10 flex max-h-[calc(100%-2rem)] w-[min(24rem,calc(100%-2rem))] flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white/50 p-3 shadow-lg backdrop-blur customer-dark:border-ui-border customer-dark:bg-surface-panel/50">
+                    <div className="mb-2 flex shrink-0 items-center justify-between gap-3">
                         <div className="min-w-0">
-                            <div className="truncate text-sm font-semibold text-slate-900 customer-dark:text-content-primary">
+                            <div className="truncate text-xs font-semibold uppercase tracking-[0.14em] text-gray-500 customer-dark:text-content-muted">
                                 {selectedFeature.layerName}
                             </div>
                         </div>
                         <button
                             type="button"
-                            className="shrink-0 cursor-pointer rounded-full px-2 py-1 text-sm text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800 customer-dark:text-content-muted customer-dark:hover:bg-surface-hover customer-dark:hover:text-content-primary"
+                            className="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-full text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800 customer-dark:text-content-muted customer-dark:hover:bg-surface-hover customer-dark:hover:text-content-primary"
                             onClick={() => setSelectedFeature(null)}
                             aria-label="Закрыть свойства"
                         >
-                            ×
+                            <IoClose aria-hidden="true" size={16} />
                         </button>
                     </div>
-                    <div className="relative overflow-hidden rounded-2xl bg-slate-50 customer-dark:bg-surface-muted">
+                    <div className="relative overflow-hidden rounded-xl bg-slate-50/60 customer-dark:bg-surface-muted/60">
                         <div
-                            className="max-h-[max(8rem,calc(50vh-7rem))] overflow-y-auto overscroll-contain px-3 pb-8 pt-2"
+                            className="max-h-[calc(50vh-7rem)] overflow-y-auto overscroll-contain py-2"
                             ref={propertyListRef}
                             onScroll={updatePropertyScrollShadows}
                             onWheel={(event) => event.stopPropagation()}
@@ -996,7 +1142,7 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                         >
                             {Object.keys(selectedFeature.properties).length ? (
                                 Object.entries(selectedFeature.properties).map(([key, propertyValue]) => (
-                                    <div key={key} className="border-b border-slate-200 py-2 last:border-b-0 customer-dark:border-ui-border">
+                                    <div key={key} className="mx-3 border-b border-slate-200 py-2 last:border-b-0 customer-dark:border-ui-border">
                                         <div className="text-xs font-medium uppercase tracking-[0.08em] text-slate-500 customer-dark:text-content-muted">
                                             {key}
                                         </div>
@@ -1010,7 +1156,7 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                                     </div>
                                 ))
                             ) : (
-                                <div className="text-sm text-slate-500 customer-dark:text-content-muted">
+                                <div className="mx-3 py-2 text-sm text-slate-500 customer-dark:text-content-muted">
                                     У объекта нет свойств
                                 </div>
                             )}
