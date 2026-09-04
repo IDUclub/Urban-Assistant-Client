@@ -28,7 +28,6 @@ export type GenBuilderStreamEvent =
     | { type: "clarification"; content?: string; missing?: unknown[] }
     | { type: "status"; content?: string }
     | { type: "progress"; stage?: string; content?: string }
-    | { type: "file"; content: unknown }
     | { type: "result"; content: unknown; summary?: unknown }
     | { type: "token"; content: string }
     | { type: "warning"; stage?: string; detail?: string; message?: string }
@@ -88,11 +87,6 @@ function normalizeStreamEvent(rawEvent: RawSseEvent): GenBuilderStreamEvent {
                 type: "progress",
                 stage: asString(record?.stage),
                 content: asString(record?.content),
-            };
-        case "file":
-            return {
-                type: "file",
-                content: record?.content ?? data,
             };
         case "result":
             return {
