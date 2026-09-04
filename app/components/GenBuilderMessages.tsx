@@ -127,7 +127,7 @@ export const GenBuilderSetupMessageCard = observer(({
         <div className="flex w-full flex-col gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-800 customer-dark:border-ui-border customer-dark:bg-surface-muted customer-dark:text-content-primary">
             <div className="flex items-center justify-between gap-3">
                 <span className="font-medium text-slate-900 customer-dark:text-content-primary">
-                    Сгенерировать застройку
+                    Генерация застройки
                 </span>
                 <span className="rounded-full bg-white px-2.5 py-1 text-xs text-slate-500 customer-dark:bg-surface-raised customer-dark:text-content-muted">
                     {statusLabel}
