@@ -460,7 +460,7 @@ type MapLegendItem = {
 function getLegendValueLabel(
     layerName: string,
     propertyName: string,
-    value: string | undefined,
+    value?: string,
 ) {
     if (value === undefined) {
         return "Неизвестный тип";
@@ -490,7 +490,7 @@ function getLegendValueLabel(
 
 function getMapLegendItems(
     layer: { name: string; style: { color: string } },
-    categoricalStyle: CategoricalLayerStyle | undefined,
+    categoricalStyle?: CategoricalLayerStyle,
 ): MapLegendItem[] {
     if (!categoricalStyle) {
         return [{ color: layer.style.color, label: layer.name || "Без названия" }];
