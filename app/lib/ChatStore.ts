@@ -233,19 +233,27 @@ function hasBoundaryLayerContent(layer: unknown): boolean {
     return typeof record.type === "string" && GEOJSON_TYPES.has(record.type) && "coordinates" in record;
 }
 
-export async function downloadGeoJsonLayer(uri: string) {
-    const accessToken = AuthStore.accessToken;
+type DownloadGeoJsonLayerOptions = {
+    accessToken?: string;
+};
+
+export async function downloadGeoJsonLayer(
+    uri: string,
+    options: DownloadGeoJsonLayerOptions = {},
+) {
+    const defaultAccessToken = AuthStore.accessToken;
     const layerOrigin = new URL(uri).origin;
-    const shouldAuthorize = !!accessToken && AUTHENTICATED_LAYER_API_URLS.some((apiUrl) => {
+    const isAuthenticatedApi = AUTHENTICATED_LAYER_API_URLS.some((apiUrl) => {
         try {
             return new URL(apiUrl).origin === layerOrigin;
         } catch {
             return false;
         }
     });
+    const accessToken = options.accessToken ?? (isAuthenticatedApi ? defaultAccessToken : undefined);
     const response = await fetch(uri, {
         redirect: "follow",
-        ...(shouldAuthorize
+        ...(accessToken
             ? { headers: { Authorization: `Bearer ${accessToken}` } }
             : {}),
     });
@@ -485,13 +493,13 @@ function extractTextFromPayload(payload: unknown) {
 function isGeoJsonFilePayload(content: Record<string, any>) {
     const mimeType = toString(content.mime_type ?? content.mimeType)?.toLowerCase();
     const filename = toString(content.filename)?.toLowerCase();
-    const uri = toString(content.uri ?? content.url ?? content.download_url ?? content.downloadUrl)?.toLowerCase();
+    const url = toString(content.url)?.toLowerCase();
 
     return (
         !!mimeType?.includes("geo+json") ||
         !!mimeType?.includes("geojson") ||
         !!filename?.endsWith(".geojson") ||
-        !!uri?.includes(".geojson")
+        !!url?.includes(".geojson")
     );
 }
 
@@ -506,14 +514,9 @@ function extractGeoJsonFileLayer(
     const content = asRecord(record.content) ?? record;
     if (!isGeoJsonFilePayload(content)) return undefined;
 
-    const uri = (
-        toString(content.uri) ??
-        toString(content.url) ??
-        toString(content.download_url) ??
-        toString(content.downloadUrl)
-    );
+    const url = toString(content.url);
 
-    if (!isGeoJsonLayerUri(uri)) return undefined;
+    if (!isGeoJsonLayerUri(url)) return undefined;
 
     return {
         name: (
@@ -521,15 +524,35 @@ function extractGeoJsonFileLayer(
             toString(content.name) ??
             fallbackName
         ),
-        layer: uri,
+        layer: url,
     };
 }
 
-function getVriFileLayer(payload: unknown, eventName?: string): UserChatLayer | undefined {
+function getStreamFileLayer(payload: unknown, eventName?: string): UserChatLayer | undefined {
     const chunkKind = getStreamChunkKind(payload, eventName);
     if (chunkKind !== "file") return undefined;
 
     return extractGeoJsonFileLayer(payload);
+}
+
+const INPUT_ZONE_LAYER_NAMES: Record<string, string> = {
+    input_zones: "Зоны ПЗЗ",
+    functional_zones: "Функциональные зоны",
+};
+
+function getInputZonesLayer(payload: unknown, eventName?: string): UserChatLayer | undefined {
+    if (getStreamChunkKind(payload, eventName) !== "file") {
+        return;
+    }
+
+    const record = asRecord(payload);
+    const content = asRecord(record?.content) ?? record;
+    const displayName = INPUT_ZONE_LAYER_NAMES[toString(content?.name)?.toLowerCase() ?? ""];
+    const url = toString(content?.url);
+
+    return displayName && isGeoJsonLayerUri(url)
+        ? { name: displayName, layer: url }
+        : undefined;
 }
 
 function isVriResultFile(payload: unknown, eventName?: string) {
@@ -543,9 +566,9 @@ function isVriResultFile(payload: unknown, eventName?: string) {
     const role = toString(content.role)?.toLowerCase();
     const name = toString(content.name)?.toLowerCase();
     const filename = toString(content.filename)?.toLowerCase();
-    const uri = toString(content.uri ?? content.url ?? content.download_url ?? content.downloadUrl)?.toLowerCase();
+    const url = toString(content.url)?.toLowerCase();
     const event = eventName?.toLowerCase();
-    const resultMarkers = [name, filename, uri].filter((value): value is string => !!value);
+    const resultMarkers = [name, filename, url].filter((value): value is string => !!value);
 
     return (
         role === "result" ||
@@ -745,6 +768,7 @@ type GenPlannerStreamState = {
 type AddGeoJsonLayerOptions = {
     requestId?: number;
     showError?: boolean;
+    accessToken?: string;
     onLayerAdded?: () => void;
 };
 
@@ -778,7 +802,7 @@ type ChatTool =
     | "Проверка объектов по ПЗЗ"
     | "Проверка ВРИ"
     | "Зоны ограничений"
-    | "Сгенерировать застройку"
+    | "Генерация застройки"
     | "Генерация функционального зонирования";
 
 function isPzzSetupMessage(message: ChatMessage["message"]): message is PzzSetupMessage {
@@ -1277,7 +1301,7 @@ class ChatDataStore {
             }
 
             if (
-                tool === "Сгенерировать застройку"
+                tool === "Генерация застройки"
                 && isGenBuilderSetupMessage(chatMessage.message)
             ) {
                 const setup = chatMessage.message;
@@ -1362,7 +1386,7 @@ class ChatDataStore {
         }
 
         if (
-            tool === "Сгенерировать застройку"
+            tool === "Генерация застройки"
             && !this.hasActiveGenBuilderSetup()
         ) {
             this.startGenBuilderSetup();
@@ -1522,7 +1546,7 @@ class ChatDataStore {
             return;
         }
 
-        void downloadGeoJsonLayer(layerUri)
+        void downloadGeoJsonLayer(layerUri, { accessToken: options.accessToken })
             .then(action((downloadedLayer) => {
                 if (requestId !== this.currentStreamRequestId) return;
 
@@ -2376,6 +2400,13 @@ class ChatDataStore {
                         : "Параметры приняты"
                 );
                 return;
+            case "file": {
+                const inputZonesLayer = getInputZonesLayer(streamEvent.content, "file");
+                if (inputZonesLayer) {
+                    this.appendGeoJsonLayer(inputZonesLayer, { accessToken: AuthStore.accessToken });
+                }
+                return;
+            }
             case "result": {
                 const layer = extractLayerFromUnknown(
                     streamEvent.content,
@@ -3462,7 +3493,10 @@ class ChatDataStore {
         return this.sendVriCheckRequest(setupId, true);
     }
 
-    private appendGeoJsonLayer(layer: UserChatLayer) {
+    private appendGeoJsonLayer(
+        layer: UserChatLayer,
+        options: AddGeoJsonLayerOptions = {},
+    ) {
         this.chatMessages.push({
             type: "response",
             message: {
@@ -3472,7 +3506,7 @@ class ChatDataStore {
             },
         });
 
-        this.addGeoJsonLayerToMap(layer, { showError: true });
+        this.addGeoJsonLayerToMap(layer, { ...options, showError: true });
     }
 
     private appendVriResult(result: unknown) {
@@ -3609,8 +3643,14 @@ class ChatDataStore {
             return streamState;
         }
 
+        const inputZonesLayer = getInputZonesLayer(payload, eventName);
+        if (inputZonesLayer) {
+            this.appendGeoJsonLayer(inputZonesLayer);
+            return streamState;
+        }
+
         const isResultFile = isVriResultFile(payload, eventName);
-        const fileLayer = isResultFile ? getVriFileLayer(payload, eventName) : undefined;
+        const fileLayer = isResultFile ? getStreamFileLayer(payload, eventName) : undefined;
         if (fileLayer) {
             this.appendGeoJsonLayer(fileLayer);
 
@@ -4401,7 +4441,7 @@ class ChatDataStore {
             return this.sendGenPlannerScenarioChatRequest(message);
         }
 
-        if (this.selectedChatTool === "Сгенерировать застройку") {
+        if (this.selectedChatTool === "Генерация застройки") {
             const setupMessage = this.getActiveGenBuilderSetupMessage();
 
             if (!setupMessage) {
