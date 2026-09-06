@@ -7,6 +7,12 @@ export const GENPLANNER_ROAD_COLORS_BY_ID: Record<number, string> = {
     52: "#969696",
 };
 
+export const GENPLANNER_ROAD_NAMES_BY_ID: Record<number, string> = {
+    50: "Федеральная",
+    51: "Региональная",
+    52: "Местная",
+};
+
 const GENPLANNER_ROAD_TYPE_IDS = new Set([50, 51, 52]);
 
 const GENPLANNER_ROAD_TYPE_IDS_BY_LEVEL: Record<string, number> = {

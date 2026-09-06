@@ -298,6 +298,25 @@ body::-webkit-scrollbar,
   scrollbar-width: none;
 }
 
+.map-legend-scroll {
+  scrollbar-color: rgb(148 163 184 / 0.8) transparent;
+  scrollbar-width: thin;
+}
+
+.map-legend-scroll::-webkit-scrollbar {
+  display: block;
+  width: 6px;
+}
+
+.map-legend-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.map-legend-scroll::-webkit-scrollbar-thumb {
+  background: rgb(148 163 184 / 0.8);
+  border-radius: 9999px;
+}
+
 button,
 input,
 textarea,
