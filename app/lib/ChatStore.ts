@@ -804,7 +804,8 @@ type ChatTool =
     | "Зоны ограничений"
     | "Генерация застройки"
     | "Генерация функционального зонирования"
-    | "Проверка нормативных ограничений";
+    | "Проверка нормативных ограничений"
+    | "Справка по проекту";
 
 function isPzzSetupMessage(message: ChatMessage["message"]): message is PzzSetupMessage {
     return message.type === "pzz_setup";
@@ -1979,6 +1980,45 @@ class ChatDataStore {
                 console.error("Error streaming chat message:", error);
             })
             .finally(this.finalizeStreamingState);
+    }
+
+    sendScenarioDataQaMessage(message: string) {
+        return axios.get(
+            `${import.meta.env.VITE_LLM_RESTRICTIONS_API}/scenario-data/qa/stream`,
+            {
+                headers: {
+                    Accept: "text/event-stream",
+                    Authorization: `Bearer ${AuthStore.accessToken}`,
+                },
+                params: this.withActiveChatIdParams({
+                    model: "gpt-oss:20b",
+                    request: message,
+                    scenario_id: this.selectedScenario,
+                }),
+                responseType: "stream",
+                adapter: "fetch",
+                signal: this.abortController?.signal,
+            },
+        )
+        .then(async (response) => {
+            await readSseStream(response.data, (streamEvent) => {
+                this.appendStreamChunk(streamEvent.data, streamEvent.eventName);
+            });
+            this.commitStreamedResponse();
+        })
+        .catch((error) => {
+            if (
+                axios.isCancel(error)
+                || error?.name === "AbortError"
+                || error?.name === "CanceledError"
+            ) {
+                this.commitStreamedResponse();
+                return;
+            }
+
+            console.error("Error streaming scenario data QA message:", error);
+        })
+        .finally(this.finalizeStreamingState);
     }
 
  sendNormsMessage(message: string, scenarioId: number) {
@@ -4647,6 +4687,8 @@ class ChatDataStore {
                 return this.startPzzCheckSetup(message);
             } else if (this.selectedChatTool === "Зоны ограничений") {
                 return this.sendRestrictionsContextMessage(message);
+            } else if (this.selectedChatTool === "Справка по проекту") {
+                return this.sendScenarioDataQaMessage(message);
             }
             else if (this.selectedChatTool === "Проверка нормативных ограничений") {
                 return this.sendNormsMessage(message, this.selectedScenario);

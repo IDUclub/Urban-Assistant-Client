@@ -5,15 +5,20 @@ import {
     MdArrowBack,
     MdClose,
     MdOutlineCancel,
+    MdOutlineDescription,
     MdOutlineFolder,
+    MdUploadFile,
 } from "react-icons/md";
 import { LuLayers3 } from "react-icons/lu";
 import DataStore from "@lib/DataStore";
+import DocumentsStore, { type UserDocument } from "@lib/DocumentsStore";
 import ChatStore from "@lib/ChatStore";
 import MapStore from "@lib/MapStore";
 import CustomSelect, { type SelectOption } from "@components/ui/Select";
 import CreateProjectModal from "@components/CreateProjectModal";
 import CreateScenarioModal from "@components/CreateScenarioModal";
+import DocumentsModal from "@components/DocumentsModal";
+import UploadDocumentModal from "@components/UploadDocumentModal";
 
 const CHAT_SERVICES = [
   "Зоны ограничений",
@@ -23,6 +28,7 @@ const CHAT_SERVICES = [
   "Обеспеченность",
   "Проверка ВРИ",
   "Проверка нормативных ограничений",
+  "Справка по проекту",
 ] as const;
 
 type PanelView = "menu" | "context";
@@ -34,6 +40,14 @@ const ChatContextSelection = observer(() => {
     const [panelPlacement, setPanelPlacement] = useState<PanelPlacement>("bottom");
     const [isCreateProjectModalOpen, setIsCreateProjectModalOpen] = useState(false);
     const [isCreateScenarioModalOpen, setIsCreateScenarioModalOpen] = useState(false);
+    const [isDocumentsModalOpen, setIsDocumentsModalOpen] = useState(false);
+    const [isUploadDocumentModalOpen, setIsUploadDocumentModalOpen] = useState(false);
+    const [documentToUpdate, setDocumentToUpdate] = useState<{
+        document: UserDocument;
+        projectId: number;
+        projectName: string;
+    } | null>(null);
+    const [documentNotice, setDocumentNotice] = useState<string | null>(null);
     const containerRef = useRef<HTMLDivElement | null>(null);
     const panelRef = useRef<HTMLDivElement | null>(null);
     const { userProjects, projectScenarios } = DataStore;
@@ -167,6 +181,9 @@ const ChatContextSelection = observer(() => {
     const selectedProjectId = selectedContext === "nonproject"
         ? null
         : Number(selectedContext);
+    const documentCount = selectedProjectId === null
+        ? undefined
+        : DocumentsStore.documentCounts.get(selectedProjectId);
     const baseScenario = currentProjectScenarios.find((scenario) => scenario.isBase);
 
     const selectedContextLabel = contextOptions.find(
@@ -194,6 +211,16 @@ const ChatContextSelection = observer(() => {
             service !== "Генерация функционального зонирования"
             || hasScenarioSelection
         ));
+    const isProjectSelected = selectedProjectId !== null
+        && Number.isFinite(selectedProjectId);
+
+    useEffect(() => {
+        if (selectedProjectId === null || !Number.isFinite(selectedProjectId)) return;
+
+        void DocumentsStore.getProjectDocuments(selectedProjectId, true).catch((error) => {
+            console.error("Error fetching project document count:", error);
+        });
+    }, [selectedProjectId]);
 
     useEffect(() => {
         if (selectedContext === "nonproject") {
@@ -378,7 +405,57 @@ const ChatContextSelection = observer(() => {
                                         </button>
                                     )}
                                 </div>
-
+                                {isProjectSelected && (
+                                  <section className="mt-3 border-t border-slate-100 pt-3 customer-dark:border-ui-border">
+                                    <h3 className="px-1 pb-2 text-xs font-semibold uppercase tracking-wider text-slate-400 customer-dark:text-content-muted">
+                                      Документы
+                                    </h3>
+                                    <div className="grid gap-1 sm:grid-cols-2">
+                                        <button
+                                          type="button"
+                                          className="
+                                            flex w-full items-center justify-between gap-3 rounded-2xl px-3 py-2.5 text-left leading-5
+                                            transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0788CE]/40
+                                            customer:focus-visible:ring-brand-primary/40
+                                            hover:bg-slate-100 customer-dark:hover:bg-surface-hover
+                                          "
+                                          onClick={() => {
+                                              setIsOpen(false);
+                                              setPanelView("menu");
+                                              setIsDocumentsModalOpen(true);
+                                          }}
+                                        >
+                                          <span className="flex min-w-0 items-center gap-2.5">
+                                              <MdOutlineDescription size={19} className="shrink-0" />
+                                              <span className="truncate">Просмотр документов</span>
+                                          </span>
+                                          <span
+                                              className="min-w-6 shrink-0 rounded-full bg-[#EAF5FF] px-2 py-0.5 text-center text-xs font-semibold text-[#0B5E8E] customer:bg-brand-soft customer:text-brand-contrast"
+                                              aria-label={`Документов: ${documentCount ?? 0}`}
+                                          >
+                                              {documentCount ?? 0}
+                                          </span>
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className="
+                                            flex w-full items-center gap-2.5 rounded-2xl px-3 py-2.5 text-left leading-5
+                                            transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0788CE]/40
+                                            customer:focus-visible:ring-brand-primary/40
+                                            hover:bg-slate-100 customer-dark:hover:bg-surface-hover
+                                          "
+                                          onClick={() => {
+                                              setIsOpen(false);
+                                              setPanelView("menu");
+                                              setIsUploadDocumentModalOpen(true);
+                                          }}
+                                        >
+                                          <MdUploadFile size={19} className="shrink-0" />
+                                          <span className="truncate">Загрузить документ</span>
+                                        </button>
+                                    </div>
+                                  </section>
+                                )}
                                 <section className="mt-3 border-t border-slate-100 pt-3 customer-dark:border-ui-border">
                                     <h3 className="px-1 pb-2 text-xs font-semibold uppercase tracking-wider text-slate-400 customer-dark:text-content-muted">
                                         Сервисы
@@ -545,6 +622,48 @@ const ChatContextSelection = observer(() => {
                         ChatStore.setSelectedContext(selectedProjectId);
                         ChatStore.setSelectedScenario(scenario.id);
                     }}
+                />
+            )}
+
+            {isDocumentsModalOpen && !documentToUpdate && selectedProjectId !== null && (
+                <DocumentsModal
+                    projectId={selectedProjectId}
+                    projectName={selectedContextLabel}
+                    onClose={() => {
+                        setIsDocumentsModalOpen(false);
+                        setDocumentNotice(null);
+                    }}
+                    onUpdate={(document) => {
+                        setDocumentNotice(null);
+                        setDocumentToUpdate({
+                            document,
+                            projectId: selectedProjectId,
+                            projectName: selectedContextLabel,
+                        });
+                    }}
+                    notice={documentNotice}
+                />
+            )}
+
+            {documentToUpdate && (
+                <UploadDocumentModal
+                    key={`${documentToUpdate.projectId}-${documentToUpdate.document.id}`}
+                    projectId={documentToUpdate.projectId}
+                    projectName={documentToUpdate.projectName}
+                    initialDocument={documentToUpdate.document}
+                    onClose={() => setDocumentToUpdate(null)}
+                    onSaved={() => {
+                        setDocumentNotice("Документ отправлен на обновление. Изменения появятся в списке после обработки.");
+                    }}
+                />
+            )}
+
+            {isUploadDocumentModalOpen && selectedProjectId !== null && (
+                <UploadDocumentModal
+                    key={selectedProjectId}
+                    projectId={selectedProjectId}
+                    projectName={selectedContextLabel}
+                    onClose={() => setIsUploadDocumentModalOpen(false)}
                 />
             )}
         </>

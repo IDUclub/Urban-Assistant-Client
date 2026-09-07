@@ -13,6 +13,7 @@ import AuthStore from "@lib/AuthStore";
 import PageLoader from "@components/PageLoader";
 import ThemeToggle from "@components/ThemeToggle";
 import UserMenu from "@components/UserMenu";
+import DocumentUploadStatus from "@components/DocumentUploadStatus";
 import { BRAND_THEME } from "@/config";
 import "./app.css";
 
@@ -68,7 +69,12 @@ const App = observer(function App() {
     return <PageLoader />;
   }
 
-  return <Outlet />;
+  return (
+    <>
+      <Outlet />
+      <DocumentUploadStatus />
+    </>
+  );
 });
 
 export default App;
