@@ -20,14 +20,20 @@ jobs:
           ENV_PATH: ${{ secrets.ENV_PATH }}
         run: cp $ENV_PATH/service.env ./service.env
 
-
       - name: Get build tag
         id: date
         run: echo "NOW=$(date +'%Y-%m-%dT%H-%M-%S')" >> $GITHUB_OUTPUT
 
       - name: Build Docker image
         run: |
-          docker build -t ${IMAGE_NAME}:${{ steps.date.outputs.NOW }} .
+      - name: Build Docker image
+        run: |
+          docker build \
+            --network=host \
+            --no-cache \
+            --progress=plain \
+            -t "${IMAGE_NAME}:${{ steps.date.outputs.NOW }}" \
+            .
 
   deploy:
     name: Deploy container
