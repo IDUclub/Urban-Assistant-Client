@@ -1,0 +1,19 @@
+name: Kubernetes dev release
+
+on:
+  push:
+    branches:
+      - dev
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    uses: IDUclub/urban-assistant-deploy/.github/workflows/reusable-application-release.yaml@main
+    with:
+      service: frontend
+      test-command: |
+        npm ci
+        npm run typecheck
+    secrets: inherit
