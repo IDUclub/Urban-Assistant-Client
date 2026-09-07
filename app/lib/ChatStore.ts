@@ -803,7 +803,8 @@ type ChatTool =
     | "Проверка ВРИ"
     | "Зоны ограничений"
     | "Генерация застройки"
-    | "Генерация функционального зонирования";
+    | "Генерация функционального зонирования"
+    | "Проверка нормативных ограничений";
 
 function isPzzSetupMessage(message: ChatMessage["message"]): message is PzzSetupMessage {
     return message.type === "pzz_setup";
@@ -1137,6 +1138,46 @@ function getVriWarningText(payload: unknown, eventName?: string) {
         extractTextFromPayload(parsed) ??
         "Проверка ВРИ вернула предупреждение."
     );
+}
+
+const NORMS_ERROR_TEXT = "Не удалось выполнить проверку нормативных ограничений.";
+const NORMS_PROJECT_REQUIRED_TEXT =
+    "Мод «Проверка нормативных ограничений» доступен только в рамках проекта. Выберите проект и сценарий.";
+
+async function readErrorResponseData(data: unknown) {
+    const stream = data as ReadableStream<Uint8Array> | undefined;
+
+    if (!stream || typeof stream.getReader !== "function") {
+        return typeof data === "string" ? parseJsonValue(data) : data;
+    }
+
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let text = "";
+
+    while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (value) text += decoder.decode(value, { stream: true });
+    }
+
+    text += decoder.decode();
+
+    return parseJsonValue(text);
+}
+
+function extractValidationErrorText(data: unknown) {
+    const detail = asRecord(data)?.detail;
+
+    if (typeof detail === "string") return detail;
+    if (!Array.isArray(detail)) return undefined;
+
+    const messages = detail.flatMap((item) => {
+        const message = toString(asRecord(item)?.msg);
+        return message ? [message] : [];
+    });
+
+    return messages.length ? messages.join("\n") : undefined;
 }
 
 class ChatDataStore {
@@ -1938,6 +1979,82 @@ class ChatDataStore {
                 console.error("Error streaming chat message:", error);
             })
             .finally(this.finalizeStreamingState);
+    }
+
+ sendNormsMessage(message: string, scenarioId: number) {
+        const requestId = this.currentStreamRequestId;
+
+        return axios.get(
+            `${import.meta.env.VITE_LLM_RESTRICTIONS_API}/norms/qa/stream`,
+            {
+                headers: {
+                    Accept: "text/event-stream",
+                    Authorization: `Bearer ${AuthStore.accessToken}`,
+                },
+                params: this.withActiveChatIdParams({
+                    request: message,
+                    scenario_id: scenarioId,
+                }),
+                responseType: "stream",
+                adapter: "fetch",
+                signal: this.abortController?.signal,
+            },
+        )
+        .then(async ({ data }) => {
+            const stream = data as ReadableStream<Uint8Array> | undefined;
+            if (!stream || typeof stream.getReader !== "function") {
+                throw new Error("Norms QA stream response is not readable");
+            }
+
+            await readSseStream(stream, (streamEvent) => {
+                runInAction(() => {
+                    if (this.currentStreamRequestId !== requestId) return;
+
+                    this.appendStreamChunk(streamEvent.data, streamEvent.eventName);
+                });
+            });
+
+            runInAction(() => {
+                if (this.currentStreamRequestId !== requestId) return;
+
+                this.commitStreamedResponse();
+            });
+        })
+        .catch(async (error) => {
+            if (axios.isCancel(error) || error?.name === "AbortError" || error?.name === "CanceledError") {
+                runInAction(() => {
+                    this.commitStreamedResponse();
+                });
+                return;
+            }
+
+            console.error("Error streaming norms QA message:", error);
+
+            const detailText = error?.response
+                ? extractValidationErrorText(await readErrorResponseData(error.response.data))
+                : undefined;
+
+            runInAction(() => {
+                if (this.currentStreamRequestId !== requestId) return;
+
+                this.commitStreamedResponse();
+                this.chatMessages.push({
+                    type: "response",
+                    message: {
+                        type: "error",
+                        text: detailText
+                            ? `${NORMS_ERROR_TEXT}\n${detailText}`
+                            : NORMS_ERROR_TEXT,
+                    },
+                });
+            });
+        })
+        .finally(action(() => {
+            if (this.currentStreamRequestId !== requestId) return;
+
+            this.resetStreamingState();
+            void this.getUserChats();
+        }));
     }
 
     sendRestrictionsContextMessage(message: string) {
@@ -4427,6 +4544,19 @@ class ChatDataStore {
     }
 
     sendChatMessage = async (message: string) => {
+        if (this.selectedChatTool === "Проверка нормативных ограничений"
+            && !(typeof this.selectedContext === "number" && this.selectedScenario)
+        ) {
+            this.setSelectedChatTool(null);
+            this.chatMessages.push({
+                type: "response",
+                message: {
+                    type: "info",
+                    text: NORMS_PROJECT_REQUIRED_TEXT,
+                },
+            });
+            return;
+        }
         if (this.selectedChatTool === "Генерация функционального зонирования") {
             if (this.selectedContext === "nonproject") {
                 const setup = this.getActiveGenPlannerCustomSetup();
@@ -4517,6 +4647,9 @@ class ChatDataStore {
                 return this.startPzzCheckSetup(message);
             } else if (this.selectedChatTool === "Зоны ограничений") {
                 return this.sendRestrictionsContextMessage(message);
+            }
+            else if (this.selectedChatTool === "Проверка нормативных ограничений") {
+                return this.sendNormsMessage(message, this.selectedScenario);
             }
 
             return this.sendDocumentMessage(message, this.selectedScenario);
