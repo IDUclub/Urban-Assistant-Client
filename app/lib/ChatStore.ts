@@ -1991,7 +1991,6 @@ class ChatDataStore {
                     Authorization: `Bearer ${AuthStore.accessToken}`,
                 },
                 params: this.withActiveChatIdParams({
-                    model: "gpt-oss:20b",
                     request: message,
                     scenario_id: this.selectedScenario,
                 }),
