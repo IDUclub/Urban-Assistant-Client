@@ -21,6 +21,7 @@ import DocumentsModal from "@components/DocumentsModal";
 import UploadDocumentModal from "@components/UploadDocumentModal";
 
 const CHAT_SERVICES = [
+  "Нормативная документация",
   "Зоны ограничений",
   "Проверка объектов по ПЗЗ",
   "Генерация застройки",
@@ -202,7 +203,8 @@ const ChatContextSelection = observer(() => {
         && scenarioOptions.some((option) => Number(option.value) === selectedScenario);
     const availableServices = selectedContext === "nonproject"
         ? CHAT_SERVICES.filter((service) => (
-            service === "Проверка объектов по ПЗЗ"
+            service === "Нормативная документация"
+            || service === "Проверка объектов по ПЗЗ"
             || service === "Проверка ВРИ"
             || service === "Генерация застройки"
             || service === "Генерация функционального зонирования"

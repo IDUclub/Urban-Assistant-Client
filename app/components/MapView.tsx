@@ -680,6 +680,23 @@ function getCategorizedRenderedLayerIds(index: number, valueIndex: number) {
     ];
 }
 
+function getRenderedLayerIds(index: number, categoricalStyle?: CategoricalLayerStyle) {
+    if (!categoricalStyle?.valueColors.length) {
+        return getDefaultRenderedLayerIds(index);
+    }
+
+    return categoricalStyle.valueColors.flatMap((_, valueIndex) =>
+        getCategorizedRenderedLayerIds(index, valueIndex)
+    );
+}
+
+const SELECTED_FEATURE_LAYER_IDS = [
+    "selected-feature-line-outline",
+    "selected-feature-line",
+    "selected-feature-point-outline",
+    "selected-feature-point",
+];
+
 interface MapViewProps {
     isExpanded: boolean;
     onToggleExpanded: () => void;
@@ -714,6 +731,7 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
     const { mapLayers, isMapLayersAvailable } = MapStore;
     const [isMounted, setIsMounted] = useState(false);
     const [isLegendExpanded, setIsLegendExpanded] = useState(true);
+    const [activeLayerId, setActiveLayerId] = useState<string>();
     const [selectedFeature, setSelectedFeature] = useState<SelectedFeatureState | null>(null);
     const [propertyScrollShadows, setPropertyScrollShadows] = useState<ScrollShadowState>({ top: false, bottom: false });
     const mapRef = useRef<MapRef | null>(null);
@@ -731,23 +749,28 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
     const latestLayerBounds = useMemo(() => {
         return latestLayer ? getFeatureBounds(latestLayer.layer) : undefined;
     }, [latestLayer?.id]);
-    const interactiveLayerIds = useMemo(() => {
-        return mapLayers.flatMap((layer, index) => {
-            if (!layer.isVisible) return [];
+    const interactiveLayers = mapLayers.flatMap((layer, index) => {
+        if (!layer.isVisible) {
+            return [];
+        }
 
-            const categoricalStyle = getCategoricalLayerStyle(layer.name, layer.layer);
+        const categoricalStyle = getCategoricalLayerStyle(layer.name, layer.layer);
 
-            return categoricalStyle?.valueColors.length
-                ? categoricalStyle.valueColors.flatMap((_, valueIndex) => getCategorizedRenderedLayerIds(index, valueIndex))
-                : getDefaultRenderedLayerIds(index);
-        });
-    }, [mapLayers]);
-    const topVisibleLayer = [...mapLayers].reverse().find((layer) => layer.isVisible);
-    const topVisibleLayerStyle = topVisibleLayer
-        ? getCategoricalLayerStyle(topVisibleLayer.name, topVisibleLayer.layer)
+        return getRenderedLayerIds(index, categoricalStyle).map((renderedLayerId) => ({
+            renderedLayerId,
+            layer,
+        }));
+    });
+    const interactiveLayerIds = interactiveLayers.map(({ renderedLayerId }) => renderedLayerId);
+    const activeLayer = mapLayers.find(
+        (layer) => layer.id === activeLayerId && layer.isVisible,
+    )
+        ?? [...mapLayers].reverse().find((layer) => layer.isVisible);
+    const activeLayerStyle = activeLayer
+        ? getCategoricalLayerStyle(activeLayer.name, activeLayer.layer)
         : undefined;
-    const mapLegendItems = topVisibleLayer
-        ? getMapLegendItems(topVisibleLayer, topVisibleLayerStyle)
+    const mapLegendItems = activeLayer
+        ? getMapLegendItems(activeLayer, activeLayerStyle)
         : [];
 
     const downloadLayer = (name: string, layer: unknown) => {
@@ -790,18 +813,23 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
         ));
     };
 
+    const getMapLayerByRenderedLayerId = (renderedLayerId?: string) => {
+        return interactiveLayers.find(
+            (interactiveLayer) => interactiveLayer.renderedLayerId === renderedLayerId,
+        )?.layer;
+    };
+
     const handleFeatureClick = (event: MapMouseEvent) => {
-        const clickedFeature = event.features?.[0];
+        const clickedFeature = event.features?.find((feature) => (
+            getMapLayerByRenderedLayerId(feature.layer?.id)?.id === activeLayer?.id
+        )) ?? event.features?.[0];
 
         if (!clickedFeature) {
             setSelectedFeature(null);
             return;
         }
 
-        const layerId = clickedFeature.layer?.id ?? "";
-        const layerIndexMatch = layerId.match(/(\d+)$/);
-        const layerIndex = layerIndexMatch ? Number(layerIndexMatch[1]) : -1;
-        const sourceLayer = mapLayers[layerIndex];
+        const sourceLayer = getMapLayerByRenderedLayerId(clickedFeature.layer?.id);
 
         const properties = clickedFeature.properties ?? {};
 
@@ -844,6 +872,22 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
         zoomToBounds(getFeatureBounds(layer));
     };
 
+    const bringActiveLayerToFront = () => {
+        if (!activeLayer || !mapRef.current) {
+            return;
+        }
+
+        const layerIndex = mapLayers.findIndex((layer) => layer.id === activeLayer.id);
+        const map = mapRef.current.getMap();
+        const renderedLayerIds = getRenderedLayerIds(layerIndex, activeLayerStyle);
+
+        [...renderedLayerIds, ...SELECTED_FEATURE_LAYER_IDS].forEach((layerId) => {
+            if (map.getLayer(layerId)) {
+                map.moveLayer(layerId);
+            }
+        });
+    };
+
     useEffect(() => {
         setIsMounted(true);
     }, []);
@@ -857,6 +901,14 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
             zoomToBounds(latestLayerBounds);
         }, 300)
     }, [isMounted, latestLayerBounds]);
+
+    useEffect(() => {
+        if (!isMounted || !activeLayer) return;
+
+        const animationFrameId = requestAnimationFrame(bringActiveLayerToFront);
+
+        return () => cancelAnimationFrame(animationFrameId);
+    }, [isMounted, activeLayer?.id, mapLayers.length]);
 
     useEffect(() => {
         setSelectedFeature(null);
@@ -1033,6 +1085,7 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                             {mapLayers.map((layer) => {
                                 const categoricalStyle = getCategoricalLayerStyle(layer.name, layer.layer);
                                 const legendGradient = categoricalStyle?.legendGradient;
+                                const isActiveLayer = activeLayer?.id === layer.id;
 
                                 return (
                                     <div
@@ -1047,7 +1100,13 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                                         <button
                                             type="button"
                                             className="cursor-pointer text-lg text-gray-500 transition-colors hover:text-[#0788CE] customer:hover:text-brand-primary customer-dark:text-content-muted"
-                                            onClick={() => MapStore.toggleLayerVisibility(layer.id)}
+                                            onClick={() => {
+                                                if (isActiveLayer) {
+                                                    setActiveLayerId(undefined);
+                                                }
+
+                                                MapStore.toggleLayerVisibility(layer.id);
+                                            }}
                                             aria-label={layer.isVisible ? "Скрыть слой" : "Показать слой"}
                                         >
                                             {layer.isVisible ? <MdOutlineVisibility /> : <MdOutlineVisibilityOff />}
@@ -1061,9 +1120,22 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                                         />
                                         <button
                                             type="button"
-                                            className="min-w-0 flex-1 cursor-pointer truncate text-left transition-colors hover:text-[#0788CE] customer:hover:text-brand-primary"
-                                            onClick={() => zoomToLayer(layer.layer)}
+                                            className={`
+                                                min-w-0 flex-1 cursor-pointer truncate text-left transition-colors
+                                                hover:text-[#0788CE] customer:hover:text-brand-primary
+                                                ${isActiveLayer
+                                                  ? "font-semibold text-[#0788CE] customer:text-brand-primary"
+                                                  : ""}
+                                            `}
+                                            onClick={() => {
+                                                if (layer.isVisible) {
+                                                    setActiveLayerId(layer.id);
+                                                }
+
+                                                zoomToLayer(layer.layer);
+                                            }}
                                             title={layer.name || "Без названия"}
+                                            aria-pressed={isActiveLayer}
                                         >
                                             {layer.name || "Без названия"}
                                         </button>
@@ -1082,7 +1154,7 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                     </div>
                 </div>
             )}
-            {topVisibleLayer && mapLegendItems.length > 0 && (
+            {activeLayer && mapLegendItems.length > 0 && (
                 <div className="pointer-events-auto absolute bottom-8 left-4 z-10 flex max-h-[calc(60%-3.5rem)] w-[min(18rem,calc(100%-2rem))] flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white/30 shadow-lg backdrop-blur customer-dark:border-ui-border customer-dark:bg-surface-panel/30">
                     <button
                         type="button"
@@ -1091,7 +1163,7 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                         aria-expanded={isLegendExpanded}
                     >
                         <span className="truncate text-xs font-semibold uppercase tracking-[0.14em]">
-                            {topVisibleLayer.name || "Без названия"}
+                            {activeLayer.name || "Без названия"}
                         </span>
                         {isLegendExpanded ? <IoChevronDown size={16} /> : <IoChevronUp size={16} />}
                     </button>
@@ -1132,9 +1204,9 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                             <IoClose aria-hidden="true" size={16} />
                         </button>
                     </div>
-                    <div className="relative overflow-hidden rounded-xl bg-slate-50/60 customer-dark:bg-surface-muted/60">
+                    <div className="relative min-h-0 overflow-hidden rounded-xl bg-slate-50/60 customer-dark:bg-surface-muted/60">
                         <div
-                            className="max-h-[calc(50vh-7rem)] overflow-y-auto overscroll-contain py-2"
+                            className="h-full max-h-[calc(50vh-7rem)] overflow-y-auto overscroll-contain py-2"
                             ref={propertyListRef}
                             onScroll={updatePropertyScrollShadows}
                             onWheel={(event) => event.stopPropagation()}
