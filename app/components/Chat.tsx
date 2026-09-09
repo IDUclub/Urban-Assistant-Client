@@ -397,6 +397,7 @@ type GeoJsonResponseMessage = ChatStoreMessage & {
 
 type PzzSetupData = Extract<ChatStoreMessage["message"], { type: "pzz_setup" }>;
 type VriSetupData = Extract<ChatStoreMessage["message"], { type: "vri_setup" }>;
+type TableData = Extract<ChatStoreMessage["message"], { type: "table" }>;
 function isGeoJsonResponseMessage(message: ChatStoreMessage): message is GeoJsonResponseMessage {
     return message.type === "response" && message.message.type === "geojson";
 }
@@ -443,6 +444,61 @@ function GeoJsonMessageAccordion({ messages }: { messages: GeoJsonResponseMessag
                 ))}
             </div>
         </details>
+    );
+}
+
+function formatTableCell(value: unknown) {
+    if (value === null || value === undefined || value === "") {
+        return "—";
+    }
+
+    if (typeof value === "object") {
+        return JSON.stringify(value);
+    }
+
+    return String(value);
+}
+
+function TableMessage({ table }: { table: TableData }) {
+    return (
+        <div className="overflow-hidden rounded-2xl border border-gray-200 customer-dark:border-ui-border">
+            <div className="bg-gray-50 px-4 py-3 font-semibold text-gray-900 customer-dark:bg-surface-muted customer-dark:text-content-primary">
+                {table.title}
+            </div>
+            <div className="max-h-96 overflow-auto">
+                <table className="min-w-max w-full border-collapse text-left text-sm">
+                    <thead className="sticky top-0 bg-gray-100 customer-dark:bg-surface-raised">
+                        <tr>
+                            {table.columns.map((column) => (
+                                <th
+                                    key={column.key}
+                                    className="border-b border-gray-200 px-4 py-3 font-semibold text-gray-900 customer-dark:border-ui-border customer-dark:text-content-primary"
+                                >
+                                    {column.label}
+                                </th>
+                            ))}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {table.rows.map((row, rowIndex) => (
+                            <tr
+                                key={rowIndex}
+                                className="odd:bg-white even:bg-gray-50/50 customer-dark:odd:bg-surface-panel customer-dark:even:bg-surface-muted/50"
+                            >
+                                {table.columns.map((column) => (
+                                    <td
+                                        key={column.key}
+                                        className="max-w-xs border-t border-gray-200 px-4 py-3 align-top whitespace-pre-wrap break-words text-gray-800 customer-dark:border-ui-border customer-dark:text-content-primary"
+                                    >
+                                        {formatTableCell(row[column.key])}
+                                    </td>
+                                ))}
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+        </div>
     );
 }
 
@@ -1066,6 +1122,9 @@ const ChatComponent = observer(function ChatComponent(
                         name={message.message.name}
                         layer={message.message.layer}
                     />
+                )}
+                {message.message.type === "table" && (
+                    <TableMessage table={message.message} />
                 )}
                 {message.message.type === "pzz_setup" && (
                     <PzzSetupMessageCard setup={message.message} />
