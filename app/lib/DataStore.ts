@@ -207,14 +207,24 @@ class AppDataStore {
     }
 
     async getProjectCreationTerritories(): Promise<ProjectCreationTerritoryOption[]> {
+        return this.getTerritoriesWithoutGeometry(12639);
+    }
+
+    async getTerritoriesWithoutGeometry(
+        parentId: number,
+    ): Promise<ProjectCreationTerritoryOption[]> {
+        const configuredUrbanApiUrl = String(import.meta.env.VITE_URBAN_API ?? "").replace(/\/+$/, "");
+        const urbanApiV1Url = configuredUrbanApiUrl.endsWith("/api/v1")
+            ? configuredUrbanApiUrl
+            : `${configuredUrbanApiUrl}/api/v1`;
         const { data } = await axios.get(
-            `${import.meta.env.VITE_URBAN_API}/all_territories_without_geometry`,
+            `${urbanApiV1Url}/all_territories_without_geometry`,
             {
                 headers: {
                     Authorization: `Bearer ${AuthStore.accessToken}`,
                 },
                 params: {
-                    parent_id: 12639,
+                    parent_id: parentId,
                     get_all_levels: false,
                     cities_only: false,
                     ordering: "asc",

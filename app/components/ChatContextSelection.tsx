@@ -654,8 +654,10 @@ const ChatContextSelection = observer(() => {
                     projectName={documentToUpdate.projectName}
                     initialDocument={documentToUpdate.document}
                     onClose={() => setDocumentToUpdate(null)}
-                    onSaved={() => {
-                        setDocumentNotice("Документ отправлен на обновление. Изменения появятся в списке после обработки.");
+                    onSaved={(updateKind) => {
+                        setDocumentNotice(updateKind === "metadata"
+                            ? "Данные документа обновлены."
+                            : "Документ отправлен на обновление. Изменения появятся в списке после обработки.");
                     }}
                 />
             )}
