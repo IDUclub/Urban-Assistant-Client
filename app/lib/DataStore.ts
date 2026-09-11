@@ -213,12 +213,8 @@ class AppDataStore {
     async getTerritoriesWithoutGeometry(
         parentId: number,
     ): Promise<ProjectCreationTerritoryOption[]> {
-        const configuredUrbanApiUrl = String(import.meta.env.VITE_URBAN_API ?? "").replace(/\/+$/, "");
-        const urbanApiV1Url = configuredUrbanApiUrl.endsWith("/api/v1")
-            ? configuredUrbanApiUrl
-            : `${configuredUrbanApiUrl}/api/v1`;
         const { data } = await axios.get(
-            `${urbanApiV1Url}/all_territories_without_geometry`,
+            `${import.meta.env.VITE_URBAN_API}/all_territories_without_geometry`,
             {
                 headers: {
                     Authorization: `Bearer ${AuthStore.accessToken}`,
