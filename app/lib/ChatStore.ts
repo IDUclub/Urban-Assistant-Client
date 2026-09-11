@@ -78,6 +78,13 @@ interface ToolCallPayload {
     }[];
 }
 
+type TableColumn = {
+    key: string;
+    label: string;
+};
+
+type TableRow = Record<string, unknown>;
+
 type UserChatPartBase = {
     part_seq: number;
     mcp_source: string | null;
@@ -104,7 +111,12 @@ type FilePart = UserChatPartBase & {
     payload: Record<string, any>;
 };
 
-type UserChatPart = TextPart | StatusPart | ToolCallPart | FilePart;
+type TablePart = UserChatPartBase & {
+    kind: "table";
+    payload: Record<string, unknown>;
+};
+
+type UserChatPart = TextPart | StatusPart | ToolCallPart | FilePart | TablePart;
 
 interface UserChatMessage {
     message_id: string;
@@ -490,6 +502,49 @@ function extractTextFromPayload(payload: unknown) {
     );
 }
 
+function extractTableMessage(payload: unknown): TableMessage | undefined {
+    const parsed = parseJsonValue(payload);
+    const record = asRecord(parsed);
+    const table = asRecord(record?.content) ?? record;
+    if (!table || !Array.isArray(table.columns) || !Array.isArray(table.rows)) {
+        return;
+    }
+
+    const columns: TableColumn[] = [];
+    for (const column of table.columns) {
+        const columnRecord = asRecord(column);
+        const key = toString(columnRecord?.key);
+        if (!key) {
+            continue;
+        }
+
+        columns.push({
+            key,
+            label: toString(columnRecord?.label) ?? key,
+        });
+    }
+
+    if (!columns.length) {
+        return;
+    }
+
+    const rows: TableRow[] = [];
+    for (const row of table.rows) {
+        const rowRecord = asRecord(row);
+        if (rowRecord) {
+            rows.push(rowRecord);
+        }
+    }
+
+    return {
+        type: "table",
+        name: toString(table.name),
+        title: toString(table.title) ?? "Таблица",
+        columns,
+        rows,
+    };
+}
+
 function isGeoJsonFilePayload(content: Record<string, any>) {
     const mimeType = toString(content.mime_type ?? content.mimeType)?.toLowerCase();
     const filename = toString(content.filename)?.toLowerCase();
@@ -645,6 +700,14 @@ type GeoJSONMessage = {
     layer: any;
 };
 
+type TableMessage = {
+    type: "table";
+    name?: string;
+    title: string;
+    columns: TableColumn[];
+    rows: TableRow[];
+};
+
 type ErrorMessage = {
     type: "error";
     text: string;
@@ -775,6 +838,7 @@ type AddGeoJsonLayerOptions = {
 type ChatMessagePayload =
     | TextMessage
     | GeoJSONMessage
+    | TableMessage
     | ErrorMessage
     | WarningMessage
     | InfoMessage
@@ -899,6 +963,20 @@ const VRI_REPORT_CHUNK_KINDS = new Set([
 const VRI_STATUS_CHUNK_KINDS = new Set([
     "status",
     "warning",
+]);
+
+const STREAM_STATUS_CHUNK_KINDS = new Set([
+    "status",
+    "mapping_started",
+    "mapping_completed",
+    "validation_started",
+    "validation_completed",
+]);
+
+const TABLE_ONLY_TOOL_NAMES = new Set([
+    "getscenariophysicalobjects",
+    "getscenarioservices",
+    "getscenarioservicetypes",
 ]);
 
 function parseSseEventBlock(eventBlock: string): SseStreamEvent | undefined {
@@ -1638,10 +1716,13 @@ class ChatDataStore {
 
             const chunkKind = getStreamChunkKind(parsed, eventName);
 
-            if (chunkKind === "status") {
-                this.currentStatus = parsed.content?.text
+            if (chunkKind && STREAM_STATUS_CHUNK_KINDS.has(chunkKind)) {
+                const statusText = parsed.content?.text;
+                if (typeof statusText === "string") {
+                    this.currentStatus = statusText;
+                }
                 return;
-            };
+            }
 
             if (chunkKind === "file") {
                 const layer = extractGeoJsonFileLayer(parsed, "Результат проверки ПЗЗ");
@@ -1691,6 +1772,19 @@ class ChatDataStore {
                     },
                 });
 
+                return;
+            }
+
+            if (chunkKind === "table") {
+                const table = extractTableMessage(parsed);
+                if (!table) {
+                    return;
+                }
+
+                this.chatMessages.push({
+                    type: "response",
+                    message: table,
+                });
                 return;
             }
 
@@ -5042,6 +5136,10 @@ class ChatDataStore {
             HISTORY_LAYER_FALLBACK_NAME;
 
         for (const [index, toolCall] of part.payload.calls.entries()) {
+            if (TABLE_ONLY_TOOL_NAMES.has(toolCall.tool_name.toLowerCase())) {
+                continue;
+            }
+
             const layerResponse = await this.getUserChatMessageLayer(
                 messageId,
                 part.part_seq,
@@ -5105,6 +5203,17 @@ class ChatDataStore {
                                 layer: layer.layer,
                             },
                         });
+                    });
+                    continue;
+                }
+
+                const table = extractTableMessage(part.payload);
+
+                if (userMessage.role === "assistant" && table) {
+                    flushText();
+                    messages.push({
+                        type: "response",
+                        message: table,
                     });
                     continue;
                 }
