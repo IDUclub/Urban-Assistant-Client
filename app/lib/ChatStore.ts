@@ -2023,7 +2023,7 @@ class ChatDataStore {
 
     sendNormativeDocumentMessage(message: string, scenarioId?: number) {
         return axios.get(
-            `${import.meta.env.VITE_LLM_RESTRICTIONS_API}/documents/qa/stream`,
+            `${import.meta.env.VITE_LLM_RESTRICTIONS_API}/compliance/check/stream`,
                 {
                     headers: {
                         Accept: "text/event-stream",
