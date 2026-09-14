@@ -7,7 +7,9 @@ import {
     MdRefresh,
     MdUploadFile,
 } from "react-icons/md";
-import CustomSelect, { type SelectOption } from "@components/ui/Select";
+import DocumentTerritorySelect, {
+    type DocumentTerritoryScope,
+} from "@components/DocumentTerritorySelect";
 import DataStore, {
     type ProjectCreationTerritoryOption,
 } from "@lib/DataStore";
@@ -16,12 +18,20 @@ import DocumentsStore, {
     type UserDocument,
 } from "@lib/DocumentsStore";
 
+const FEDERAL_TERRITORY_ID = 12639;
+
+function getInitialTerritoryScope(document?: UserDocument): DocumentTerritoryScope {
+    if (document?.territoryId == null) return "";
+    if (document.territoryLevel) return document.territoryLevel;
+    return document.territoryId === FEDERAL_TERRITORY_ID ? "federal" : "regional";
+}
+
 interface UploadDocumentModalProps {
     projectId: number;
     projectName: string;
     initialDocument?: UserDocument;
     onClose: () => void;
-    onSaved?: () => void | Promise<void>;
+    onSaved?: (updateKind: "file" | "metadata") => void | Promise<void>;
 }
 
 function formatFileSize(size: number) {
@@ -40,32 +50,61 @@ function UploadDocumentModal({
     const isEditing = initialDocument !== undefined;
     const fileInputId = useId();
     const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+    const shouldResolveInitialTerritoryRef = useRef(
+        initialDocument?.territoryId != null
+        && initialDocument.territoryId !== FEDERAL_TERRITORY_ID
+        && initialDocument.territoryLevel == null,
+    );
     const [file, setFile] = useState<File | null>(null);
     const [name, setName] = useState(initialDocument?.name ?? "");
     const [version, setVersion] = useState(initialDocument?.version ?? "");
-    const [territories, setTerritories] = useState<ProjectCreationTerritoryOption[]>([]);
+    const [territoryScope, setTerritoryScope] = useState<DocumentTerritoryScope>(
+        getInitialTerritoryScope(initialDocument),
+    );
+    const [regionalTerritories, setRegionalTerritories] = useState<ProjectCreationTerritoryOption[]>([]);
+    const [localTerritories, setLocalTerritories] = useState<ProjectCreationTerritoryOption[]>([]);
     const [territoryId, setTerritoryId] = useState<number | null>(initialDocument?.territoryId ?? null);
-    const [isTerritoriesLoading, setIsTerritoriesLoading] = useState(true);
+    const [isTerritoriesLoading, setIsTerritoriesLoading] = useState(false);
+    const [territoryErrorText, setTerritoryErrorText] = useState<string | null>(null);
+    const [territoryLoadRequest, setTerritoryLoadRequest] = useState(0);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [errorText, setErrorText] = useState<string | null>(null);
-    const territoryOptions: SelectOption[] = [
-        { label: "Не выбрана", value: "" },
-        ...territories.map((territory) => ({
-            label: territory.name,
-            value: territory.territory_id,
-        })),
-    ];
-    // The document's territory may be outside the upload selector's territory list.
-    if (initialDocument?.territoryId != null && !territories.some(
-        (territory) => territory.territory_id === initialDocument.territoryId,
-    )) {
+    const selectableTerritories = territoryScope === "regional"
+        ? regionalTerritories
+        : territoryScope === "local"
+            ? localTerritories
+            : [];
+    const territoryOptions = [...selectableTerritories];
+    // Keep an existing document value selectable if the API no longer returns it.
+    if (
+        territoryScope !== "" && territoryScope !== "federal"
+        && initialDocument?.territoryId != null
+        && !selectableTerritories.some(
+            (territory) => territory.territory_id === initialDocument.territoryId,
+        )
+    ) {
         territoryOptions.push({
-            label: initialDocument.territoryName ?? `Территория ${initialDocument.territoryId}`,
-            value: initialDocument.territoryId,
+            name: initialDocument.territoryName ?? `Территория ${initialDocument.territoryId}`,
+            territory_id: initialDocument.territoryId,
         });
     }
-    const canSubmit = file !== null
-        && (!isEditing || name.trim().length > 0)
+    const needsSpecificTerritory = territoryScope === "regional" || territoryScope === "local";
+    const hasValidTerritorySelection = !needsSpecificTerritory || territoryId !== null;
+    const nextTitle = name.trim();
+    const initialTitle = initialDocument?.name.trim() ?? "";
+    const hasTitleChange = isEditing
+        && nextTitle.length > 0
+        && nextTitle !== initialTitle;
+    const nextVersion = version.trim();
+    const initialVersion = initialDocument?.version.trim() ?? "";
+    const hasVersionChange = isEditing
+        && nextVersion.length > 0
+        && nextVersion !== initialVersion;
+    const hasTerritoryChange = initialDocument !== undefined
+        && territoryId !== initialDocument.territoryId;
+    const hasMetadataChanges = hasTitleChange || hasVersionChange || hasTerritoryChange;
+    const canSubmit = hasValidTerritorySelection
+        && (isEditing ? file !== null || hasMetadataChanges : file !== null)
         && !isSubmitting;
 
     useEffect(() => {
@@ -92,20 +131,32 @@ function UploadDocumentModal({
     }, [isSubmitting, onClose]);
 
     useEffect(() => {
+        if (territoryScope !== "regional") return;
+
         let isActive = true;
 
         setIsTerritoriesLoading(true);
+        setTerritoryErrorText(null);
 
         void DataStore.getProjectCreationTerritories()
             .then((items) => {
-                if (isActive) setTerritories(items);
+                if (!isActive) return;
+
+                setRegionalTerritories(items);
+
+                if (shouldResolveInitialTerritoryRef.current) {
+                    shouldResolveInitialTerritoryRef.current = false;
+                    if (!items.some((territory) => (
+                        territory.territory_id === initialDocument?.territoryId
+                    ))) {
+                        setTerritoryScope("local");
+                    }
+                }
             })
             .catch((error) => {
                 if (!isActive) return;
-                console.error("Error fetching document territories:", error);
-                setErrorText(isEditing
-                    ? "Не удалось загрузить список территорий. Текущая территория сохранена в форме."
-                    : "Не удалось загрузить список территорий. Документ можно загрузить без территории.");
+                console.error("Error fetching regional document territories:", error);
+                setTerritoryErrorText("Не удалось загрузить список регионов.");
             })
             .finally(() => {
                 if (isActive) setIsTerritoriesLoading(false);
@@ -114,40 +165,83 @@ function UploadDocumentModal({
         return () => {
             isActive = false;
         };
-    }, [isEditing]);
+    }, [initialDocument, territoryLoadRequest, territoryScope]);
+
+    useEffect(() => {
+        if (territoryScope !== "local") return;
+
+        let isActive = true;
+        setIsTerritoriesLoading(true);
+        setTerritoryErrorText(null);
+
+        void DataStore.getProjectTerritoryId(projectId)
+            .then((projectTerritoryId) => (
+                DataStore.getTerritoriesWithoutGeometry(projectTerritoryId)
+            ))
+            .then((items) => {
+                if (isActive) setLocalTerritories(items);
+            })
+            .catch((error) => {
+                if (!isActive) return;
+                console.error("Error fetching local document territories:", error);
+                setTerritoryErrorText("Не удалось загрузить местные территории проекта.");
+            })
+            .finally(() => {
+                if (isActive) setIsTerritoriesLoading(false);
+            });
+
+        return () => {
+            isActive = false;
+        };
+    }, [projectId, territoryLoadRequest, territoryScope]);
 
     const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
         event.preventDefault();
-        if (!file || !canSubmit) return;
+        if (!canSubmit) return;
 
         setIsSubmitting(true);
         setErrorText(null);
 
         try {
-            const payload = {
-                file,
-                projectId,
-                version,
-                territoryId,
-            };
-
             if (initialDocument) {
-                await DocumentsStore.updateDocument({
-                    ...payload,
-                    originalDocumentName: initialDocument.name,
-                    title: name,
+                if (file) {
+                    await DocumentsStore.updateDocument({
+                        file,
+                        projectId,
+                        version,
+                        territoryId,
+                        originalDocumentName: initialDocument.name,
+                        title: name,
+                    });
+                } else {
+                    await DocumentsStore.updateDocumentMetadata({
+                        documentId: initialDocument.id,
+                        projectId,
+                        title: hasTitleChange ? nextTitle : undefined,
+                        territoryId: hasTerritoryChange ? territoryId : undefined,
+                        version: hasVersionChange ? nextVersion : undefined,
+                        currentVersion: hasVersionChange ? initialVersion : undefined,
+                    });
+                }
+            } else if (file) {
+                await DocumentsStore.uploadDocument({
+                    file,
+                    projectId,
+                    name,
+                    version,
+                    territoryId,
                 });
-            } else {
-                await DocumentsStore.uploadDocument({ ...payload, name });
             }
-            await onSaved?.();
+            await onSaved?.(file ? "file" : "metadata");
             onClose();
         } catch (error) {
             console.error("Error saving user document:", error);
             setErrorText(getDocumentsRequestErrorMessage(
                 error,
                 isEditing
-                    ? "Не удалось обновить документ. Проверьте файл и попробуйте ещё раз."
+                    ? file
+                        ? "Не удалось обновить документ. Проверьте файл и попробуйте ещё раз."
+                        : "Не удалось обновить данные документа. Проверьте значения и попробуйте ещё раз."
                     : "Не удалось загрузить документ. Проверьте файл и попробуйте ещё раз.",
             ));
         } finally {
@@ -192,7 +286,8 @@ function UploadDocumentModal({
                 <form className="mt-6 space-y-5" onSubmit={handleSubmit}>
                     <div>
                         <span className="mb-2 block text-sm font-medium">
-                            {isEditing ? "Обновлённый файл" : "Файл"} <span className="text-red-600 customer:text-danger">*</span>
+                            {isEditing ? "Обновлённый файл" : "Файл"}
+                            {!isEditing && <span className="text-red-600 customer:text-danger"> *</span>}
                         </span>
                         <input
                             id={fileInputId}
@@ -203,7 +298,7 @@ function UploadDocumentModal({
                                 setErrorText(null);
                             }}
                             disabled={isSubmitting}
-                            required
+                            required={!isEditing}
                         />
                         <label
                             htmlFor={fileInputId}
@@ -221,18 +316,12 @@ function UploadDocumentModal({
                                 </span>
                             </span>
                         </label>
-                        {isEditing && (
-                            <p className="mt-2 text-xs text-slate-500 customer-dark:text-content-muted">
-                                Выберите файл для обновления документа. API требует файл при каждом обновлении.
-                            </p>
-                        )}
                     </div>
 
                     <div className="grid gap-4 sm:grid-cols-2">
                         <label className="block">
                             <span className="mb-2 block text-sm font-medium">
                                 Название
-                                {isEditing && <span className="text-red-600 customer:text-danger"> *</span>}
                             </span>
                             <input
                                 type="text"
@@ -240,7 +329,6 @@ function UploadDocumentModal({
                                 onChange={(event) => setName(event.target.value)}
                                 className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition-colors placeholder:text-slate-400 focus:border-[#0788CE] customer:focus:border-brand-primary customer-dark:border-ui-border customer-dark:bg-surface-panel customer-dark:placeholder:text-content-muted"
                                 disabled={isSubmitting}
-                                required={isEditing}
                             />
                         </label>
                         <label className="block">
@@ -258,26 +346,32 @@ function UploadDocumentModal({
 
                     <fieldset disabled={isSubmitting}>
                         <span className="mb-2 block text-sm font-medium">Территория</span>
-                        {isTerritoriesLoading ? (
-                            <div className="flex min-h-11 items-center rounded-2xl border border-slate-200 px-4 text-sm text-slate-400 customer-dark:border-ui-border customer-dark:text-content-muted">
-                                {territoryOptions.find((option) => option.value === territoryId)?.label ?? "Загрузка территорий..."}
-                            </div>
-                        ) : territoryOptions.length > 1 ? (
-                            <CustomSelect
-                                value={territoryId ?? ""}
-                                options={territoryOptions}
-                                onChange={(value) => setTerritoryId(
-                                    value === "" ? null : Number(value),
-                                )}
-                                placeholder="Не выбрана"
-                                block
-                                compactGlow
-                            />
-                        ) : (
-                            <div className="flex min-h-11 items-center rounded-2xl border border-slate-200 px-4 text-sm text-slate-400 customer-dark:border-ui-border customer-dark:text-content-muted">
-                                Территории недоступны
-                            </div>
-                        )}
+                        <DocumentTerritorySelect
+                            scope={territoryScope}
+                            territoryId={territoryId}
+                            territories={territoryOptions}
+                            isLoading={isTerritoriesLoading}
+                            errorText={territoryErrorText}
+                            disabled={isSubmitting}
+                            onScopeChange={(nextScope) => {
+                                shouldResolveInitialTerritoryRef.current = false;
+                                setTerritoryScope(nextScope);
+                                setTerritoryErrorText(null);
+                                setTerritoryId((currentTerritoryId) => (
+                                    nextScope === "federal"
+                                        ? FEDERAL_TERRITORY_ID
+                                        : nextScope === territoryScope
+                                            ? currentTerritoryId
+                                            : null
+                                ));
+
+                                if (nextScope === "regional" || nextScope === "local") {
+                                    setIsTerritoriesLoading(true);
+                                    setTerritoryLoadRequest((request) => request + 1);
+                                }
+                            }}
+                            onTerritoryChange={setTerritoryId}
+                        />
                     </fieldset>
 
                     {errorText && (

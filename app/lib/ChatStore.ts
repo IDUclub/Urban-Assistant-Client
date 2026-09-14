@@ -78,6 +78,13 @@ interface ToolCallPayload {
     }[];
 }
 
+type TableColumn = {
+    key: string;
+    label: string;
+};
+
+type TableRow = Record<string, unknown>;
+
 type UserChatPartBase = {
     part_seq: number;
     mcp_source: string | null;
@@ -104,7 +111,12 @@ type FilePart = UserChatPartBase & {
     payload: Record<string, any>;
 };
 
-type UserChatPart = TextPart | StatusPart | ToolCallPart | FilePart;
+type TablePart = UserChatPartBase & {
+    kind: "table";
+    payload: Record<string, unknown>;
+};
+
+type UserChatPart = TextPart | StatusPart | ToolCallPart | FilePart | TablePart;
 
 interface UserChatMessage {
     message_id: string;
@@ -490,6 +502,49 @@ function extractTextFromPayload(payload: unknown) {
     );
 }
 
+function extractTableMessage(payload: unknown): TableMessage | undefined {
+    const parsed = parseJsonValue(payload);
+    const record = asRecord(parsed);
+    const table = asRecord(record?.content) ?? record;
+    if (!table || !Array.isArray(table.columns) || !Array.isArray(table.rows)) {
+        return;
+    }
+
+    const columns: TableColumn[] = [];
+    for (const column of table.columns) {
+        const columnRecord = asRecord(column);
+        const key = toString(columnRecord?.key);
+        if (!key) {
+            continue;
+        }
+
+        columns.push({
+            key,
+            label: toString(columnRecord?.label) ?? key,
+        });
+    }
+
+    if (!columns.length) {
+        return;
+    }
+
+    const rows: TableRow[] = [];
+    for (const row of table.rows) {
+        const rowRecord = asRecord(row);
+        if (rowRecord) {
+            rows.push(rowRecord);
+        }
+    }
+
+    return {
+        type: "table",
+        name: toString(table.name),
+        title: toString(table.title) ?? "Таблица",
+        columns,
+        rows,
+    };
+}
+
 function isGeoJsonFilePayload(content: Record<string, any>) {
     const mimeType = toString(content.mime_type ?? content.mimeType)?.toLowerCase();
     const filename = toString(content.filename)?.toLowerCase();
@@ -645,6 +700,14 @@ type GeoJSONMessage = {
     layer: any;
 };
 
+type TableMessage = {
+    type: "table";
+    name?: string;
+    title: string;
+    columns: TableColumn[];
+    rows: TableRow[];
+};
+
 type ErrorMessage = {
     type: "error";
     text: string;
@@ -775,6 +838,7 @@ type AddGeoJsonLayerOptions = {
 type ChatMessagePayload =
     | TextMessage
     | GeoJSONMessage
+    | TableMessage
     | ErrorMessage
     | WarningMessage
     | InfoMessage
@@ -798,6 +862,7 @@ type ChatSession = {
 };
 
 type ChatTool =
+     | "Нормативная документация"
     | "Обеспеченность"
     | "Проверка объектов по ПЗЗ"
     | "Проверка ВРИ"
@@ -898,6 +963,20 @@ const VRI_REPORT_CHUNK_KINDS = new Set([
 const VRI_STATUS_CHUNK_KINDS = new Set([
     "status",
     "warning",
+]);
+
+const STREAM_STATUS_CHUNK_KINDS = new Set([
+    "status",
+    "mapping_started",
+    "mapping_completed",
+    "validation_started",
+    "validation_completed",
+]);
+
+const TABLE_ONLY_TOOL_NAMES = new Set([
+    "getscenariophysicalobjects",
+    "getscenarioservices",
+    "getscenarioservicetypes",
 ]);
 
 function parseSseEventBlock(eventBlock: string): SseStreamEvent | undefined {
@@ -1616,7 +1695,18 @@ class ChatDataStore {
         );
     }
 
-    private appendStreamChunk = action((payload: string, eventName?: string) => {
+    private addChatNotice(type: "error" | "warning", text: string) {
+        this.chatMessages.push({
+            type: "response",
+            message: { type, text },
+        });
+    }
+
+    private appendStreamChunk = action((
+        payload: string,
+        eventName?: string,
+        commitOnDone = true,
+    ) => {
         const trimmedPayload = payload.trim();
         if (!trimmedPayload || trimmedPayload === "[DONE]") return;
 
@@ -1626,10 +1716,13 @@ class ChatDataStore {
 
             const chunkKind = getStreamChunkKind(parsed, eventName);
 
-            if (chunkKind === "status") {
-                this.currentStatus = parsed.content?.text
+            if (chunkKind && STREAM_STATUS_CHUNK_KINDS.has(chunkKind)) {
+                const statusText = parsed.content?.text;
+                if (typeof statusText === "string") {
+                    this.currentStatus = statusText;
+                }
                 return;
-            };
+            }
 
             if (chunkKind === "file") {
                 const layer = extractGeoJsonFileLayer(parsed, "Результат проверки ПЗЗ");
@@ -1682,6 +1775,19 @@ class ChatDataStore {
                 return;
             }
 
+            if (chunkKind === "table") {
+                const table = extractTableMessage(parsed);
+                if (!table) {
+                    return;
+                }
+
+                this.chatMessages.push({
+                    type: "response",
+                    message: table,
+                });
+                return;
+            }
+
             if (chunkKind === "error") {
                 this.chatMessages.push({
                     type: "response",
@@ -1705,7 +1811,7 @@ class ChatDataStore {
                 this.streamedResponse += text;
             }
 
-            if (done) {
+            if (done && commitOnDone) {
                 this.isStreaming = false;
                 this.commitStreamedResponse();
             }
@@ -1915,7 +2021,7 @@ class ChatDataStore {
         }
     };
 
-    sendDocumentMessage(message: string, scenarionId?: number) {
+    sendNormativeDocumentMessage(message: string, scenarioId?: number) {
         return axios.get(
             `${import.meta.env.VITE_LLM_RESTRICTIONS_API}/documents/qa/stream`,
                 {
@@ -1925,7 +2031,7 @@ class ChatDataStore {
                     },
                     params: this.withActiveChatIdParams({
                         request: message,
-                        scenario_id: scenarionId ?? undefined,
+                        scenario_id: scenarioId ?? undefined,
                     }),
                     responseType: "stream",
                     adapter: "fetch",
@@ -2020,7 +2126,169 @@ class ChatDataStore {
         .finally(this.finalizeStreamingState);
     }
 
- sendNormsMessage(message: string, scenarioId: number) {
+    private handleOrchestratorStreamEvent(streamEvent: SseStreamEvent) {
+        const trimmedData = streamEvent.data.trim();
+        if (!trimmedData || trimmedData === "[DONE]") {
+            return;
+        }
+
+        const parsed = asRecord(parseJsonValue(trimmedData));
+        if (!parsed) {
+            this.streamedResponse += trimmedData;
+            return;
+        }
+
+        if (this.handleServiceEvent(parsed)) {
+            return;
+        }
+
+        const eventType = toString(parsed.type)?.toLowerCase() ?? streamEvent.eventName?.toLowerCase();
+        const content = asRecord(parsed.content);
+
+        switch (eventType) {
+            case "status":
+                this.currentStatus = toString(content?.text) ?? "Формируется план ответа";
+                return;
+            case "plan":
+                this.currentStatus = "План ответа сформирован";
+                return;
+            case "step_started": {
+                const stepNumber = toNumber(content?.step);
+                const task = toString(content?.task);
+                const stepLabel = stepNumber
+                    ? `Выполняется шаг ${stepNumber}`
+                    : "Выполняется запрос";
+                this.currentStatus = task ? `${stepLabel}: ${task}` : stepLabel;
+                return;
+            }
+            case "step_event": {
+                const agentEvent = asRecord(content?.event);
+                if (!agentEvent) return;
+
+                const agentEventType = toString(agentEvent.type)?.toLowerCase();
+                if (agentEventType === "error") {
+                    return;
+                }
+
+                if (agentEventType === "warning") {
+                    const agentEventContent = asRecord(agentEvent.content);
+                    const message = toString(agentEventContent?.message)
+                        ?? "Во время выполнения шага возникло предупреждение.";
+                    this.addChatNotice("warning", message);
+                    return;
+                }
+
+                this.appendStreamChunk(
+                    JSON.stringify(agentEvent),
+                    agentEventType,
+                    false,
+                );
+                return;
+            }
+            case "step_finished": {
+                const step = toNumber(content?.step);
+                const status = toString(content?.status);
+                const stepLabel = step ? `Шаг ${step}` : "Шаг";
+                const summary = toString(content?.summary);
+
+                if (status === "failed") {
+                    this.currentStatus = `${stepLabel} завершён с ошибкой`;
+                    this.addChatNotice(
+                        "error",
+                        summary ?? `${stepLabel} оркестратора завершён с ошибкой.`,
+                    );
+                    return;
+                }
+
+                if (status === "suspended") {
+                    this.currentStatus = `${stepLabel} приостановлен`;
+                    this.addChatNotice(
+                        "warning",
+                        summary ?? `${stepLabel} оркестратора приостановлен.`,
+                    );
+                    return;
+                }
+
+                this.currentStatus = `${stepLabel} завершён`;
+                return;
+            }
+            case "clarification": {
+                const question = toString(content?.question);
+                if (question) {
+                    this.streamedResponse += question;
+                }
+                this.currentStatus = undefined;
+                return;
+            }
+            case "orchestrator_final":
+                this.currentStatus = undefined;
+                return;
+            case "chunk":
+                this.appendStreamChunk(trimmedData, streamEvent.eventName, false);
+                return;
+            case "warning":
+            case "error": {
+                const message = toString(content?.message)
+                    ?? (eventType === "error"
+                        ? "Во время выполнения запроса произошла ошибка."
+                        : "Во время выполнения запроса возникло предупреждение.");
+                this.addChatNotice(eventType, message);
+                return;
+            }
+            case "pipeline_started":
+            case "service_event":
+                return;
+            default:
+                this.appendStreamChunk(trimmedData, streamEvent.eventName, false);
+                return;
+        }
+    }
+
+    sendOrchestratorMessage(message: string, scenarioId?: number) {
+        return axios.get(
+            `${import.meta.env.VITE_LLM_RESTRICTIONS_API}/orchestrator/route/stream`,
+            {
+                headers: {
+                    Accept: "text/event-stream",
+                    Authorization: `Bearer ${AuthStore.accessToken}`,
+                },
+                params: this.withActiveChatIdParams({
+                    request: message,
+                    scenario_id: scenarioId ?? undefined,
+                }),
+                responseType: "stream",
+                adapter: "fetch",
+                signal: this.abortController?.signal,
+            },
+        )
+        .then(async (response) => {
+            const stream = response.data;
+            if (!stream || typeof stream.getReader !== "function") {
+                throw new Error("Orchestrator stream response is not readable");
+            }
+
+            await readSseStream(stream, (streamEvent) => {
+                this.handleOrchestratorStreamEvent(streamEvent);
+            });
+
+            this.commitStreamedResponse();
+        })
+        .catch((error) => {
+            if (axios.isCancel(error) || error?.name === "AbortError" || error?.name === "CanceledError") {
+                this.commitStreamedResponse();
+                return;
+            }
+
+            console.error("Error streaming orchestrator response:", error);
+            this.addChatNotice(
+                "error",
+                "Не удалось получить ответ помощника.",
+            );
+        })
+        .finally(this.finalizeStreamingState);
+    }
+
+    sendNormsMessage(message: string, scenarioId: number) {
         const requestId = this.currentStreamRequestId;
 
         return axios.get(
@@ -4674,8 +4942,10 @@ class ChatDataStore {
 
         if (this.selectedChatTool === "Проверка ВРИ") {
             return this.startVriCheckSetup(message);
+        } else if (this.selectedChatTool === "Нормативная документация") {
+            return this.sendNormativeDocumentMessage(message, this.selectedScenario ?? undefined);
         } else if (this.selectedContext === "nonproject") {
-            return this.sendDocumentMessage(message);
+            return this.sendOrchestratorMessage(message);
         } else if (this.selectedContext !== "nonproject" && this.selectedScenario) {
             if (this.selectedChatTool === "Обеспеченность") {
                 return this.sendProvisionContextMessage(message);
@@ -4693,7 +4963,7 @@ class ChatDataStore {
                 return this.sendNormsMessage(message, this.selectedScenario);
             }
 
-            return this.sendDocumentMessage(message, this.selectedScenario);
+            return this.sendOrchestratorMessage(message, this.selectedScenario);
         }
 
         this.streamedResponse = "";
@@ -4866,6 +5136,10 @@ class ChatDataStore {
             HISTORY_LAYER_FALLBACK_NAME;
 
         for (const [index, toolCall] of part.payload.calls.entries()) {
+            if (TABLE_ONLY_TOOL_NAMES.has(toolCall.tool_name.toLowerCase())) {
+                continue;
+            }
+
             const layerResponse = await this.getUserChatMessageLayer(
                 messageId,
                 part.part_seq,
@@ -4929,6 +5203,17 @@ class ChatDataStore {
                                 layer: layer.layer,
                             },
                         });
+                    });
+                    continue;
+                }
+
+                const table = extractTableMessage(part.payload);
+
+                if (userMessage.role === "assistant" && table) {
+                    flushText();
+                    messages.push({
+                        type: "response",
+                        message: table,
                     });
                     continue;
                 }

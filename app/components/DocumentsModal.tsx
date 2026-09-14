@@ -232,10 +232,9 @@ const DocumentsModal = observer(({
                                                         type="button"
                                                         className="inline-flex shrink-0 items-center gap-1.5 rounded-xl p-2 text-xs font-medium text-[#0788CE] transition-colors hover:bg-[#EAF5FF] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0788CE]/40 disabled:cursor-not-allowed disabled:opacity-50 md:px-3 customer:text-brand-primary customer:hover:bg-brand-soft customer:focus-visible:ring-brand-primary/40"
                                                         onClick={() => onUpdate(document)}
-                                                        // disabled={isDeleting}
+                                                        disabled={isDeleting}
                                                         aria-label="Обновить документ"
                                                         title="Обновить документ"
-                                                        disabled={true}
                                                     >
                                                         <MdRefresh size={16} aria-hidden="true" />
                                                         <span className="hidden md:inline">Обновить</span>

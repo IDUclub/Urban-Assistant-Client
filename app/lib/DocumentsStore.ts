@@ -2,12 +2,15 @@ import axios from "axios";
 import { makeAutoObservable, runInAction } from "mobx";
 import AuthStore from "@lib/AuthStore";
 
+export type DocumentTerritoryLevel = "federal" | "regional" | "local";
+
 export type UserDocument = {
     id: string;
     name: string;
     version: string;
     territoryId: number | null;
     territoryName: string | null;
+    territoryLevel: DocumentTerritoryLevel | null;
     uploadedAt: string | null;
 };
 
@@ -160,6 +163,15 @@ export type UpdateUserDocumentPayload = Omit<UploadUserDocumentPayload, "name"> 
     title: string;
 };
 
+export type UpdateUserDocumentMetadataPayload = {
+    documentId: string;
+    projectId: number;
+    title?: string;
+    territoryId?: number | null;
+    version?: string;
+    currentVersion?: string;
+};
+
 export type DeleteUserDocumentPayload = {
     projectId: number;
     documentName: string;
@@ -176,6 +188,17 @@ function normalizeDocument(document: any, index: number): UserDocument {
         ? NaN
         : Number(document.territory_id);
 
+    const rawTerritoryLevel = String(document?.document_level ?? "").trim().toLowerCase();
+    const territoryLevel: DocumentTerritoryLevel | null = (
+        rawTerritoryLevel === "federal" || rawTerritoryLevel === "федеральный"
+            ? "federal"
+            : rawTerritoryLevel === "regional" || rawTerritoryLevel === "региональный"
+                ? "regional"
+                : rawTerritoryLevel === "local" || rawTerritoryLevel === "местный"
+                    ? "local"
+                    : null
+    );
+
     return {
         id: String(document?.doc_id ?? document?.id ?? `${document?.name ?? "document"}-${index}`),
         name: typeof document?.name === "string" && document.name.trim()
@@ -188,6 +211,7 @@ function normalizeDocument(document: any, index: number): UserDocument {
         territoryName: typeof document?.territory_name === "string" && document.territory_name.trim()
             ? document.territory_name.trim()
             : null,
+        territoryLevel,
         uploadedAt: typeof document?.uploaded_at === "string" && document.uploaded_at.trim()
             ? document.uploaded_at
             : null,
@@ -381,6 +405,58 @@ class AppDocumentsStore {
         });
 
         return data as UploadUserDocumentResponse;
+    }
+
+    async updateDocumentMetadata(
+        payload: UpdateUserDocumentMetadataPayload,
+    ): Promise<unknown> {
+        await AuthStore.refreshTokenIfNeeded();
+
+        const metadata: {
+            title?: string;
+            territory_id?: number | null;
+            version?: string;
+            current_version?: string;
+        } = {};
+
+        const nextTitle = payload.title?.trim();
+        if (nextTitle) metadata.title = nextTitle;
+
+        if (payload.territoryId !== undefined) {
+            metadata.territory_id = payload.territoryId;
+        }
+
+        const nextVersion = payload.version?.trim();
+        if (nextVersion) {
+            metadata.version = nextVersion;
+
+            const currentVersion = payload.currentVersion?.trim();
+            if (currentVersion) metadata.current_version = currentVersion;
+        }
+
+        if (Object.keys(metadata).length === 0) {
+            throw new Error("Для обновления метаданных нужно изменить название, версию или территорию");
+        }
+
+        const { data } = await axios.patch(
+            `${import.meta.env.VITE_DOCUMENTS_API}/user-documents/${encodeURIComponent(payload.documentId)}/metadata`,
+            metadata,
+            {
+                headers: getAuthorizationHeaders(),
+                params: { project_id: String(payload.projectId) },
+            },
+        );
+
+        // Let any older list request finish before invalidating its cached result.
+        await this.projectRequests.get(payload.projectId)?.catch(() => undefined);
+
+        runInAction(() => {
+            this.documentsByProject.delete(payload.projectId);
+            this.documentCounts.delete(payload.projectId);
+            this.errorsByProject.delete(payload.projectId);
+        });
+
+        return data;
     }
 
     async deleteDocument(payload: DeleteUserDocumentPayload): Promise<void> {

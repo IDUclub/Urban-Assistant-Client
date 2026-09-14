@@ -207,6 +207,12 @@ class AppDataStore {
     }
 
     async getProjectCreationTerritories(): Promise<ProjectCreationTerritoryOption[]> {
+        return this.getTerritoriesWithoutGeometry(12639);
+    }
+
+    async getTerritoriesWithoutGeometry(
+        parentId: number,
+    ): Promise<ProjectCreationTerritoryOption[]> {
         const { data } = await axios.get(
             `${import.meta.env.VITE_URBAN_API}/all_territories_without_geometry`,
             {
@@ -214,7 +220,7 @@ class AppDataStore {
                     Authorization: `Bearer ${AuthStore.accessToken}`,
                 },
                 params: {
-                    parent_id: 12639,
+                    parent_id: parentId,
                     get_all_levels: false,
                     cities_only: false,
                     ordering: "asc",
