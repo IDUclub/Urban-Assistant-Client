@@ -157,11 +157,11 @@ html[data-brand="customer"] {
 
 html[data-brand="customer"][data-color-scheme="dark"] {
   /* Customer red gradient for dark mode 50242a */
-  --color-brand-primary: #d518219a;
-  --color-brand-gradient-start: #d518219a;
-  --color-brand-gradient-middle: #d518219a;
-  --color-brand-gradient-end: #d518219a;
-  --color-brand-soft: #97141ac6;
+  --color-brand-primary: #831c21;
+  --color-brand-gradient-start: #711a1f;
+  --color-brand-gradient-middle: #711a1f;
+  --color-brand-gradient-end: #711a1f;
+  --color-brand-soft: #561b1d;
   --color-brand-active: #97141ac6;
   --color-brand-contrast: #e7cbcd;
 
