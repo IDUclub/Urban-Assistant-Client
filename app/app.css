@@ -85,6 +85,7 @@
   --color-brand-accent: #a5c21b;
   --color-brand-hover: #0676b3;
   --color-brand-soft: #eaf5ff;
+  --color-brand-active: #eaf5ff;
   --color-brand-contrast: #0b5e8e;
   --color-brand-border: #dbe3ec;
   --color-brand-gradient-start: #0788ce;
@@ -130,16 +131,17 @@
 
 html[data-brand="customer"] {
   /* Customer brand palette */
-  --color-brand-primary: #c8141e;
+  --color-brand-primary: #781019;
   --color-brand-secondary: #781019;
   --color-brand-accent: #a61926;
   --color-brand-hover: #a61926;
   --color-brand-soft: #f9e8ea;
   --color-brand-contrast: #781019;
+  --color-brand-active: #f9e8ea;
   --color-brand-border: #c8141e;
-  --color-brand-gradient-start: #c8141e;
-  --color-brand-gradient-middle: #d52d38;
-  --color-brand-gradient-end: #e24a53;
+  --color-brand-gradient-start: #781019;
+  --color-brand-gradient-middle: #781019;
+  --color-brand-gradient-end: #781019;
 
   --brand-primary-rgb: 200 20 30;
   --brand-secondary-rgb: 120 16 25;
@@ -154,12 +156,14 @@ html[data-brand="customer"] {
 }
 
 html[data-brand="customer"][data-color-scheme="dark"] {
-  /* Customer red gradient for dark mode */
-  --color-brand-gradient-start: #c8141e;
-  --color-brand-gradient-middle: #d52d38;
-  --color-brand-gradient-end: #e24a53;
-  --color-brand-soft: #412126;
-  --color-brand-contrast: #f08088;
+  /* Customer red gradient for dark mode 50242a */
+  --color-brand-primary: #d518219a;
+  --color-brand-gradient-start: #d518219a;
+  --color-brand-gradient-middle: #d518219a;
+  --color-brand-gradient-end: #d518219a;
+  --color-brand-soft: #97141ac6;
+  --color-brand-active: #97141ac6;
+  --color-brand-contrast: #e7cbcd;
 
   /* Customer graphite surfaces */
   --color-surface-page: #202124;
@@ -296,6 +300,25 @@ body::-webkit-scrollbar,
 
 * {
   scrollbar-width: none;
+}
+
+.map-legend-scroll {
+  scrollbar-color: rgb(148 163 184 / 0.8) transparent;
+  scrollbar-width: thin;
+}
+
+.map-legend-scroll::-webkit-scrollbar {
+  display: block;
+  width: 6px;
+}
+
+.map-legend-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.map-legend-scroll::-webkit-scrollbar-thumb {
+  background: rgb(148 163 184 / 0.8);
+  border-radius: 9999px;
 }
 
 .map-legend-scroll {
