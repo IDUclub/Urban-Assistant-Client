@@ -1,4 +1,5 @@
 import axios from "axios";
+import { readDocumentStream } from "./documentStream";
 import { action, makeAutoObservable, reaction, runInAction } from "mobx";
 import AuthStore from "@lib/AuthStore";
 import DataStore from "@lib/DataStore";
@@ -1548,6 +1549,14 @@ class ChatDataStore {
     }
 
     abortStream() {
+        if (this.documentRequestId) {
+            const id = this.documentRequestId;
+            this.documentRequestId = undefined;
+            void axios.post(`${import.meta.env.VITE_LLM_RESTRICTIONS_API}/pipelines/${encodeURIComponent(id)}/cancel`, null,
+                { headers: { Authorization: `Bearer ${AuthStore.accessToken}` } }).catch(() => {
+                    runInAction(() => this.addChatNotice("error", "Не удалось подтвердить остановку запроса на сервере."));
+                });
+        }
         this.abortController?.abort();
     }
 
@@ -2021,71 +2030,42 @@ class ChatDataStore {
         }
     };
 
-    sendNormativeDocumentMessage(message: string, scenarioId?: number) {
-        return axios.get(
-            `${import.meta.env.VITE_LLM_RESTRICTIONS_API}/documents/qa/stream`,
-                {
-                    headers: {
-                        Accept: "text/event-stream",
-                        Authorization: `Bearer ${AuthStore.accessToken}`,
-                    },
-                    params: this.withActiveChatIdParams({
-                        request: message,
-                        scenario_id: scenarioId ?? undefined,
-                    }),
-                    responseType: "stream",
-                    adapter: "fetch",
-                    signal: this.abortController?.signal,
-                }
-            )
-            .then(
-                async (response) => {
-                    const stream = response.data;
-                    const reader = stream.pipeThrough(new TextDecoderStream()).getReader();
-                    let buffer = "";
+    private documentRequestId: string | undefined;
 
-                    while (true) {
-                        const { value, done } = await reader.read();
-                        if (done) break;
-                        if (!value) continue;
-
-                        buffer += value;
-                        const events = buffer.split("\n\n");
-                        buffer = events.pop() ?? "";
-
-                        for (const event of events) {
-                            const dataLines = event
-                                .split("\n")
-                                .filter((line) => line.startsWith("data:"))
-                                .map((line) => line.slice(5).trimStart());
-
-                            if (!dataLines.length) continue;
-                            this.appendStreamChunk(dataLines.join("\n"));
-                        }
-                    }
-
-                    if (buffer.trim()) {
-                        const dataLines = buffer
-                            .split("\n")
-                            .filter((line) => line.startsWith("data:"))
-                            .map((line) => line.slice(5).trimStart());
-
-                        if (dataLines.length) {
-                            this.appendStreamChunk(dataLines.join("\n"));
-                        }
-                    }
-
-                    this.commitStreamedResponse();
-                }
-            )
-            .catch((error) => {
-                if (axios.isCancel(error) || error?.name === "AbortError" || error?.name === "CanceledError") {
-                    this.commitStreamedResponse();
-                    return;
-                }
-                console.error("Error streaming chat message:", error);
-            })
-            .finally(this.finalizeStreamingState);
+    async sendNormativeDocumentMessage(message: string, scenarioId?: number) {
+        const controller = this.abortController ?? new AbortController();
+        const generation = this.currentStreamRequestId;
+        try {
+            await readDocumentStream({
+                signal: controller.signal,
+                open: async (resume) => {
+                    const response = await axios.get(
+                        `${import.meta.env.VITE_LLM_RESTRICTIONS_API}/documents/qa/stream`,
+                        {
+                            headers: { Accept: "text/event-stream", Authorization: `Bearer ${AuthStore.accessToken}` },
+                            params: this.withActiveChatIdParams({ request: message, scenario_id: scenarioId ?? undefined, ...resume }),
+                            responseType: "stream", adapter: "fetch", signal: controller.signal,
+                        },
+                    );
+                    return response.data;
+                },
+                onRequestId: (id) => { runInAction(() => { if (generation === this.currentStreamRequestId) this.documentRequestId = id; }); },
+                onRecovering: () => { runInAction(() => { if (generation === this.currentStreamRequestId) this.currentStatus = "Соединение потеряно. Восстанавливаю ответ…"; }); },
+                onEvent: (data) => {
+                    if (generation === this.currentStreamRequestId) this.appendStreamChunk(data);
+                },
+            });
+            if (generation === this.currentStreamRequestId) this.commitStreamedResponse();
+        } catch (error) {
+            if (generation === this.currentStreamRequestId && !controller.signal.aborted) {
+                runInAction(() => this.addChatNotice("error", error instanceof Error ? error.message : "Не удалось восстановить ответ."));
+            }
+        } finally {
+            if (generation === this.currentStreamRequestId) {
+                runInAction(() => { this.documentRequestId = undefined; });
+                this.finalizeStreamingState();
+            }
+        }
     }
 
     sendScenarioDataQaMessage(message: string) {
