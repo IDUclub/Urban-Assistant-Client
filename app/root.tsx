@@ -45,8 +45,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
       </head>
       <body>
         <div className="fixed right-4 top-4 z-50 flex items-start gap-2">
+          <ThemeToggle/>
           <UserMenu />
-          {String(BRAND_THEME) === "customer" ? <ThemeToggle /> : null}
         </div>
         {children}
         <ScrollRestoration />
