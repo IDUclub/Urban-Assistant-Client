@@ -17,8 +17,9 @@ import MapStore from "@lib/MapStore";
 import CustomSelect, { type SelectOption } from "@components/ui/Select";
 import CreateProjectModal from "@components/CreateProjectModal";
 import CreateScenarioModal from "@components/CreateScenarioModal";
-import DocumentsModal from "@components/DocumentsModal";
-import UploadDocumentModal from "@components/UploadDocumentModal";
+import DocumentLibraryModal from "@components/documents/DocumentLibraryModal";
+import DocumentsModal from "@components/documents/DocumentsModal";
+import UploadDocumentModal from "@components/documents/UploadDocumentModal";
 
 const CHAT_SERVICES = [
   "Нормативная документация",
@@ -41,6 +42,7 @@ const ChatContextSelection = observer(() => {
     const [panelPlacement, setPanelPlacement] = useState<PanelPlacement>("bottom");
     const [isCreateProjectModalOpen, setIsCreateProjectModalOpen] = useState(false);
     const [isCreateScenarioModalOpen, setIsCreateScenarioModalOpen] = useState(false);
+    const [isLibraryModalOpen, setIsLibraryModalOpen] = useState(false);
     const [isDocumentsModalOpen, setIsDocumentsModalOpen] = useState(false);
     const [isUploadDocumentModalOpen, setIsUploadDocumentModalOpen] = useState(false);
     const [documentToUpdate, setDocumentToUpdate] = useState<{
@@ -407,6 +409,25 @@ const ChatContextSelection = observer(() => {
                                         </button>
                                     )}
                                 </div>
+                                {selectedContext === "nonproject" && (
+                                    <section className="mt-3 border-t border-slate-100 pt-3 customer-dark:border-ui-border">
+                                        <h3 className="px-1 pb-2 text-xs font-semibold uppercase tracking-wider text-slate-400 customer-dark:text-content-muted">
+                                            Документы
+                                        </h3>
+                                        <button
+                                            type="button"
+                                            className="flex w-full items-center gap-2.5 rounded-2xl px-3 py-2.5 text-left leading-5 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0788CE]/40 customer:focus-visible:ring-brand-primary/40 customer-dark:hover:bg-surface-hover"
+                                            onClick={() => {
+                                                setIsOpen(false);
+                                                setPanelView("menu");
+                                                setIsLibraryModalOpen(true);
+                                            }}
+                                        >
+                                            <MdOutlineDescription size={19} className="shrink-0" />
+                                            <span>Просмотр документов</span>
+                                        </button>
+                                    </section>
+                                )}
                                 {isProjectSelected && (
                                   <section className="mt-3 border-t border-slate-100 pt-3 customer-dark:border-ui-border">
                                     <h3 className="px-1 pb-2 text-xs font-semibold uppercase tracking-wider text-slate-400 customer-dark:text-content-muted">
@@ -624,6 +645,12 @@ const ChatContextSelection = observer(() => {
                         ChatStore.setSelectedContext(selectedProjectId);
                         ChatStore.setSelectedScenario(scenario.id);
                     }}
+                />
+            )}
+
+            {isLibraryModalOpen && selectedContext === "nonproject" && (
+                <DocumentLibraryModal
+                    onClose={() => setIsLibraryModalOpen(false)}
                 />
             )}
 

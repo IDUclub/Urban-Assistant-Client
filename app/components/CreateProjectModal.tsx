@@ -1,4 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import {
+    type SubmitEvent,
+    useEffect,
+    useRef,
+    useState,
+} from "react";
 import { createPortal } from "react-dom";
 import axios from "axios";
 import { MdClose } from "react-icons/md";
@@ -145,11 +150,17 @@ function CreateProjectModal({
 
         void DataStore.getProjectCreationTerritories()
             .then((items) => {
-                if (!isActive) return;
+                if (!isActive) {
+                    return;
+                }
+
                 setTerritories(items);
             })
             .catch((error) => {
-                if (!isActive) return;
+                if (!isActive) {
+                    return;
+                }
+
                 console.error("Error fetching project creation territories:", error);
                 setErrorText("Не удалось загрузить список территорий.");
             })
@@ -185,11 +196,17 @@ function CreateProjectModal({
 
         void DataStore.getProjectCreationTerritory(selectedTerritoryId)
             .then((territory) => {
-                if (!isActive) return;
+                if (!isActive) {
+                    return;
+                }
+
                 setSelectedTerritory(territory);
             })
             .catch((error) => {
-                if (!isActive) return;
+                if (!isActive) {
+                    return;
+                }
+
                 console.error("Error fetching selected territory:", error);
                 setErrorText("Не удалось загрузить геометрию выбранной территории.");
             })
@@ -241,10 +258,12 @@ function CreateProjectModal({
         }
     };
 
-    const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    const handleSubmit = async (event: SubmitEvent<HTMLFormElement>) => {
         event.preventDefault();
 
-        if (!canSubmit || selectedTerritoryId === null) return;
+        if (!canSubmit || selectedTerritoryId === null) {
+            return;
+        }
 
         const closedPolygon = [...polygonPoints, polygonPoints[0]];
         const geometry: ProjectBoundaryGeometry = uploadedGeometry ?? {
