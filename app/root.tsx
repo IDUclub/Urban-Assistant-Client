@@ -13,7 +13,7 @@ import AuthStore from "@lib/AuthStore";
 import PageLoader from "@components/PageLoader";
 import ThemeToggle from "@components/ThemeToggle";
 import UserMenu from "@components/UserMenu";
-import DocumentUploadStatus from "@components/DocumentUploadStatus";
+import DocumentUploadStatus from "@components/documents/DocumentUploadStatus";
 import { BRAND_THEME } from "@/config";
 import "./app.css";
 
