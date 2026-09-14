@@ -1148,7 +1148,7 @@ const ChatComponent = observer(function ChatComponent(
                     <GenPlannerCustomSetupCard setup={message.message} />
                 )}
                 {message.type === "request" && (
-                    <div className="absolute -bottom-1.5 right-4 w-0 h-0 border-l-8 border-l-transparent border-r-8 border-r-transparent border-t-8 border-t-brand-soft"></div>
+                    <div className="absolute -bottom-1.5 right-4 w-0 h-0 border-l-8 border-l-transparent border-r-8 border-r-transparent border-t-8 border-t-blue-100 customer:border-t-brand-soft "></div>
                 )}
             </div>
         );
