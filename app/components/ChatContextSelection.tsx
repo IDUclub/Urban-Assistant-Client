@@ -17,8 +17,9 @@ import MapStore from "@lib/MapStore";
 import CustomSelect, { type SelectOption } from "@components/ui/Select";
 import CreateProjectModal from "@components/CreateProjectModal";
 import CreateScenarioModal from "@components/CreateScenarioModal";
-import DocumentsModal from "@components/DocumentsModal";
-import UploadDocumentModal from "@components/UploadDocumentModal";
+import DocumentLibraryModal from "@components/documents/DocumentLibraryModal";
+import DocumentsModal from "@components/documents/DocumentsModal";
+import UploadDocumentModal from "@components/documents/UploadDocumentModal";
 
 const CHAT_SERVICES = [
   "Нормативная документация",
@@ -41,6 +42,7 @@ const ChatContextSelection = observer(() => {
     const [panelPlacement, setPanelPlacement] = useState<PanelPlacement>("bottom");
     const [isCreateProjectModalOpen, setIsCreateProjectModalOpen] = useState(false);
     const [isCreateScenarioModalOpen, setIsCreateScenarioModalOpen] = useState(false);
+    const [isLibraryModalOpen, setIsLibraryModalOpen] = useState(false);
     const [isDocumentsModalOpen, setIsDocumentsModalOpen] = useState(false);
     const [isUploadDocumentModalOpen, setIsUploadDocumentModalOpen] = useState(false);
     const [documentToUpdate, setDocumentToUpdate] = useState<{
@@ -260,6 +262,24 @@ const ChatContextSelection = observer(() => {
         });
     };
 
+    const handleOpenDocuments = () => {
+        setIsOpen(false);
+        setPanelView("menu");
+
+        if (selectedContext === "nonproject") {
+            setIsLibraryModalOpen(true);
+            return;
+        }
+
+        setIsDocumentsModalOpen(true);
+    };
+
+    const handleOpenUploadDocument = () => {
+        setIsOpen(false);
+        setPanelView("menu");
+        setIsUploadDocumentModalOpen(true);
+    };
+
     return (
         <>
             <div
@@ -407,57 +427,51 @@ const ChatContextSelection = observer(() => {
                                         </button>
                                     )}
                                 </div>
-                                {isProjectSelected && (
-                                  <section className="mt-3 border-t border-slate-100 pt-3 customer-dark:border-ui-border">
+                                <section className="mt-3 border-t border-slate-100 pt-3 customer-dark:border-ui-border">
                                     <h3 className="px-1 pb-2 text-xs font-semibold uppercase tracking-wider text-slate-400 customer-dark:text-content-muted">
-                                      Документы
+                                        Документы
                                     </h3>
-                                    <div className="grid gap-1 sm:grid-cols-2">
+                                    <div className={`grid gap-1 ${isProjectSelected ? "sm:grid-cols-2" : "grid-cols-1"}`}>
                                         <button
-                                          type="button"
-                                          className="
-                                            flex w-full items-center justify-between gap-3 rounded-2xl px-3 py-2.5 text-left leading-5
-                                            transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0788CE]/40
-                                            customer:focus-visible:ring-brand-primary/40
-                                            hover:bg-slate-100 customer-dark:hover:bg-surface-hover
-                                          "
-                                          onClick={() => {
-                                              setIsOpen(false);
-                                              setPanelView("menu");
-                                              setIsDocumentsModalOpen(true);
-                                          }}
+                                            type="button"
+                                            className="
+                                                flex w-full items-center justify-between gap-3 rounded-2xl px-3 py-2.5 text-left leading-5
+                                                transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0788CE]/40
+                                                customer:focus-visible:ring-brand-primary/40
+                                                hover:bg-slate-100 customer-dark:hover:bg-surface-hover
+                                            "
+                                            onClick={handleOpenDocuments}
                                         >
-                                          <span className="flex min-w-0 items-center gap-2.5">
-                                              <MdOutlineDescription size={19} className="shrink-0" />
-                                              <span className="truncate">Просмотр документов</span>
-                                          </span>
-                                          <span
-                                              className="min-w-6 shrink-0 rounded-full bg-[#EAF5FF] px-2 py-0.5 text-center text-xs font-semibold text-[#0B5E8E] customer:bg-brand-soft customer:text-brand-contrast"
-                                              aria-label={`Документов: ${documentCount ?? 0}`}
-                                          >
-                                              {documentCount ?? 0}
-                                          </span>
+                                            <span className="flex min-w-0 items-center gap-2.5">
+                                                <MdOutlineDescription size={19} className="shrink-0" />
+                                                <span className="truncate">Просмотр документов</span>
+                                            </span>
+                                            {isProjectSelected && (
+                                                <span
+                                                    className="min-w-6 shrink-0 rounded-full bg-[#EAF5FF] px-2 py-0.5 text-center text-xs font-semibold text-[#0B5E8E] customer:bg-brand-soft customer:text-brand-contrast"
+                                                    aria-label={`Документов: ${documentCount ?? 0}`}
+                                                >
+                                                    {documentCount ?? 0}
+                                                </span>
+                                            )}
                                         </button>
-                                        <button
-                                          type="button"
-                                          className="
-                                            flex w-full items-center gap-2.5 rounded-2xl px-3 py-2.5 text-left leading-5
-                                            transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0788CE]/40
-                                            customer:focus-visible:ring-brand-primary/40
-                                            hover:bg-slate-100 customer-dark:hover:bg-surface-hover
-                                          "
-                                          onClick={() => {
-                                              setIsOpen(false);
-                                              setPanelView("menu");
-                                              setIsUploadDocumentModalOpen(true);
-                                          }}
-                                        >
-                                          <MdUploadFile size={19} className="shrink-0" />
-                                          <span className="truncate">Загрузить документ</span>
-                                        </button>
+                                        {isProjectSelected && (
+                                            <button
+                                                type="button"
+                                                className="
+                                                    flex w-full items-center gap-2.5 rounded-2xl px-3 py-2.5 text-left leading-5
+                                                    transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0788CE]/40
+                                                    customer:focus-visible:ring-brand-primary/40
+                                                    hover:bg-slate-100 customer-dark:hover:bg-surface-hover
+                                                "
+                                                onClick={handleOpenUploadDocument}
+                                            >
+                                                <MdUploadFile size={19} className="shrink-0" />
+                                                <span className="truncate">Загрузить документ</span>
+                                            </button>
+                                        )}
                                     </div>
-                                  </section>
-                                )}
+                                </section>
                                 <section className="mt-3 border-t border-slate-100 pt-3 customer-dark:border-ui-border">
                                     <h3 className="px-1 pb-2 text-xs font-semibold uppercase tracking-wider text-slate-400 customer-dark:text-content-muted">
                                         Сервисы
@@ -624,6 +638,12 @@ const ChatContextSelection = observer(() => {
                         ChatStore.setSelectedContext(selectedProjectId);
                         ChatStore.setSelectedScenario(scenario.id);
                     }}
+                />
+            )}
+
+            {isLibraryModalOpen && selectedContext === "nonproject" && (
+                <DocumentLibraryModal
+                    onClose={() => setIsLibraryModalOpen(false)}
                 />
             )}
 

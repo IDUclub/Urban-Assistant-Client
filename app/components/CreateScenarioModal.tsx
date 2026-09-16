@@ -1,4 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import {
+    type SubmitEvent,
+    useEffect,
+    useRef,
+    useState,
+} from "react";
 import { createPortal } from "react-dom";
 import axios from "axios";
 import { MdClose } from "react-icons/md";
@@ -36,7 +41,9 @@ function getScenarioErrorMessage(error: unknown) {
                 : []
         ));
 
-        if (messages.length) return messages.join(". ");
+        if (messages.length) {
+            return messages.join(". ");
+        }
     }
 
     return "Не удалось создать сценарий. Проверьте данные и попробуйте ещё раз.";
@@ -84,7 +91,9 @@ function CreateScenarioModal({
         nameInputRef.current?.focus();
 
         const handleEscape = (event: KeyboardEvent) => {
-            if (event.key === "Escape" && !isSubmitting) onClose();
+            if (event.key === "Escape" && !isSubmitting) {
+                onClose();
+            }
         };
 
         document.addEventListener("keydown", handleEscape);
@@ -112,16 +121,24 @@ function CreateScenarioModal({
 
         void DataStore.getFunctionalZoneTypes()
             .then((zoneTypes) => {
-                if (!isActive) return;
+                if (!isActive) {
+                    return;
+                }
+
                 setFunctionalZoneTypes(zoneTypes);
             })
             .catch((error) => {
-                if (!isActive) return;
+                if (!isActive) {
+                    return;
+                }
+
                 console.error("Error fetching functional zone types:", error);
                 setErrorText("Не удалось загрузить типы профиля.");
             })
             .finally(() => {
-                if (isActive) setIsZoneTypesLoading(false);
+                if (isActive) {
+                    setIsZoneTypesLoading(false);
+                }
             });
 
         return () => {
@@ -129,10 +146,12 @@ function CreateScenarioModal({
         };
     }, []);
 
-    const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    const handleSubmit = async (event: SubmitEvent<HTMLFormElement>) => {
         event.preventDefault();
 
-        if (!canSubmit || functionalZoneTypeId === null) return;
+        if (!canSubmit || functionalZoneTypeId === null) {
+            return;
+        }
 
         setIsSubmitting(true);
         setErrorText(null);
@@ -159,7 +178,9 @@ function CreateScenarioModal({
         <div
             className="fixed inset-0 z-100 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-[2px]"
             onMouseDown={(event) => {
-                if (event.target === event.currentTarget && !isSubmitting) onClose();
+                if (event.target === event.currentTarget && !isSubmitting) {
+                    onClose();
+                }
             }}
         >
             <div

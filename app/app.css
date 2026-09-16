@@ -321,23 +321,27 @@ body::-webkit-scrollbar,
   border-radius: 9999px;
 }
 
-.map-legend-scroll {
+.document-library-scroll {
   scrollbar-color: rgb(148 163 184 / 0.8) transparent;
+  scrollbar-gutter: stable;
   scrollbar-width: thin;
 }
 
-.map-legend-scroll::-webkit-scrollbar {
+.document-library-scroll::-webkit-scrollbar {
   display: block;
-  width: 6px;
+  width: 8px;
+  height: 8px;
 }
 
-.map-legend-scroll::-webkit-scrollbar-track {
+.document-library-scroll::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.map-legend-scroll::-webkit-scrollbar-thumb {
+.document-library-scroll::-webkit-scrollbar-thumb {
   background: rgb(148 163 184 / 0.8);
+  border: 2px solid transparent;
   border-radius: 9999px;
+  background-clip: padding-box;
 }
 
 button,
