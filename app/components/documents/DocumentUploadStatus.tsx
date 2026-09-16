@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { observer } from "mobx-react-lite";
 import {
@@ -9,6 +9,7 @@ import {
     MdNorth,
 } from "react-icons/md";
 import DocumentsStore, { type DocumentUploadJob } from "@lib/DocumentsStore";
+import useDocumentModal from "./useDocumentModal";
 
 function getStatusClasses(job: DocumentUploadJob) {
     if (job.state === "completed") {
@@ -21,14 +22,51 @@ function getStatusClasses(job: DocumentUploadJob) {
 }
 
 function getProgressClasses(job: DocumentUploadJob) {
-    if (job.state === "completed") return "bg-emerald-500";
-    if (job.state === "failed") return "bg-red-500 customer:bg-danger";
+    if (job.state === "completed") {
+        return "bg-emerald-500";
+    }
+
+    if (job.state === "failed") {
+        return "bg-red-500 customer:bg-danger";
+    }
+
     return "bg-[#0788CE] customer:bg-brand-primary";
+}
+
+function UploadJobIcon({ job }: { job: DocumentUploadJob }) {
+    if (job.state === "completed") {
+        return (
+            <MdCheckCircle
+                size={22}
+                className="shrink-0 text-emerald-500"
+                aria-hidden="true"
+            />
+        );
+    }
+
+    if (job.state === "failed") {
+        return (
+            <MdError
+                size={22}
+                className="shrink-0 text-red-500 customer:text-danger"
+                aria-hidden="true"
+            />
+        );
+    }
+
+    return (
+        <MdInsertDriveFile
+            size={22}
+            className="shrink-0 text-[#0788CE] customer:text-brand-primary"
+            aria-hidden="true"
+        />
+    );
 }
 
 const DocumentUploadStatus = observer(() => {
     const [isOpen, setIsOpen] = useState(false);
-    const [showCompletionNotification, setShowCompletionNotification] = useState(false);
+    const [showCompletionNotification, setShowCompletionNotification] =
+        useState(false);
     const closeButtonRef = useRef<HTMLButtonElement | null>(null);
     const hadActiveUploadsRef = useRef(false);
     const notificationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -37,6 +75,9 @@ const DocumentUploadStatus = observer(() => {
     const hasFailedJobs = jobs.some((job) => job.state === "failed");
     const allJobsCompleted = jobs.length > 0
         && jobs.every((job) => job.state === "completed");
+    const closeStatusModal = useCallback(() => {
+        setIsOpen(false);
+    }, []);
 
     useEffect(() => {
         if (activeCount > 0) {
@@ -49,7 +90,9 @@ const DocumentUploadStatus = observer(() => {
             return;
         }
 
-        if (!hadActiveUploadsRef.current || !allJobsCompleted) return;
+        if (!hadActiveUploadsRef.current || !allJobsCompleted) {
+            return;
+        }
 
         hadActiveUploadsRef.current = false;
         setIsOpen(false);
@@ -61,35 +104,26 @@ const DocumentUploadStatus = observer(() => {
     }, [activeCount, allJobsCompleted]);
 
     useEffect(() => () => {
-        if (notificationTimerRef.current) clearTimeout(notificationTimerRef.current);
+        if (notificationTimerRef.current) {
+            clearTimeout(notificationTimerRef.current);
+        }
     }, []);
 
     useEffect(() => {
-        if (jobs.length === 0 && isOpen) setIsOpen(false);
+        if (jobs.length === 0 && isOpen) {
+            setIsOpen(false);
+        }
     }, [isOpen, jobs.length]);
 
-    useEffect(() => {
-        if (!isOpen) return;
+    useDocumentModal({
+        initialFocusRef: closeButtonRef,
+        isOpen,
+        onClose: closeStatusModal,
+    });
 
-        const previousBodyOverflow = document.body.style.overflow;
-        const previousHtmlOverflow = document.documentElement.style.overflow;
-        document.body.style.overflow = "hidden";
-        document.documentElement.style.overflow = "hidden";
-        closeButtonRef.current?.focus();
-
-        const handleEscape = (event: KeyboardEvent) => {
-            if (event.key === "Escape") setIsOpen(false);
-        };
-        document.addEventListener("keydown", handleEscape);
-
-        return () => {
-            document.body.style.overflow = previousBodyOverflow;
-            document.documentElement.style.overflow = previousHtmlOverflow;
-            document.removeEventListener("keydown", handleEscape);
-        };
-    }, [isOpen]);
-
-    if (jobs.length === 0 && !showCompletionNotification) return null;
+    if (jobs.length === 0 && !showCompletionNotification) {
+        return null;
+    }
 
     return (
         <>
@@ -142,7 +176,9 @@ const DocumentUploadStatus = observer(() => {
                 <div
                     className="fixed inset-0 z-100 flex items-center justify-center overflow-hidden bg-slate-950/40 p-4 backdrop-blur-[2px]"
                     onMouseDown={(event) => {
-                        if (event.target === event.currentTarget) setIsOpen(false);
+                        if (event.target === event.currentTarget) {
+                            closeStatusModal();
+                        }
                     }}
                 >
                     <div
@@ -164,7 +200,7 @@ const DocumentUploadStatus = observer(() => {
                                 ref={closeButtonRef}
                                 type="button"
                                 className="shrink-0 rounded-full p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0788CE]/40 customer:focus-visible:ring-brand-primary/40 customer-dark:text-content-muted customer-dark:hover:bg-surface-hover customer-dark:hover:text-content-primary"
-                                onClick={() => setIsOpen(false)}
+                                onClick={closeStatusModal}
                                 aria-label="Закрыть статус загрузки документов"
                             >
                                 <MdClose size={22} />
@@ -179,11 +215,7 @@ const DocumentUploadStatus = observer(() => {
                                 >
                                     <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
                                         <div className="flex min-w-0 items-center gap-2.5">
-                                            {job.state === "completed"
-                                                ? <MdCheckCircle size={22} className="shrink-0 text-emerald-500" aria-hidden="true" />
-                                                : job.state === "failed"
-                                                    ? <MdError size={22} className="shrink-0 text-red-500 customer:text-danger" aria-hidden="true" />
-                                                    : <MdInsertDriveFile size={22} className="shrink-0 text-[#0788CE] customer:text-brand-primary" aria-hidden="true" />}
+                                            <UploadJobIcon job={job} />
                                             <h3 className="min-w-0 wrap-anywhere font-semibold" title={job.title}>
                                                 {job.title}
                                             </h3>

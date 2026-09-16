@@ -110,7 +110,7 @@ class AppDataStore {
     userProjects?: UserProjectSummary[] = [];
     projectScenarios: Map<number, ProjectScenario[]> = new Map();
     functionalZoneTypes: FunctionalZoneType[] | null = null;
-    projectTerritories: Map<number, any | null> = new Map();
+    // Deduplicate simultaneous requests without retaining territory geometry.
     projectTerritoryRequests: Map<number, Promise<any | null>> = new Map();
 
     getUserProjects() {
@@ -411,10 +411,6 @@ class AppDataStore {
     }
 
     getProjectTerritory(projectId: number) {
-        if (this.projectTerritories.has(projectId)) {
-            return Promise.resolve(this.projectTerritories.get(projectId) ?? null);
-        }
-
         const currentRequest = this.projectTerritoryRequests.get(projectId);
         if (currentRequest) {
             return currentRequest;
@@ -437,7 +433,6 @@ class AppDataStore {
                 data?.result ??
                 data ??
                 null;
-            this.projectTerritories.set(projectId, geometry);
             return geometry;
         })
         .catch(error => {

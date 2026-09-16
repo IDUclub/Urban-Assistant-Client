@@ -1,4 +1,11 @@
-import { useEffect, useId, useRef, useState } from "react";
+import {
+    type ChangeEvent,
+    type SubmitEvent,
+    useEffect,
+    useId,
+    useRef,
+    useState,
+} from "react";
 import { createPortal } from "react-dom";
 import {
     MdAttachFile,
@@ -17,27 +24,60 @@ import DocumentsStore, {
     getDocumentsRequestErrorMessage,
     type UserDocument,
 } from "@lib/DocumentsStore";
+import useDocumentModal from "./useDocumentModal";
 
 const FEDERAL_TERRITORY_ID = 12639;
 
 function getInitialTerritoryScope(document?: UserDocument): DocumentTerritoryScope {
-    if (document?.territoryId == null) return "";
-    if (document.territoryLevel) return document.territoryLevel;
+    if (document?.territoryId == null) {
+        return "";
+    }
+
+    if (document.territoryLevel) {
+        return document.territoryLevel;
+    }
+
     return document.territoryId === FEDERAL_TERRITORY_ID ? "federal" : "regional";
 }
 
-interface UploadDocumentModalProps {
+type UploadDocumentModalProps = {
     projectId: number;
     projectName: string;
     initialDocument?: UserDocument;
     onClose: () => void;
     onSaved?: (updateKind: "file" | "metadata") => void | Promise<void>;
-}
+};
 
 function formatFileSize(size: number) {
-    if (size < 1024) return `${size} Б`;
-    if (size < 1024 * 1024) return `${Math.ceil(size / 1024)} КБ`;
+    if (size < 1024) {
+        return `${size} Б`;
+    }
+
+    if (size < 1024 * 1024) {
+        return `${Math.ceil(size / 1024)} КБ`;
+    }
+
     return `${(size / (1024 * 1024)).toFixed(1)} МБ`;
+}
+
+function getSubmitButtonText(isEditing: boolean, isSubmitting: boolean) {
+    if (isSubmitting) {
+        return isEditing ? "Обновление..." : "Загрузка...";
+    }
+
+    return isEditing ? "Обновить" : "Загрузить";
+}
+
+function getSaveErrorMessage(isEditing: boolean, hasFile: boolean) {
+    if (!isEditing) {
+        return "Не удалось загрузить документ. Проверьте файл и попробуйте ещё раз.";
+    }
+
+    if (hasFile) {
+        return "Не удалось обновить документ. Проверьте файл и попробуйте ещё раз.";
+    }
+
+    return "Не удалось обновить данные документа. Проверьте значения и попробуйте ещё раз.";
 }
 
 function UploadDocumentModal({
@@ -61,11 +101,17 @@ function UploadDocumentModal({
     const [territoryScope, setTerritoryScope] = useState<DocumentTerritoryScope>(
         getInitialTerritoryScope(initialDocument),
     );
-    const [regionalTerritories, setRegionalTerritories] = useState<ProjectCreationTerritoryOption[]>([]);
-    const [localTerritories, setLocalTerritories] = useState<ProjectCreationTerritoryOption[]>([]);
-    const [territoryId, setTerritoryId] = useState<number | null>(initialDocument?.territoryId ?? null);
-    const [isTerritoriesLoading, setIsTerritoriesLoading] = useState(false);
-    const [territoryErrorText, setTerritoryErrorText] = useState<string | null>(null);
+    const [regionalTerritories, setRegionalTerritories] = useState<
+        ProjectCreationTerritoryOption[]
+    >([]);
+    const [localTerritories, setLocalTerritories] = useState<
+        ProjectCreationTerritoryOption[]
+    >([]);
+    const [territoryId, setTerritoryId] = useState<number | null>(
+        initialDocument?.territoryId ?? null,
+    );
+    const [isLoadingTerritories, setIsLoadingTerritories] = useState(false);
+    const [territoryError, setTerritoryError] = useState<string | null>(null);
     const [territoryLoadRequest, setTerritoryLoadRequest] = useState(0);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [errorText, setErrorText] = useState<string | null>(null);
@@ -75,9 +121,11 @@ function UploadDocumentModal({
             ? localTerritories
             : [];
     const territoryOptions = [...selectableTerritories];
-    // Keep an existing document value selectable if the API no longer returns it.
+
+    // Preserve the current territory if it is missing from the latest API response.
     if (
-        territoryScope !== "" && territoryScope !== "federal"
+        territoryScope !== ""
+        && territoryScope !== "federal"
         && initialDocument?.territoryId != null
         && !selectableTerritories.some(
             (territory) => territory.territory_id === initialDocument.territoryId,
@@ -88,7 +136,8 @@ function UploadDocumentModal({
             territory_id: initialDocument.territoryId,
         });
     }
-    const needsSpecificTerritory = territoryScope === "regional" || territoryScope === "local";
+    const needsSpecificTerritory = territoryScope === "regional"
+        || territoryScope === "local";
     const hasValidTerritorySelection = !needsSpecificTerritory || territoryId !== null;
     const nextTitle = name.trim();
     const initialTitle = initialDocument?.name.trim() ?? "";
@@ -102,50 +151,45 @@ function UploadDocumentModal({
         && nextVersion !== initialVersion;
     const hasTerritoryChange = initialDocument !== undefined
         && territoryId !== initialDocument.territoryId;
-    const hasMetadataChanges = hasTitleChange || hasVersionChange || hasTerritoryChange;
+    const hasMetadataChanges = hasTitleChange
+        || hasVersionChange
+        || hasTerritoryChange;
     const canSubmit = hasValidTerritorySelection
         && (isEditing ? file !== null || hasMetadataChanges : file !== null)
         && !isSubmitting;
+    const modalTitle = isEditing ? "Обновить документ" : "Загрузить документ";
+    const closeButtonLabel = isEditing
+        ? "Закрыть окно обновления документа"
+        : "Закрыть окно загрузки документа";
+    const submitButtonText = getSubmitButtonText(isEditing, isSubmitting);
+
+    useDocumentModal({
+        initialFocusRef: closeButtonRef,
+        preventClose: isSubmitting,
+        onClose,
+    });
 
     useEffect(() => {
-        const previousBodyOverflow = document.body.style.overflow;
-        const previousHtmlOverflow = document.documentElement.style.overflow;
-
-        document.body.style.overflow = "hidden";
-        document.documentElement.style.overflow = "hidden";
-        closeButtonRef.current?.focus();
-
-        return () => {
-            document.body.style.overflow = previousBodyOverflow;
-            document.documentElement.style.overflow = previousHtmlOverflow;
-        };
-    }, []);
-
-    useEffect(() => {
-        const handleEscape = (event: KeyboardEvent) => {
-            if (event.key === "Escape" && !isSubmitting) onClose();
-        };
-
-        document.addEventListener("keydown", handleEscape);
-        return () => document.removeEventListener("keydown", handleEscape);
-    }, [isSubmitting, onClose]);
-
-    useEffect(() => {
-        if (territoryScope !== "regional") return;
+        if (territoryScope !== "regional") {
+            return;
+        }
 
         let isActive = true;
 
-        setIsTerritoriesLoading(true);
-        setTerritoryErrorText(null);
+        setIsLoadingTerritories(true);
+        setTerritoryError(null);
 
         void DataStore.getProjectCreationTerritories()
             .then((items) => {
-                if (!isActive) return;
+                if (!isActive) {
+                    return;
+                }
 
                 setRegionalTerritories(items);
 
                 if (shouldResolveInitialTerritoryRef.current) {
                     shouldResolveInitialTerritoryRef.current = false;
+
                     if (!items.some((territory) => (
                         territory.territory_id === initialDocument?.territoryId
                     ))) {
@@ -154,12 +198,17 @@ function UploadDocumentModal({
                 }
             })
             .catch((error) => {
-                if (!isActive) return;
+                if (!isActive) {
+                    return;
+                }
+
                 console.error("Error fetching regional document territories:", error);
-                setTerritoryErrorText("Не удалось загрузить список регионов.");
+                setTerritoryError("Не удалось загрузить список регионов.");
             })
             .finally(() => {
-                if (isActive) setIsTerritoriesLoading(false);
+                if (isActive) {
+                    setIsLoadingTerritories(false);
+                }
             });
 
         return () => {
@@ -168,26 +217,36 @@ function UploadDocumentModal({
     }, [initialDocument, territoryLoadRequest, territoryScope]);
 
     useEffect(() => {
-        if (territoryScope !== "local") return;
+        if (territoryScope !== "local") {
+            return;
+        }
 
         let isActive = true;
-        setIsTerritoriesLoading(true);
-        setTerritoryErrorText(null);
+
+        setIsLoadingTerritories(true);
+        setTerritoryError(null);
 
         void DataStore.getProjectTerritoryId(projectId)
             .then((projectTerritoryId) => (
                 DataStore.getTerritoriesWithoutGeometry(projectTerritoryId)
             ))
             .then((items) => {
-                if (isActive) setLocalTerritories(items);
+                if (isActive) {
+                    setLocalTerritories(items);
+                }
             })
             .catch((error) => {
-                if (!isActive) return;
+                if (!isActive) {
+                    return;
+                }
+
                 console.error("Error fetching local document territories:", error);
-                setTerritoryErrorText("Не удалось загрузить местные территории проекта.");
+                setTerritoryError("Не удалось загрузить местные территории проекта.");
             })
             .finally(() => {
-                if (isActive) setIsTerritoriesLoading(false);
+                if (isActive) {
+                    setIsLoadingTerritories(false);
+                }
             });
 
         return () => {
@@ -195,9 +254,17 @@ function UploadDocumentModal({
         };
     }, [projectId, territoryLoadRequest, territoryScope]);
 
-    const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+        setFile(event.target.files?.[0] ?? null);
+        setErrorText(null);
+    };
+
+    const handleSubmit = async (event: SubmitEvent<HTMLFormElement>) => {
         event.preventDefault();
-        if (!canSubmit) return;
+
+        if (!canSubmit) {
+            return;
+        }
 
         setIsSubmitting(true);
         setErrorText(null);
@@ -232,17 +299,15 @@ function UploadDocumentModal({
                     territoryId,
                 });
             }
-            await onSaved?.(file ? "file" : "metadata");
+            const updateKind = file ? "file" : "metadata";
+
+            await onSaved?.(updateKind);
             onClose();
         } catch (error) {
             console.error("Error saving user document:", error);
             setErrorText(getDocumentsRequestErrorMessage(
                 error,
-                isEditing
-                    ? file
-                        ? "Не удалось обновить документ. Проверьте файл и попробуйте ещё раз."
-                        : "Не удалось обновить данные документа. Проверьте значения и попробуйте ещё раз."
-                    : "Не удалось загрузить документ. Проверьте файл и попробуйте ещё раз.",
+                getSaveErrorMessage(isEditing, file !== null),
             ));
         } finally {
             setIsSubmitting(false);
@@ -253,7 +318,9 @@ function UploadDocumentModal({
         <div
             className="fixed inset-0 z-100 flex items-center justify-center overflow-y-auto bg-slate-950/40 p-4 backdrop-blur-[2px]"
             onMouseDown={(event) => {
-                if (event.target === event.currentTarget && !isSubmitting) onClose();
+                if (event.target === event.currentTarget && !isSubmitting) {
+                    onClose();
+                }
             }}
         >
             <div
@@ -265,7 +332,7 @@ function UploadDocumentModal({
                 <div className="flex items-start justify-between gap-4">
                     <div className="min-w-0">
                         <h2 id="upload-document-title" className="text-xl font-semibold">
-                            {isEditing ? "Обновить документ" : "Загрузить документ"}
+                            {modalTitle}
                         </h2>
                         <p className="mt-1 truncate text-sm text-slate-500 customer-dark:text-content-muted" title={projectName}>
                             {projectName}
@@ -277,7 +344,7 @@ function UploadDocumentModal({
                         className="rounded-full p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0788CE]/40 disabled:cursor-not-allowed disabled:opacity-50 customer:focus-visible:ring-brand-primary/40 customer-dark:text-content-muted customer-dark:hover:bg-surface-hover customer-dark:hover:text-content-primary"
                         onClick={onClose}
                         disabled={isSubmitting}
-                        aria-label={isEditing ? "Закрыть окно обновления документа" : "Закрыть окно загрузки документа"}
+                        aria-label={closeButtonLabel}
                     >
                         <MdClose size={22} />
                     </button>
@@ -287,16 +354,17 @@ function UploadDocumentModal({
                     <div>
                         <span className="mb-2 block text-sm font-medium">
                             {isEditing ? "Обновлённый файл" : "Файл"}
-                            {!isEditing && <span className="text-red-600 customer:text-danger"> *</span>}
+                            {!isEditing && (
+                                <span className="text-red-600 customer:text-danger">
+                                    {" "}*
+                                </span>
+                            )}
                         </span>
                         <input
                             id={fileInputId}
                             type="file"
                             className="sr-only"
-                            onChange={(event) => {
-                                setFile(event.target.files?.[0] ?? null);
-                                setErrorText(null);
-                            }}
+                            onChange={handleFileChange}
                             disabled={isSubmitting}
                             required={!isEditing}
                         />
@@ -305,14 +373,20 @@ function UploadDocumentModal({
                             className="flex min-h-24 cursor-pointer items-center gap-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-4 transition-colors hover:border-[#0788CE] hover:bg-[#EAF5FF] customer:hover:border-brand-primary customer:hover:bg-brand-soft customer-dark:border-ui-border-strong customer-dark:bg-surface-panel customer-dark:hover:bg-surface-hover"
                         >
                             <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white text-[#0788CE] shadow-sm customer:text-brand-primary customer-dark:bg-surface-raised">
-                                {file ? <MdInsertDriveFile size={25} /> : <MdAttachFile size={25} />}
+                                {file ? (
+                                    <MdInsertDriveFile size={25} />
+                                ) : (
+                                    <MdAttachFile size={25} />
+                                )}
                             </span>
                             <span className="min-w-0">
                                 <span className="block truncate text-sm font-medium">
                                     {file?.name ?? "Выберите документ"}
                                 </span>
                                 <span className="mt-1 block text-xs text-slate-500 customer-dark:text-content-muted">
-                                    {file ? formatFileSize(file.size) : "Нажмите, чтобы выбрать файл"}
+                                    {file
+                                        ? formatFileSize(file.size)
+                                        : "Нажмите, чтобы выбрать файл"}
                                 </span>
                             </span>
                         </label>
@@ -350,13 +424,13 @@ function UploadDocumentModal({
                             scope={territoryScope}
                             territoryId={territoryId}
                             territories={territoryOptions}
-                            isLoading={isTerritoriesLoading}
-                            errorText={territoryErrorText}
+                            isLoading={isLoadingTerritories}
+                            errorText={territoryError}
                             disabled={isSubmitting}
                             onScopeChange={(nextScope) => {
                                 shouldResolveInitialTerritoryRef.current = false;
                                 setTerritoryScope(nextScope);
-                                setTerritoryErrorText(null);
+                                setTerritoryError(null);
                                 setTerritoryId((currentTerritoryId) => (
                                     nextScope === "federal"
                                         ? FEDERAL_TERRITORY_ID
@@ -366,7 +440,7 @@ function UploadDocumentModal({
                                 ));
 
                                 if (nextScope === "regional" || nextScope === "local") {
-                                    setIsTerritoriesLoading(true);
+                                    setIsLoadingTerritories(true);
                                     setTerritoryLoadRequest((request) => request + 1);
                                 }
                             }}
@@ -397,12 +471,12 @@ function UploadDocumentModal({
                             className="inline-flex items-center gap-2 rounded-2xl bg-[#0788CE] px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#0676B3] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0788CE]/40 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-45 customer:bg-brand-primary customer:hover:bg-brand-hover customer:focus-visible:ring-brand-primary/40 customer-dark:ring-offset-surface-raised"
                             disabled={!canSubmit}
                         >
-                            {isEditing
-                                ? <MdRefresh size={19} aria-hidden="true" />
-                                : <MdUploadFile size={19} aria-hidden="true" />}
-                            {isSubmitting
-                                ? (isEditing ? "Обновление..." : "Загрузка...")
-                                : (isEditing ? "Обновить" : "Загрузить")}
+                            {isEditing ? (
+                                <MdRefresh size={19} aria-hidden="true" />
+                            ) : (
+                                <MdUploadFile size={19} aria-hidden="true" />
+                            )}
+                            {submitButtonText}
                         </button>
                     </div>
                 </form>
