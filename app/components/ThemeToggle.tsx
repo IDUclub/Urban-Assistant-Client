@@ -62,10 +62,11 @@ export default function ThemeToggle() {
           aria-label="Меню пользователя"
           className="rounded-3xl border border-ui-border bg-surface-raised/95 p-3 shadow-[0_24px_40px_-20px_var(--shadow-menu)] backdrop-blur"
         >
-          {THEME_ORDER.map((themeId) => {
+          {THEME_ORDER.map((themeId, ind) => {
             const Icon = THEME_ICONS[themeId];
             return (
               <div
+                key={`theme-${ind}`}
                 className={`flex w-full cursor-pointer items-center gap-3 rounded-2xl px-3 py-2.5 text-sm font-medium text-danger transition-colors hover:border-brand-primary hover:bg-surface-hover focus:border-brand-primary focus:outline-none focus:ring-2 focus:ring-brand-primary/20 ${themeId === theme ? "bg-brand-active text-content-primary pointer-events-none" : ""}`}
                 onClick={() => handleClickChangeTheme(themeId)}
               >
