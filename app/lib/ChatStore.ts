@@ -681,14 +681,6 @@ function normalizeUserChatMessages(data: unknown): UserChatMessage[] {
     return Array.isArray(messages) ? messages as UserChatMessage[] : [];
 }
 
-type StreamContext = {
-    requestId: number;
-    projectBoundaryLayer?: any;
-    projectBoundaryPromise?: Promise<any>;
-    hasReceivedMapLayer: boolean;
-    hasAddedProjectBoundary: boolean;
-};
-
 type TextMessage = {
     type: "text";
     text: string;
@@ -832,7 +824,6 @@ type AddGeoJsonLayerOptions = {
     requestId?: number;
     showError?: boolean;
     accessToken?: string;
-    onLayerAdded?: () => void;
 };
 
 type ChatMessagePayload =
@@ -1280,7 +1271,6 @@ class ChatDataStore {
     nextGenPlannerResultId: number = 0;
     nextGenPlannerSavePromptId: number = 0;
     nextGenPlannerCustomSetupId: number = 0;
-    currentStreamContext?: StreamContext;
     userChats: UserChat[] = [];
     isUserChatsLoading = false;
     isUserChatOpening = false;
@@ -1525,7 +1515,6 @@ class ChatDataStore {
     clearChat() {
         this.abortStream();
         this.currentStreamRequestId += 1;
-        this.currentStreamContext = undefined;
         this.chatMessages = [];
         this.isStreaming = false;
         this.selectedContext = "nonproject";
@@ -1663,7 +1652,6 @@ class ChatDataStore {
                 name: layer.name,
                 layer: parsedLayer,
             });
-            options.onLayerAdded?.();
             return;
         }
 
@@ -1675,7 +1663,6 @@ class ChatDataStore {
                     name: layer.name,
                     layer: downloadedLayer,
                 });
-                options.onLayerAdded?.();
             }))
             .catch(action((error) => {
                 if (requestId !== this.currentStreamRequestId) return;
@@ -1738,13 +1725,7 @@ class ChatDataStore {
                     },
                 });
 
-                this.addGeoJsonLayerToMap(layer, {
-                    showError: true,
-                    onLayerAdded: () => {
-                        this.currentStreamContext = this.markStreamContextHasMapLayer(this.currentStreamContext);
-                        this.tryAddProjectBoundaryLayer(this.currentStreamContext);
-                    },
-                });
+                this.addGeoJsonLayerToMap(layer, { showError: true });
 
                 return;
             }
@@ -1764,13 +1745,7 @@ class ChatDataStore {
                     },
                 });
 
-                this.addGeoJsonLayerToMap(layer, {
-                    showError: true,
-                    onLayerAdded: () => {
-                        this.currentStreamContext = this.markStreamContextHasMapLayer(this.currentStreamContext);
-                        this.tryAddProjectBoundaryLayer(this.currentStreamContext);
-                    },
-                });
+                this.addGeoJsonLayerToMap(layer, { showError: true });
 
                 return;
             }
@@ -1828,56 +1803,10 @@ class ChatDataStore {
         return Math.max(...Array.from(this.chatMap.keys())) + 1;
     }
 
-    private markStreamContextHasMapLayer(streamContext?: StreamContext) {
-        if (!streamContext) return undefined;
-
-        streamContext.hasReceivedMapLayer = true;
-        return streamContext;
-    }
-
-    private tryAddProjectBoundaryLayer(streamContext?: StreamContext) {
-        if (
-            !streamContext ||
-            streamContext.requestId !== this.currentStreamRequestId ||
-            !streamContext.hasReceivedMapLayer ||
-            streamContext.hasAddedProjectBoundary ||
-            !streamContext.projectBoundaryLayer ||
-            !hasBoundaryLayerContent(streamContext.projectBoundaryLayer)
-        ) {
-            return;
-        }
-
-        MapStore.addLayerToMap({
-            name: PROJECT_BOUNDARY_LAYER_NAME,
-            layer: streamContext.projectBoundaryLayer,
-        });
-        streamContext.hasAddedProjectBoundary = true;
-    }
-
-    private createProjectBoundaryStreamContext(projectId: number) {
-        const streamContext: StreamContext = {
-            requestId: this.currentStreamRequestId,
-            hasReceivedMapLayer: false,
-            hasAddedProjectBoundary: false,
-        };
-
-        streamContext.projectBoundaryPromise = DataStore.getProjectTerritory(projectId)
-            .then((geometry) => {
-                streamContext.projectBoundaryLayer = normalizeBoundaryLayer(geometry);
-                this.tryAddProjectBoundaryLayer(streamContext);
-                return streamContext.projectBoundaryLayer;
-            });
-
-        return streamContext;
-    }
-
-    private restoreProjectBoundary(
+    private requestProjectBoundary(
         projectId: number,
-        hasResponseLayers: boolean,
         requestId = this.currentStreamRequestId,
     ) {
-        if (!hasResponseLayers) return;
-
         void DataStore.getProjectTerritory(projectId)
             .then((geometry) => {
                 if (requestId !== this.currentStreamRequestId) return;
@@ -1908,7 +1837,7 @@ class ChatDataStore {
         });
 
         if (typeof this.selectedContext === "number") {
-            this.restoreProjectBoundary(this.selectedContext, lastResponseLayers.length > 0);
+            this.requestProjectBoundary(this.selectedContext);
         }
     }
 
@@ -1985,7 +1914,6 @@ class ChatDataStore {
 
         this.abortStream();
         this.currentStreamRequestId += 1;
-        this.currentStreamContext = undefined;
         this.streamedResponse = "";
         this.isStreaming = false;
         this.currentStatus = undefined;
@@ -2017,7 +1945,7 @@ class ChatDataStore {
         });
 
         if (typeof chat.selectedContext === "number") {
-            this.restoreProjectBoundary(chat.selectedContext, lastResponseLayers.length > 0);
+            this.requestProjectBoundary(chat.selectedContext);
         }
     };
 
@@ -2868,18 +2796,6 @@ class ChatDataStore {
                     {
                         requestId,
                         showError: true,
-                        onLayerAdded: () => {
-                            if (
-                                setupMessage.mode === "scenario" &&
-                                setupMessage.projectId !== undefined
-                            ) {
-                                this.restoreProjectBoundary(
-                                    setupMessage.projectId,
-                                    true,
-                                    requestId,
-                                );
-                            }
-                        },
                     },
                 );
                 return;
@@ -3091,7 +3007,9 @@ class ChatDataStore {
         this.currentStreamRequestId += 1;
         const requestId = this.currentStreamRequestId;
         MapStore.clearMapLayers();
-        this.currentStreamContext = undefined;
+        if (setupMessage.projectId !== undefined) {
+            this.requestProjectBoundary(setupMessage.projectId, requestId);
+        }
         this.streamedResponse = "";
         this.isStreaming = true;
         this.currentStatus = "Отправка параметров генерации";
@@ -3440,6 +3358,9 @@ class ChatDataStore {
         this.abortController?.abort();
         this.abortController = new AbortController();
         const requestId = this.currentStreamRequestId;
+        if (typeof this.selectedContext === "number") {
+            this.requestProjectBoundary(this.selectedContext, requestId);
+        }
         this.isStreaming = true;
         this.currentStatus = "Запуск проверки объектов по ПЗЗ";
 
@@ -3674,7 +3595,9 @@ class ChatDataStore {
         this.abortController = new AbortController();
         this.currentStreamRequestId += 1;
         const requestId = this.currentStreamRequestId;
-        this.currentStreamContext = undefined;
+        if (typeof this.selectedContext === "number") {
+            this.requestProjectBoundary(this.selectedContext, requestId);
+        }
         this.streamedResponse = "";
         this.isStreaming = true;
         this.currentStatus = "Запуск проверки объектов по ПЗЗ";
@@ -4169,6 +4092,9 @@ class ChatDataStore {
         this.abortController = new AbortController();
         this.currentStreamRequestId += 1;
         const requestId = this.currentStreamRequestId;
+        if (typeof this.selectedContext === "number") {
+            this.requestProjectBoundary(this.selectedContext, requestId);
+        }
         this.isStreaming = true;
         this.currentStatus = "Запуск проверки ВРИ";
         setupMessage.status = "submitting";
@@ -4380,6 +4306,9 @@ class ChatDataStore {
                 this.currentStatus = "Функциональное зонирование сгенерировано";
                 this.commitStreamedResponse();
                 MapStore.clearMapLayers();
+                if (streamState.mode === "scenario" && streamState.projectId !== undefined) {
+                    this.requestProjectBoundary(streamState.projectId, requestId);
+                }
 
                 const resultLayers: UserChatLayer[] = [
                     { name: GENPLANNER_ZONE_LAYER_NAME, layer: zones },
@@ -4395,17 +4324,7 @@ class ChatDataStore {
                             layer: layer.layer,
                         },
                     });
-                    this.addGeoJsonLayerToMap(layer, {
-                        requestId,
-                        showError: true,
-                        onLayerAdded: () => {
-                            if (streamState.mode !== "scenario") {
-                                return;
-                            }
-                            this.currentStreamContext = this.markStreamContextHasMapLayer(this.currentStreamContext);
-                            this.tryAddProjectBoundaryLayer(this.currentStreamContext);
-                        },
-                    });
+                    this.addGeoJsonLayerToMap(layer, { requestId, showError: true });
                 });
                 return;
             }
@@ -4519,7 +4438,6 @@ class ChatDataStore {
         this.abortController = new AbortController();
         this.currentStreamRequestId += 1;
         const requestId = this.currentStreamRequestId;
-        this.currentStreamContext = undefined;
         this.streamedResponse = "";
         this.isStreaming = true;
         this.currentStatus = "GenPlanner обрабатывает запрос";
@@ -4660,7 +4578,7 @@ class ChatDataStore {
         this.abortController = new AbortController();
         this.currentStreamRequestId += 1;
         const requestId = this.currentStreamRequestId;
-        this.currentStreamContext = this.createProjectBoundaryStreamContext(projectId);
+        this.requestProjectBoundary(projectId, requestId);
         this.streamedResponse = "";
         this.isStreaming = true;
         this.currentStatus = "GenPlanner обрабатывает запрос";
@@ -4923,7 +4841,6 @@ class ChatDataStore {
         this.abortController?.abort();
         this.abortController = new AbortController();
         this.currentStreamRequestId += 1;
-        this.currentStreamContext = undefined;
         this.streamedResponse = "";
         this.isStreaming = true;
         this.currentStatus = undefined;
@@ -4934,9 +4851,13 @@ class ChatDataStore {
         if (
             typeof this.selectedContext === "number" &&
             this.selectedChatTool !== "Проверка объектов по ПЗЗ" &&
-            this.selectedChatTool !== "Проверка ВРИ"
+            this.selectedChatTool !== "Проверка ВРИ" &&
+            (
+                this.selectedChatTool === "Нормативная документация" ||
+                this.selectedScenario !== null
+            )
         ) {
-            this.currentStreamContext = this.createProjectBoundaryStreamContext(this.selectedContext);
+            this.requestProjectBoundary(this.selectedContext);
         }
         this.chatMessages.push({type: "request", message: { type: "text", text: message}})
 
@@ -5283,7 +5204,6 @@ class ChatDataStore {
         const requestId = this.currentStreamRequestId;
         const chat = this.userChats.find((userChat) => userChat.chat_id === chatId);
 
-        this.currentStreamContext = undefined;
         this.streamedResponse = "";
         this.isStreaming = false;
         this.currentStatus = undefined;
@@ -5324,10 +5244,13 @@ class ChatDataStore {
                     runInAction(() => {
                         if (this.activeChatId !== chatId || this.currentStreamRequestId !== requestId) return;
 
+                        const needsBoundaryRequest = this.selectedContext !== projectId;
                         this.selectedContext = projectId;
                         this.selectedScenario = chat.scenario_id;
                         void DataStore.getProjectScenarios(projectId);
-                        this.currentStreamContext = this.createProjectBoundaryStreamContext(projectId);
+                        if (needsBoundaryRequest) {
+                            this.requestProjectBoundary(projectId, requestId);
+                        }
                     });
                 }
             }
