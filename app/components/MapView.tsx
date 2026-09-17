@@ -147,6 +147,8 @@ const VRI_TOP1_FILL_OPACITY = 0.65;
 const GENERATED_LAYER_FILL_OPACITY = 0.65;
 const SELECTED_FEATURE_COLOR = "#EF4444";
 const SELECTED_FEATURE_OUTLINE_COLOR = "#FFFFFF";
+const LIGHT_MAP_STYLE = "mapbox://styles/mapbox/light-v11";
+const DARK_MAP_STYLE = "mapbox://styles/mapbox/dark-v11";
 
 function getPropertyMatchValue(value: unknown) {
     if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") return undefined;
@@ -730,6 +732,7 @@ function getScrollShadowState(element: HTMLElement | null): ScrollShadowState {
 const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
     const { mapLayers, isMapLayersAvailable } = MapStore;
     const [isMounted, setIsMounted] = useState(false);
+    const [mapStyle, setMapStyle] = useState(LIGHT_MAP_STYLE);
     const [isLegendExpanded, setIsLegendExpanded] = useState(true);
     const [activeLayerId, setActiveLayerId] = useState<string>();
     const [selectedFeature, setSelectedFeature] = useState<SelectedFeatureState | null>(null);
@@ -893,6 +896,24 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
     }, []);
 
     useEffect(() => {
+        const updateMapStyle = () => {
+            const isDarkTheme = document.documentElement.dataset.colorScheme === "dark";
+
+            setMapStyle(isDarkTheme ? DARK_MAP_STYLE : LIGHT_MAP_STYLE);
+        };
+
+        const themeObserver = new MutationObserver(updateMapStyle);
+
+        updateMapStyle();
+        themeObserver.observe(document.documentElement, {
+            attributes: true,
+            attributeFilter: ["data-color-scheme"],
+        });
+
+        return () => themeObserver.disconnect();
+    }, []);
+
+    useEffect(() => {
         if (!isMounted || !latestLayerBounds) {
             return;
         }
@@ -953,7 +974,7 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                         latitude: 55.7558,
                         zoom: 11,
                     }}
-                    mapStyle="mapbox://styles/mapbox/light-v11"
+                    mapStyle={mapStyle}
                     language="ru"
                     projection="mercator"
                     mapboxAccessToken={mapboxToken}
@@ -1122,9 +1143,9 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                                             type="button"
                                             className={`
                                                 min-w-0 flex-1 cursor-pointer truncate text-left transition-colors
-                                                hover:text-[#0788CE] customer:hover:text-brand-primary
+                                                hover:text-[#0788CE] customer:hover:text-brand-primary customer-dark:hover:text-[#9A252B]
                                                 ${isActiveLayer
-                                                  ? "font-semibold text-[#0788CE] customer:text-brand-primary"
+                                                  ? "font-semibold text-[#0788CE] customer:text-brand-primary customer-dark:text-[#9A252B]"
                                                   : ""}
                                             `}
                                             onClick={() => {
