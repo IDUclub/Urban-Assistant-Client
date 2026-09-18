@@ -35,19 +35,33 @@ type DocumentLibraryModalProps = {
     onClose: () => void;
 };
 
-function filterDocumentsByName(
+type DocumentFilters = {
+    searchQuery: string;
+    documentLevel: DocumentLevel | "";
+    territoryId: string;
+};
+
+function filterDocuments(
     documents: LibraryDocument[],
-    searchQuery: string,
+    filters: DocumentFilters,
 ) {
-    const normalizedQuery = searchQuery.trim().toLocaleLowerCase("ru");
+    const normalizedQuery = filters.searchQuery
+        .trim()
+        .toLocaleLowerCase("ru");
+    const selectedTerritoryId = filters.territoryId
+        ? Number(filters.territoryId)
+        : null;
 
-    if (!normalizedQuery) {
-        return documents;
-    }
+    return documents.filter((document) => {
+        const matchesName = !normalizedQuery
+            || document.name.toLocaleLowerCase("ru").includes(normalizedQuery);
+        const matchesLevel = !filters.documentLevel
+            || document.documentLevel === filters.documentLevel;
+        const matchesTerritory = selectedTerritoryId === null
+            || document.territoryId === selectedTerritoryId;
 
-    return documents.filter((document) =>
-        document.name.toLocaleLowerCase("ru").includes(normalizedQuery),
-    );
+        return matchesName && matchesLevel && matchesTerritory;
+    });
 }
 
 export default function DocumentLibraryModal({
@@ -123,11 +137,7 @@ export default function DocumentLibraryModal({
         setDocumentListError(null);
         setDocuments([]);
 
-        getLibraryDocuments({
-            documentLevel,
-            territoryId: selectedTerritoryId,
-            signal: controller.signal,
-        })
+        getLibraryDocuments(controller.signal)
             .then((loadedDocuments) => {
                 if (controller.signal.aborted) {
                     return;
@@ -155,11 +165,15 @@ export default function DocumentLibraryModal({
             });
 
         return () => controller.abort();
-    }, [documentLevel, selectedTerritoryId, documentLoadAttempt]);
+    }, [documentLoadAttempt]);
 
     const filteredDocuments = useMemo(
-        () => filterDocumentsByName(documents, searchQuery),
-        [documents, searchQuery],
+        () => filterDocuments(documents, {
+            searchQuery,
+            documentLevel,
+            territoryId: selectedTerritoryId,
+        }),
+        [documents, searchQuery, documentLevel, selectedTerritoryId],
     );
     const pageCount = Math.max(
         1,

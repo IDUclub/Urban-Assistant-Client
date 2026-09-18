@@ -120,31 +120,15 @@ async function getAuthorizationHeaders() {
     };
 }
 
-export async function getLibraryDocuments({
-    documentLevel,
-    territoryId,
-    signal,
-}: {
-    documentLevel: DocumentLevel | "";
-    territoryId: string;
-    signal: AbortSignal;
-}): Promise<LibraryDocument[]> {
+export async function getLibraryDocuments(
+    signal: AbortSignal,
+): Promise<LibraryDocument[]> {
     const headers = await getAuthorizationHeaders();
-    const params = new URLSearchParams();
-
-    if (documentLevel) {
-        params.set("document_level", documentLevel);
-    }
-
-    if (territoryId) {
-        params.append("territory_ids", territoryId);
-    }
 
     const { data } = await axios.get(
         `${import.meta.env.VITE_DOCUMENTS_API}/library/documents`,
         {
             headers,
-            params,
             signal,
         },
     );
