@@ -1,6 +1,7 @@
 export const FUNCTIONAL_ZONE_FALLBACK_COLOR = "#969696";
 export const FUNCTIONAL_ZONE_ID_PROPERTY = "territory_zone";
 export const FUNCTIONAL_ZONE_NAME_PROPERTY = "Территориальная зона";
+export const FUNCTIONAL_ZONE_TYPE_PROPERTY = "Тип зоны";
 
 const FUNCTIONAL_ZONE_COLORS_BY_ID: Record<number, string> = {
     1: "#FFD700",
@@ -69,8 +70,16 @@ export function getFunctionalZoneId(value: unknown) {
     const normalizedValue = value.trim().toLowerCase();
     const numericZoneId = Number(normalizedValue);
 
-    return Number.isFinite(numericZoneId)
-        ? numericZoneId
+    if (Number.isFinite(numericZoneId)) {
+        return numericZoneId;
+    }
+
+    const zoneName = Object.entries(FUNCTIONAL_ZONE_NAMES_BY_ID).find(
+        ([, name]) => name.toLowerCase() === normalizedValue,
+    );
+
+    return zoneName
+        ? Number(zoneName[0])
         : FUNCTIONAL_ZONE_IDS_BY_VALUE[normalizedValue];
 }
 
