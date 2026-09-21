@@ -1,6 +1,10 @@
 import axios from "axios";
 import { makeAutoObservable, action, runInAction } from "mobx";
 import type { Geometry, MultiPolygon, Point, Polygon } from "geojson";
+import type {
+    FunctionalZoneGeometry,
+    ScenarioImportedGeometry,
+} from "@lib/ScenarioGeoJson";
 import AuthStore from "@lib/AuthStore";
 
 export type ProjectCreationTerritoryOption = {
@@ -32,6 +36,16 @@ export type CreateScenarioPayload = {
     name: string;
     properties: Record<string, unknown>;
 };
+
+const SCENARIO_PHYSICAL_OBJECTS_BATCH_SIZE = 100;
+const IMPORTED_ROAD_PHYSICAL_OBJECT_TYPE_ID = 52;
+const FUNCTIONAL_ZONE_REQUEST_FIELDS = new Set([
+    "functional_zone_type_id",
+    "name",
+    "year",
+    "source",
+    "properties",
+]);
 
 export type CreateProjectPayload = {
     name: string;
@@ -104,6 +118,30 @@ function normalizeNumericId(value: unknown) {
     const numericId = Number(value);
 
     return Number.isFinite(numericId) ? numericId : undefined;
+}
+
+function getStringValue(value: unknown, fallback: string) {
+    return typeof value === "string" && value.trim()
+        ? value
+        : fallback;
+}
+
+function getRecord(value: unknown): Record<string, unknown> | undefined {
+    return value && typeof value === "object" && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : undefined;
+}
+
+function getAdditionalProperties(properties: Record<string, unknown>) {
+    const nestedProperties = getRecord(properties.properties);
+
+    if (nestedProperties) {
+        return nestedProperties;
+    }
+
+    return Object.fromEntries(
+        Object.entries(properties).filter(([key]) => !FUNCTIONAL_ZONE_REQUEST_FIELDS.has(key)),
+    );
 }
 
 class AppDataStore {
@@ -404,6 +442,75 @@ class AppDataStore {
         });
 
         return createdScenario;
+    }
+
+    async addScenarioFunctionalZones(
+        scenarioId: number,
+        features: ScenarioImportedGeometry[],
+        fallbackFunctionalZoneTypeId: number,
+        functionalZoneTypeIds: Array<number | undefined>,
+    ) {
+        const zones = features.map(({ geometry, properties }, index) => ({
+            geometry: geometry as FunctionalZoneGeometry,
+            functional_zone_type_id: functionalZoneTypeIds[index]
+                ?? normalizeNumericId(properties.functional_zone_type_id)
+                ?? fallbackFunctionalZoneTypeId,
+            name: getStringValue(properties.name, "--"),
+            year: normalizeNumericId(properties.year) ?? new Date().getFullYear(),
+            source: "User",
+            properties: getAdditionalProperties(properties),
+        }));
+
+        await axios.post(
+            `${import.meta.env.VITE_URBAN_API}/scenarios/${scenarioId}/functional_zones`,
+            zones,
+            {
+                headers: {
+                    Authorization: `Bearer ${AuthStore.accessToken}`,
+                    "Content-Type": "application/json",
+                },
+            },
+        );
+    }
+
+    async addScenarioPhysicalObjects(
+        scenarioId: number,
+        territoryId: number,
+        features: ScenarioImportedGeometry[],
+        physicalObjectTypeIds: Array<number | undefined>,
+        batchSize = SCENARIO_PHYSICAL_OBJECTS_BATCH_SIZE,
+    ) {
+        const normalizedBatchSize = Math.max(1, Math.floor(batchSize));
+        const failedFeatures: ScenarioImportedGeometry[] = [];
+
+        for (let startIndex = 0; startIndex < features.length; startIndex += normalizedBatchSize) {
+            const featureBatch = features.slice(startIndex, startIndex + normalizedBatchSize);
+
+            const results = await Promise.allSettled(featureBatch.map((feature, index) => axios.post(
+                `${import.meta.env.VITE_URBAN_API}/scenarios/${scenarioId}/physical_objects`,
+                {
+                    geometry: feature.geometry,
+                    territory_id: territoryId,
+                    physical_object_type_id: physicalObjectTypeIds[startIndex + index]
+                        ?? IMPORTED_ROAD_PHYSICAL_OBJECT_TYPE_ID,
+                    properties: feature.properties,
+                },
+                {
+                    headers: {
+                        Authorization: `Bearer ${AuthStore.accessToken}`,
+                        "Content-Type": "application/json",
+                    },
+                },
+            )));
+
+            results.forEach((result, index) => {
+                if (result.status === "rejected") {
+                    failedFeatures.push(featureBatch[index]);
+                }
+            });
+        }
+
+        return failedFeatures;
     }
 
     constructor() {
