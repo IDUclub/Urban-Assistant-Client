@@ -31,8 +31,8 @@ export type GenBuilderStreamEvent =
     | { type: "file"; content: unknown }
     | { type: "result"; content: unknown; summary?: unknown }
     | { type: "token"; content: string }
-    | { type: "warning"; stage?: string; detail?: string; message?: string }
-    | { type: "error"; stage?: string; detail?: string }
+    | { type: "warning"; stage?: string; detail?: string; message?: string; code?: string }
+    | { type: "error"; stage?: string; detail?: string; message?: string; code?: string }
     | { type: "done"; chatId?: string; assistantMessageId?: string }
     | { type: "unknown"; eventName?: string; data: unknown };
 
@@ -111,12 +111,15 @@ function normalizeStreamEvent(rawEvent: RawSseEvent): GenBuilderStreamEvent {
                 stage: asString(record?.stage),
                 detail: asString(record?.detail),
                 message: asString(record?.message),
+                code: asString(record?.code),
             };
         case "error":
             return {
                 type: "error",
                 stage: asString(record?.stage),
                 detail: asString(record?.detail),
+                message: asString(record?.message),
+                code: asString(record?.code),
             };
         case "done":
             return {
