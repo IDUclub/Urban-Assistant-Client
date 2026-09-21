@@ -509,6 +509,13 @@ function extractTextFromPayload(payload: unknown) {
     );
 }
 
+function getClarificationQuestion(payload: unknown) {
+    const record = asRecord(payload);
+    const content = asRecord(record?.content);
+
+    return toString(content?.question);
+}
+
 function extractTableMessage(payload: unknown): TableMessage | undefined {
     const parsed = parseJsonValue(payload);
     const record = asRecord(parsed);
@@ -1690,7 +1697,7 @@ class ChatDataStore {
         );
     }
 
-    private addChatNotice(type: "error" | "warning", text: string) {
+    private addChatNotice(type: "error" | "warning" | "info", text: string) {
         this.chatMessages.push({
             type: "response",
             message: { type, text },
@@ -1716,6 +1723,16 @@ class ChatDataStore {
                 if (typeof statusText === "string") {
                     this.currentStatus = statusText;
                 }
+                return;
+            }
+
+            if (chunkKind === "clarification") {
+                const question = getClarificationQuestion(parsed);
+                if (question) {
+                    this.commitStreamedResponse();
+                    this.addChatNotice("info", question);
+                }
+                this.currentStatus = undefined;
                 return;
             }
 
@@ -2149,9 +2166,10 @@ class ChatDataStore {
                 return;
             }
             case "clarification": {
-                const question = toString(content?.question);
+                const question = getClarificationQuestion(parsed);
                 if (question) {
-                    this.streamedResponse += question;
+                    this.commitStreamedResponse();
+                    this.addChatNotice("info", question);
                 }
                 this.currentStatus = undefined;
                 return;
