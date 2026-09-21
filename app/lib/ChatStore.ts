@@ -377,14 +377,21 @@ function getUserChatProjectId(chat: UserChat) {
 
 function getLayerName(value: unknown) {
     const record = asRecord(value);
-    if (!record) return undefined;
+    if (!record) {
+        return;
+    }
+
+    const content = asRecord(record.content);
 
     return (
-        toString(record.name) ??
         toString(record.title) ??
+        toString(content?.title) ??
+        toString(record.filename) ??
+        toString(content?.filename) ??
+        toString(record.name) ??
         toString(record.layer_name) ??
         toString(record.layerName) ??
-        toString(asRecord(record.content)?.name) ??
+        toString(content?.name) ??
         toString(asRecord(record.result)?.name)
     );
 }
@@ -575,6 +582,7 @@ function extractGeoJsonFileLayer(
 
     return {
         name: (
+            toString(content.title) ??
             toString(content.filename) ??
             toString(content.name) ??
             fallbackName
@@ -1178,7 +1186,7 @@ function getVriWarningText(payload: unknown, eventName?: string) {
     const record = asRecord(parsed);
     const content = asRecord(record?.content);
     const data = asRecord(record?.data);
-    const isWarningStatus = [
+    const isWarningStatus = chunkKind === "zone_review" || [
         chunkKind,
         record?.status,
         record?.level,
@@ -3990,16 +3998,14 @@ class ChatDataStore {
             return streamState;
         }
 
-        const inputZonesLayer = getInputZonesLayer(payload, eventName);
-        if (inputZonesLayer) {
-            this.appendGeoJsonLayer(inputZonesLayer);
-            return streamState;
-        }
-
         const isResultFile = isVriResultFile(payload, eventName);
-        const fileLayer = isResultFile ? getStreamFileLayer(payload, eventName) : undefined;
+        const fileLayer = getStreamFileLayer(payload, eventName);
         if (fileLayer) {
             this.appendGeoJsonLayer(fileLayer);
+
+            if (!isResultFile) {
+                return streamState;
+            }
 
             if (setupMessage) {
                 setupMessage.status = "finished";

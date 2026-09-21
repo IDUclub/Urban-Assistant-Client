@@ -17,6 +17,7 @@ import {
     FUNCTIONAL_ZONE_FALLBACK_COLOR,
     FUNCTIONAL_ZONE_ID_PROPERTY,
     FUNCTIONAL_ZONE_NAME_PROPERTY,
+    FUNCTIONAL_ZONE_TYPE_PROPERTY,
     getFunctionalZoneColor,
     getFunctionalZoneName,
 } from "@lib/functionalZones";
@@ -302,6 +303,7 @@ function getFunctionalZoneStyle(name: string | undefined, layer: unknown): Categ
     const functionalZoneProperty = [
         FUNCTIONAL_ZONE_ID_PROPERTY,
         FUNCTIONAL_ZONE_NAME_PROPERTY,
+        FUNCTIONAL_ZONE_TYPE_PROPERTY,
         GENBUILDER_FUNCTIONAL_ZONE_PROPERTY,
     ].map((propertyName) => ({
         propertyName,
@@ -318,7 +320,9 @@ function getFunctionalZoneStyle(name: string | undefined, layer: unknown): Categ
     if (hasFeaturesWithoutPropertyValue(layer, functionalZoneProperty.propertyName)) {
         valueColors.push([undefined, FUNCTIONAL_ZONE_FALLBACK_COLOR]);
     }
-    const isGenPlannerLayer = name?.trim().toLowerCase() === GENPLANNER_ZONE_LAYER_NAME.toLowerCase();
+    const isGenPlannerLayer =
+        name?.trim().toLowerCase() === GENPLANNER_ZONE_LAYER_NAME.toLowerCase() &&
+        functionalZoneProperty.propertyName === FUNCTIONAL_ZONE_ID_PROPERTY;
 
     return {
         propertyName: functionalZoneProperty.propertyName,
@@ -471,6 +475,7 @@ function getLegendValueLabel(
     if (
         propertyName === FUNCTIONAL_ZONE_ID_PROPERTY
         || propertyName === FUNCTIONAL_ZONE_NAME_PROPERTY
+        || propertyName === FUNCTIONAL_ZONE_TYPE_PROPERTY
         || propertyName === GENBUILDER_FUNCTIONAL_ZONE_PROPERTY
     ) {
         return getFunctionalZoneName(value) ?? value;
