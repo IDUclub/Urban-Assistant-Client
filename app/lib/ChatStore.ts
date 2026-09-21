@@ -16,10 +16,7 @@ import {
     type GenBuilderSavePromptMessage,
     type GenBuilderSetupMessage,
 } from "@lib/genbuilder/types";
-import {
-    normalizeFunctionalZoneSources,
-    validateGenBuilderBlocksFile,
-} from "@lib/genbuilder/utils";
+import { normalizeFunctionalZoneSources } from "@lib/genbuilder/utils";
 import {
     GenPlannerHttpError,
     streamGenPlannerCustomChat,
@@ -2575,40 +2572,22 @@ class ChatDataStore {
         });
     }
 
-    submitGenBuilderBlocksFile = async (setupId: string, file: File) => {
+    submitGenBuilderBlocksFile = (setupId: string, file: File) => {
         const setupMessage = this.getGenBuilderSetupMessage(setupId);
         if (
             !setupMessage ||
             setupMessage.mode !== "files" ||
             (setupMessage.status !== "ready" && setupMessage.status !== "awaiting_parameters")
-        ) return;
+        ) {
+            return;
+        }
 
         const files = this.genBuilderSetupFiles.get(setupId) ?? {};
         this.genBuilderSetupFiles.set(setupId, files);
-        const hasExistingFile = !!files.blocks;
-
-        setupMessage.status = "validating_file";
+        files.blocks = file;
+        setupMessage.blocksFileName = file.name;
+        setupMessage.status = "awaiting_parameters";
         setupMessage.errorText = undefined;
-
-        const validationError = await validateGenBuilderBlocksFile(file);
-
-        runInAction(() => {
-            const currentSetupMessage = this.getGenBuilderSetupMessage(setupId);
-            if (!currentSetupMessage || currentSetupMessage.mode !== "files") {
-                return;
-            }
-
-            if (validationError) {
-                currentSetupMessage.status = hasExistingFile ? "awaiting_parameters" : "ready";
-                currentSetupMessage.errorText = validationError;
-                return;
-            }
-
-            files.blocks = file;
-            currentSetupMessage.blocksFileName = file.name;
-            currentSetupMessage.status = "awaiting_parameters";
-            currentSetupMessage.errorText = undefined;
-        });
     };
 
     submitGenBuilderExistingBuildingsFile = (setupId: string, file: File) => {
@@ -2770,13 +2749,18 @@ class ChatDataStore {
                 }
                 return;
             case "status":
+                if (streamEvent.content) {
+                    this.chatMessages.push({
+                        type: "response",
+                        message: { type: "info", text: streamEvent.content },
+                    });
+                }
+                setupMessage.status = "running";
+                this.currentStatus = streamEvent.content ?? "Параметры приняты";
+                return;
             case "progress":
                 setupMessage.status = "running";
-                this.currentStatus = streamEvent.content ?? (
-                    streamEvent.type === "progress"
-                        ? "Генерация застройки выполняется"
-                        : "Параметры приняты"
-                );
+                this.currentStatus = streamEvent.content ?? "Генерация застройки выполняется";
                 return;
             case "file": {
                 const inputZonesLayer = getInputZonesLayer(streamEvent.content, "file");
@@ -2841,7 +2825,9 @@ class ChatDataStore {
                 return;
             }
             case "error": {
-                const errorText = streamEvent.detail ?? "Не удалось сгенерировать застройку.";
+                const errorText = streamEvent.message ??
+                    streamEvent.detail ??
+                    "Не удалось сгенерировать застройку.";
 
                 streamState.hasStreamError = true;
                 setupMessage.status = "error";

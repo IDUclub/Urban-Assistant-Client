@@ -180,7 +180,7 @@ export const GenBuilderSetupMessageCard = observer(({
             )}
             {isFileMode && setup.status === "awaiting_parameters" && (
                 <div className="text-xs text-slate-500 customer-dark:text-content-muted">
-                    Файл проверен. Введите параметры застройки в поле сообщения.
+                    Файл выбран. Введите параметры застройки в поле сообщения.
                 </div>
             )}
             {setup.errorText && (
