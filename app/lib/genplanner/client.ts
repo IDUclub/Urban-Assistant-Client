@@ -17,7 +17,7 @@ export type GenPlannerStreamEvent =
     | { type: "chat_created"; chatId?: string; title?: string }
     | { type: "warning"; stage?: string; detail?: unknown; message?: string }
     | { type: "token"; content: string }
-    | { type: "result"; zones?: unknown; roads?: unknown }
+    | { type: "result"; zones?: unknown; roads?: unknown; territory?: unknown }
     | { type: "error"; stage?: string; detail?: unknown }
     | { type: "done"; chatId?: string; assistantMessageId?: string }
     | { type: "unknown"; eventName?: string; data: unknown };
@@ -99,6 +99,7 @@ function normalizeStreamEvent(rawEvent: RawSseEvent): GenPlannerStreamEvent {
                 type: "result",
                 zones: record?.zones ?? content?.zones,
                 roads: record?.roads ?? content?.roads,
+                territory: record?.territory ?? content?.territory,
             };
         }
         case "error":
