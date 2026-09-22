@@ -481,9 +481,11 @@ function extractGenPlannerResultLayers(value: unknown): UserChatLayer[] {
 
     const zones = normalizeHistoryLayer(result.zones);
     const roads = normalizeHistoryLayer(result.roads);
+    const territory = normalizeHistoryLayer(result.territory);
     const layers: UserChatLayer[] = [
         ...(zones ? [{ name: GENPLANNER_ZONE_LAYER_NAME, layer: zones }] : []),
         ...(roads ? [{ name: GENPLANNER_ROAD_LAYER_NAME, layer: roads }] : []),
+        ...(territory ? [{ name: PROJECT_BOUNDARY_LAYER_NAME, layer: territory }] : []),
     ];
 
     return layers;
@@ -1829,13 +1831,18 @@ class ChatDataStore {
     private requestProjectBoundary(
         projectId: number,
         requestId = this.currentStreamRequestId,
+        shouldAdd?: () => boolean,
     ) {
         void DataStore.getProjectTerritory(projectId)
             .then((geometry) => {
-                if (requestId !== this.currentStreamRequestId) return;
+                if (requestId !== this.currentStreamRequestId || (shouldAdd && !shouldAdd())) {
+                    return;
+                }
 
                 const boundaryLayer = normalizeBoundaryLayer(geometry);
-                if (!boundaryLayer || !hasBoundaryLayerContent(boundaryLayer)) return;
+                if (!boundaryLayer || !hasBoundaryLayerContent(boundaryLayer)) {
+                    return;
+                }
 
                 MapStore.addLayerToMap({
                     name: PROJECT_BOUNDARY_LAYER_NAME,
@@ -1859,7 +1866,10 @@ class ChatDataStore {
             this.addGeoJsonLayerToMap(layer);
         });
 
-        if (typeof this.selectedContext === "number") {
+        if (
+            typeof this.selectedContext === "number" &&
+            !lastResponseLayers.some((layer) => layer.name === PROJECT_BOUNDARY_LAYER_NAME)
+        ) {
             this.requestProjectBoundary(this.selectedContext);
         }
     }
@@ -1967,7 +1977,10 @@ class ChatDataStore {
             this.addGeoJsonLayerToMap(layer);
         });
 
-        if (typeof chat.selectedContext === "number") {
+        if (
+            typeof chat.selectedContext === "number" &&
+            !lastResponseLayers.some((layer) => layer.name === PROJECT_BOUNDARY_LAYER_NAME)
+        ) {
             this.requestProjectBoundary(chat.selectedContext);
         }
     };
@@ -4290,6 +4303,9 @@ class ChatDataStore {
                 const roads = streamEvent.roads === undefined
                     ? undefined
                     : normalizeBoundaryLayer(streamEvent.roads);
+                const territory = streamEvent.territory === undefined
+                    ? undefined
+                    : normalizeBoundaryLayer(streamEvent.territory);
 
                 if (!zones || (streamState.mode === "scenario" && !roads)) {
                     const errorText = streamState.mode === "custom"
@@ -4324,13 +4340,18 @@ class ChatDataStore {
                 this.currentStatus = "Функциональное зонирование сгенерировано";
                 this.commitStreamedResponse();
                 MapStore.clearMapLayers();
-                if (streamState.mode === "scenario" && streamState.projectId !== undefined) {
+                if (
+                    !territory &&
+                    streamState.mode === "scenario" &&
+                    streamState.projectId !== undefined
+                ) {
                     this.requestProjectBoundary(streamState.projectId, requestId);
                 }
 
                 const resultLayers: UserChatLayer[] = [
                     { name: GENPLANNER_ZONE_LAYER_NAME, layer: zones },
                     ...(roads ? [{ name: GENPLANNER_ROAD_LAYER_NAME, layer: roads }] : []),
+                    ...(territory ? [{ name: PROJECT_BOUNDARY_LAYER_NAME, layer: territory }] : []),
                 ];
 
                 resultLayers.forEach((layer) => {
@@ -4596,7 +4617,6 @@ class ChatDataStore {
         this.abortController = new AbortController();
         this.currentStreamRequestId += 1;
         const requestId = this.currentStreamRequestId;
-        this.requestProjectBoundary(projectId, requestId);
         this.streamedResponse = "";
         this.isStreaming = true;
         this.currentStatus = "GenPlanner обрабатывает запрос";
@@ -4613,6 +4633,7 @@ class ChatDataStore {
             projectId,
             scenarioId,
         };
+        this.requestProjectBoundary(projectId, requestId, () => !streamState.hasReceivedResult);
 
         return streamGenPlannerScenarioChat({
             baseUrl: GENPLANNER_API_URL,
