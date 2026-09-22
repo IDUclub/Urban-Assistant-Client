@@ -321,6 +321,25 @@ body::-webkit-scrollbar,
   border-radius: 9999px;
 }
 
+.map-property-scroll {
+  scrollbar-color: rgb(148 163 184 / 0.8) transparent;
+  scrollbar-width: thin;
+}
+
+.map-property-scroll::-webkit-scrollbar {
+  display: block;
+  width: 6px;
+}
+
+.map-property-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.map-property-scroll::-webkit-scrollbar-thumb {
+  background: rgb(148 163 184 / 0.8);
+  border-radius: 9999px;
+}
+
 .document-library-scroll {
   scrollbar-color: rgb(148 163 184 / 0.8) transparent;
   scrollbar-gutter: stable;
