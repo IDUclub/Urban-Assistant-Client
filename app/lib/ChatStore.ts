@@ -765,6 +765,7 @@ type PzzSetupFiles = {
 type GenBuilderSetupFiles = {
     blocks?: File;
     existingBuildings?: File;
+    lastUserQuery?: string;
 };
 
 type VriSetupStatus = "ready" | "submitting" | "running" | "finished" | "error";
@@ -2618,8 +2619,11 @@ class ChatDataStore {
             setupMessage.mode !== "files" ||
             setupMessage.status !== "awaiting_parameters" ||
             !clarification ||
-            clarification.submitted
-        ) return;
+            clarification.submitted ||
+            this.isStreaming
+        ) {
+            return;
+        }
 
         const files = this.genBuilderSetupFiles.get(setupId);
         if (files) {
@@ -2629,6 +2633,7 @@ class ChatDataStore {
         clarification.existingBuildingsChoice = "skip";
         clarification.existingBuildingsFileName = undefined;
         setupMessage.errorText = undefined;
+        void this.sendGenBuilderChatRequest(files?.lastUserQuery ?? "", setupId, false);
     };
 
     private startGenBuilderSetup() {
@@ -2895,7 +2900,7 @@ class ChatDataStore {
         });
     }
 
-    private sendGenBuilderChatRequest(message: string, setupId: string) {
+    private sendGenBuilderChatRequest(message: string, setupId: string, showUserMessage = true) {
         const setupMessage = this.getGenBuilderSetupMessage(setupId);
         const userQuery = message.trim();
 
@@ -2957,6 +2962,7 @@ class ChatDataStore {
                     ? { skipExistingBuildings: true }
                     : {}),
             };
+            files.lastUserQuery = userQuery;
 
         } else {
             if (
@@ -3027,10 +3033,12 @@ class ChatDataStore {
         this.currentStatus = "Отправка параметров генерации";
         setupMessage.status = "submitting";
         setupMessage.errorText = undefined;
-        this.chatMessages.push({
-            type: "request",
-            message: { type: "text", text: userQuery },
-        });
+        if (showUserMessage) {
+            this.chatMessages.push({
+                type: "request",
+                message: { type: "text", text: userQuery },
+            });
+        }
 
         if (backendChatId) {
             setupMessage.backendChatId = backendChatId;

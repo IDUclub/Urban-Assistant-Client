@@ -716,24 +716,6 @@ type SelectedFeatureState = {
     feature: Feature<Geometry, Record<string, unknown>>;
 };
 
-type ScrollShadowState = {
-    top: boolean;
-    bottom: boolean;
-};
-
-function getScrollShadowState(element: HTMLElement | null): ScrollShadowState {
-    if (!element) {
-        return { top: false, bottom: false };
-    }
-
-    const hasOverflow = element.scrollHeight > element.clientHeight + 1;
-
-    return {
-        top: hasOverflow && element.scrollTop > 1,
-        bottom: hasOverflow && element.scrollTop + element.clientHeight < element.scrollHeight - 1,
-    };
-}
-
 const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
     const { mapLayers, isMapLayersAvailable } = MapStore;
     const [isMounted, setIsMounted] = useState(false);
@@ -741,7 +723,6 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
     const [isLegendExpanded, setIsLegendExpanded] = useState(true);
     const [activeLayerId, setActiveLayerId] = useState<string>();
     const [selectedFeature, setSelectedFeature] = useState<SelectedFeatureState | null>(null);
-    const [propertyScrollShadows, setPropertyScrollShadows] = useState<ScrollShadowState>({ top: false, bottom: false });
     const mapRef = useRef<MapRef | null>(null);
     const propertyListRef = useRef<HTMLDivElement | null>(null);
     const mapboxToken = import.meta.env.VITE_MAPBOX_TOKEN;
@@ -809,16 +790,6 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
         anchor.click();
 
         URL.revokeObjectURL(url);
-    };
-
-    const updatePropertyScrollShadows = () => {
-        const nextShadows = getScrollShadowState(propertyListRef.current);
-
-        setPropertyScrollShadows((currentShadows) => (
-            currentShadows.top === nextShadows.top && currentShadows.bottom === nextShadows.bottom
-                ? currentShadows
-                : nextShadows
-        ));
     };
 
     const getMapLayerByRenderedLayerId = (renderedLayerId?: string) => {
@@ -941,13 +912,9 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
     }, [mapLayers]);
 
     useEffect(() => {
-        const animationFrameId = requestAnimationFrame(updatePropertyScrollShadows);
-
         if (propertyListRef.current) {
             propertyListRef.current.scrollTop = 0;
         }
-
-        return () => cancelAnimationFrame(animationFrameId);
     }, [selectedFeature]);
 
     return (
@@ -1230,49 +1197,32 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                             <IoClose aria-hidden="true" size={16} />
                         </button>
                     </div>
-                    <div className="relative min-h-0 overflow-hidden rounded-xl bg-slate-50/60 customer-dark:bg-surface-muted/60">
-                        <div
-                            className="h-full max-h-[calc(50vh-7rem)] overflow-y-auto overscroll-contain py-2"
-                            ref={propertyListRef}
-                            onScroll={updatePropertyScrollShadows}
-                            onWheel={(event) => event.stopPropagation()}
-                            onTouchMove={(event) => event.stopPropagation()}
-                        >
-                            {Object.keys(selectedFeature.properties).length ? (
-                                Object.entries(selectedFeature.properties).map(([key, propertyValue]) => (
-                                    <div key={key} className="mx-3 border-b border-slate-200 py-2 last:border-b-0 customer-dark:border-ui-border">
-                                        <div className="text-xs font-medium uppercase tracking-[0.08em] text-slate-500 customer-dark:text-content-muted">
-                                            {key}
-                                        </div>
-                                        <div className="mt-1 wrap-break-word text-sm text-slate-800 customer-dark:text-content-primary">
-                                            {formatSelectedFeaturePropertyValue(
-                                                selectedFeature.layerName,
-                                                key,
-                                                propertyValue,
-                                            )}
-                                        </div>
+                    <div
+                        className="map-property-scroll min-h-0 overflow-y-auto overscroll-contain rounded-xl bg-slate-50/60 py-2 customer-dark:bg-surface-muted/60"
+                        ref={propertyListRef}
+                        onWheel={(event) => event.stopPropagation()}
+                        onTouchMove={(event) => event.stopPropagation()}
+                    >
+                        {Object.keys(selectedFeature.properties).length ? (
+                            Object.entries(selectedFeature.properties).map(([key, propertyValue]) => (
+                                <div key={key} className="mx-3 border-b border-slate-200 py-2 last:border-b-0 customer-dark:border-ui-border">
+                                    <div className="text-xs font-medium uppercase tracking-[0.08em] text-slate-500 customer-dark:text-content-muted">
+                                        {key}
                                     </div>
-                                ))
-                            ) : (
-                                <div className="mx-3 py-2 text-sm text-slate-500 customer-dark:text-content-muted">
-                                    У объекта нет свойств
+                                    <div className="mt-1 wrap-break-word text-sm text-slate-800 customer-dark:text-content-primary">
+                                        {formatSelectedFeaturePropertyValue(
+                                            selectedFeature.layerName,
+                                            key,
+                                            propertyValue,
+                                        )}
+                                    </div>
                                 </div>
-                            )}
-                        </div>
-                        <div
-                            className={`
-                                pointer-events-none absolute inset-x-0 top-0 h-5 bg-linear-to-b from-slate-400/55 to-transparent
-                                backdrop-blur-[1px]
-                                transition-opacity duration-200 ${propertyScrollShadows.top ? "opacity-100" : "opacity-0"}
-                            `}
-                        />
-                        <div
-                            className={`
-                                pointer-events-none absolute inset-x-0 bottom-0 h-5 bg-linear-to-t from-slate-400/55 to-transparent
-                                backdrop-blur-[1px]
-                                transition-opacity duration-200 ${propertyScrollShadows.bottom ? "opacity-100" : "opacity-0"}
-                            `}
-                        />
+                            ))
+                        ) : (
+                            <div className="mx-3 py-2 text-sm text-slate-500 customer-dark:text-content-muted">
+                                У объекта нет свойств
+                            </div>
+                        )}
                     </div>
                 </div>
             )}

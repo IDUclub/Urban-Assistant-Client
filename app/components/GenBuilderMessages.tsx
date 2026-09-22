@@ -233,7 +233,7 @@ export const GenBuilderClarificationMessageCard = observer(({
                         : "border-blue-300 bg-white text-blue-800 hover:bg-blue-100 customer-dark:border-ui-border-strong customer-dark:bg-surface-raised customer-dark:text-content-secondary customer-dark:hover:bg-surface-hover"
                 }`}
                 onClick={() => ChatStore.skipGenBuilderExistingBuildings(clarification.setupId)}
-                disabled={!!clarification.submitted}
+                disabled={!!clarification.submitted || ChatStore.isStreaming}
                 aria-pressed={clarification.existingBuildingsChoice === "skip"}
             >
                 {clarification.existingBuildingsChoice === "skip" && <MdCheck size={18} />}
