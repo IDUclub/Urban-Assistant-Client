@@ -27,6 +27,7 @@ import {
     GenPlannerCustomSetupCard,
     GenPlannerSavePromptCard,
 } from "@components/GenPlannerMessages";
+import MarkdownMessage from "@components/MarkdownMessage";
 
 
 type ChatMessageItemType = "title" | "plain" | "block" | "list";
@@ -40,205 +41,6 @@ interface ChatComponentProps {
     messages?: ChatMessageItem[];
     onSubmit?: (request: string) => void;
     emptyState?: ReactNode;
-}
-
-function renderInlineText(text: string) {
-    const parts = text.split(/(<br\s*\/?>|\*\*.*?\*\*|(?<!\*)\*[^*]+\*(?!\*))/g);
-
-    return parts.map((part, index) => {
-        const boldMatch = part.match(/^\*\*(.*?)\*\*$/);
-        const italicMatch = part.match(/^\*(.*?)\*$/);
-        const lineBreakMatch = part.match(/^<br\s*\/?>$/i);
-
-        if (lineBreakMatch) {
-            return <br key={`br-${index}`} />;
-        }
-
-        if (boldMatch) {
-            return <strong key={`bold-${index}`}>{boldMatch[1]}</strong>;
-        }
-
-        if (italicMatch) {
-            return <em key={`italic-${index}`}>{italicMatch[1]}</em>;
-        }
-
-        return <span key={`text-${index}`}>{part}</span>;
-    });
-}
-
-function isMarkdownTableSeparator(line: string) {
-    const trimmedLine = line.trim();
-    return /^\|?(\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?$/.test(trimmedLine);
-}
-
-function parseMarkdownTableRow(line: string) {
-    return line
-        .trim()
-        .replace(/^\|/, "")
-        .replace(/\|$/, "")
-        .split("|")
-        .map((cell) => cell.trim());
-}
-
-function parseMarkdownHeading(line: string) {
-    const headingMatch = line.trim().match(/^(#{1,6})\s*(.+)$/);
-
-    if (!headingMatch) return undefined;
-
-    return {
-        level: headingMatch[1].length,
-        text: headingMatch[2].trim(),
-    };
-}
-
-function getMarkdownHeadingClassName(level: number) {
-    switch (level) {
-        case 1:
-            return "mt-2 text-2xl font-semibold leading-tight text-gray-950 customer-dark:text-content-primary";
-        case 2:
-            return "mt-2 text-xl font-semibold leading-tight text-gray-950 customer-dark:text-content-primary";
-        case 3:
-            return "mt-1 text-lg font-semibold leading-snug text-gray-950 customer-dark:text-content-primary";
-        default:
-            return "mt-1 text-base font-semibold leading-snug text-gray-900 customer-dark:text-content-primary";
-    }
-}
-
-function renderFormattedText(text: string) {
-    const lines = text.split("\n");
-    const blocks: ReactNode[] = [];
-    let currentParagraph: string[] = [];
-
-    const flushParagraph = () => {
-        if (!currentParagraph.length) return;
-
-        blocks.push(
-            <p key={`paragraph-${blocks.length}`} className="whitespace-pre-wrap">
-                {currentParagraph.map((line, lineIndex) => (
-                    <span key={`line-${lineIndex}`}>
-                        {renderInlineText(line)}
-                        {lineIndex < currentParagraph.length - 1 ? <br /> : null}
-                    </span>
-                ))}
-            </p>
-        );
-        currentParagraph = [];
-    };
-
-    for (let index = 0; index < lines.length; index += 1) {
-        const line = lines[index];
-        const nextLine = lines[index + 1];
-
-        if (line.trim().startsWith("```")) {
-            flushParagraph();
-
-            const language = line.trim().slice(3).trim();
-            const codeLines: string[] = [];
-            index += 1;
-
-            while (index < lines.length && !lines[index].trim().startsWith("```")) {
-                codeLines.push(lines[index]);
-                index += 1;
-            }
-
-            blocks.push(
-                <div key={`code-${blocks.length}`} className="my-2 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 shadow-sm customer-dark:border-ui-border customer-dark:bg-surface-muted">
-                    {language ? (
-                        <div className="border-b border-slate-200 bg-white px-4 py-2 text-xs font-medium uppercase tracking-[0.12em] text-slate-500 customer-dark:border-ui-border customer-dark:bg-surface-raised customer-dark:text-content-muted">
-                            {language}
-                        </div>
-                    ) : null}
-                    <pre className="overflow-x-auto bg-[#f8f9fa] px-4 py-4 text-sm leading-6 text-[#1f1555] customer-dark:bg-surface-muted customer-dark:text-content-primary">
-                        <code>{codeLines.join("\n")}</code>
-                    </pre>
-                </div>
-            );
-            continue;
-        }
-
-        if (/^-{3,}$/.test(line.trim())) {
-            flushParagraph();
-            blocks.push(
-                <hr
-                    key={`divider-${blocks.length}`}
-                    className="my-1 border-0 border-t border-slate-200 customer-dark:border-ui-border"
-                />
-            );
-            continue;
-        }
-
-        const heading = parseMarkdownHeading(line);
-
-        if (heading) {
-            flushParagraph();
-
-            const HeadingTag = `h${heading.level}` as "h1" | "h2" | "h3" | "h4" | "h5" | "h6";
-
-            blocks.push(
-                <HeadingTag
-                    key={`heading-${blocks.length}`}
-                    className={getMarkdownHeadingClassName(heading.level)}
-                >
-                    {renderInlineText(heading.text)}
-                </HeadingTag>
-            );
-            continue;
-        }
-
-        if (line.trim().includes("|") && nextLine && isMarkdownTableSeparator(nextLine)) {
-            flushParagraph();
-
-            const header = parseMarkdownTableRow(line);
-            const rows: string[][] = [];
-            index += 2;
-
-            while (index < lines.length && lines[index].trim().includes("|") && lines[index].trim()) {
-                rows.push(parseMarkdownTableRow(lines[index]));
-                index += 1;
-            }
-
-            index -= 1;
-
-            blocks.push(
-                <div key={`table-${blocks.length}`} className="my-2 overflow-x-auto">
-                    <table className="min-w-full border-collapse overflow-hidden rounded-2xl border border-gray-200 text-left text-sm customer-dark:border-ui-border">
-                        <thead className="bg-gray-50 customer-dark:bg-surface-muted">
-                            <tr className="bg-gray-400/10 customer-dark:bg-surface-hover/60">
-                                {header.map((cell, cellIndex) => (
-                                    <th key={`header-${cellIndex}`} className="border-b border-gray-200 px-4 py-3 font-semibold text-gray-900 customer-dark:border-ui-border customer-dark:text-content-primary">
-                                        {renderInlineText(cell)}
-                                    </th>
-                                ))}
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {rows.map((row, rowIndex) => (
-                                <tr key={`row-${rowIndex}`} className="odd:bg-white even:bg-gray-50/50 customer-dark:odd:bg-surface-panel customer-dark:even:bg-surface-muted/50">
-                                    {row.map((cell, cellIndex) => (
-                                        <td key={`cell-${rowIndex}-${cellIndex}`} className="border-t border-gray-200 px-4 py-3 align-top text-gray-800 customer-dark:border-ui-border customer-dark:text-content-primary">
-                                            {renderInlineText(cell)}
-                                        </td>
-                                    ))}
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-            );
-            continue;
-        }
-
-        if (!line.trim()) {
-            flushParagraph();
-            continue;
-        }
-
-        currentParagraph.push(line);
-    }
-
-    flushParagraph();
-
-    return <div className="flex flex-col gap-3">{blocks}</div>;
 }
 
 function parseFeatureCollection(layer: unknown) {
@@ -488,7 +290,7 @@ function TableMessage({ table }: { table: TableData }) {
                                 {table.columns.map((column) => (
                                     <td
                                         key={column.key}
-                                        className="max-w-xs border-t border-gray-200 px-4 py-3 align-top whitespace-pre-wrap break-words text-gray-800 customer-dark:border-ui-border customer-dark:text-content-primary"
+                                        className="max-w-xs border-t border-gray-200 px-4 py-3 align-top whitespace-pre-wrap wrap-break-word text-gray-800 customer-dark:border-ui-border customer-dark:text-content-primary"
                                     >
                                         {formatTableCell(row[column.key])}
                                     </td>
@@ -1077,7 +879,7 @@ const ChatComponent = observer(function ChatComponent(
                 key={`chat-message-${message.type}-${ind}`}
                 className={getMessageContainerClassName(message)}
             >
-                {message.message.type === "text" ? renderFormattedText(message.message.text) : ""}
+                {message.message.type === "text" ? <MarkdownMessage>{message.message.text}</MarkdownMessage> : ""}
                 {message.message.type === "error" && (
                     <div className="flex items-start gap-3">
                         <span className="mt-0.5 shrink-0 text-red-500 customer:text-danger">
