@@ -1027,11 +1027,17 @@ const ChatComponent = observer(function ChatComponent(
         onSubmit = (request: string) => {ChatStore.sendChatMessage(request)},
         emptyState,
     } = props;
-    const messagesEndRef = useRef<HTMLDivElement | null>(null);
+    const messagesScrollRef = useRef<HTMLDivElement | null>(null);
     const hasMessages = ChatStore.chatMessages.length > 0;
 
     useEffect(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+        const messagesScrollContainer = messagesScrollRef.current;
+        if (!messagesScrollContainer) return;
+
+        messagesScrollContainer.scrollTo({
+            top: messagesScrollContainer.scrollHeight,
+            behavior: "smooth",
+        });
     }, [ChatStore.chatMessages.length, ChatStore.streamedResponse, ChatStore.isStreaming]);
 
     const renderedMessages: ReactNode[] = [];
@@ -1167,7 +1173,7 @@ const ChatComponent = observer(function ChatComponent(
 
     return (
         <div className="w-full flex flex-col min-h-0 flex-1">
-            <div className="min-h-0 flex-1 overflow-y-auto pr-2">
+            <div ref={messagesScrollRef} className="min-h-0 flex-1 overflow-y-auto pr-2">
                 <div className="flex min-h-full flex-col gap-2 pb-4 justify-start">
                     {renderedMessages}
                     <div>
@@ -1176,7 +1182,6 @@ const ChatComponent = observer(function ChatComponent(
                         )}
                         <SyncLoader size={8} color="var(--color-brand-primary)" loading={ChatStore.isStreaming} cssOverride={{ marginBlock: 12, marginLeft: "0.25rem" }} />
                     </div>
-                    <div ref={messagesEndRef} />
                 </div>
             </div>
             <div className="shrink-0 border-t border-gray-100 bg-white pt-4 customer-dark:border-ui-border customer-dark:bg-surface-page">

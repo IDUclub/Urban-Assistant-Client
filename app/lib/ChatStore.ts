@@ -1361,6 +1361,7 @@ class ChatDataStore {
 
     setSelectedContext(value: string | number) {
         this.selectedContext = value;
+        this.parsedContext = null;
         this.activeGenPlannerChatId = undefined;
         this.selectedPzzZoneSource = undefined;
         this.pzzSetupFiles.clear();
@@ -1372,6 +1373,7 @@ class ChatDataStore {
 
     setSelectedScenario(scenarioId: number | null) {
         this.selectedScenario = scenarioId;
+        this.parsedContext = null;
         this.activeGenPlannerChatId = undefined;
         this.selectedPzzZoneSource = undefined;
         this.pzzSetupFiles.clear();
@@ -1955,6 +1957,7 @@ class ChatDataStore {
         this.chatMessages = [...chat.messages];
         this.selectedContext = chat.selectedContext;
         this.selectedScenario = chat.selectedScenario ?? null;
+        this.parsedContext = null;
         this.selectedChatTool = null;
         this.pzzSetupFiles.clear();
         this.vriSetupFiles.clear();
@@ -5071,6 +5074,8 @@ class ChatDataStore {
         );
         const scenarioId = toNumber(chat?.scenario_id ?? metadata.scenario_id ?? metadata.scenarioId);
 
+        this.parsedContext = null;
+
         if (projectId !== undefined) {
             this.selectedContext = projectId;
             this.selectedScenario = scenarioId ?? null;
@@ -5266,6 +5271,8 @@ class ChatDataStore {
             if (chat && chat.scenario_id) {
                 const chatContext = await DataStore.getProjectScenarioName(chat.scenario_id);
                 runInAction(() => {
+                    if (this.activeChatId !== chatId || this.currentStreamRequestId !== requestId) return;
+
                     this.parsedContext = chatContext;
                 });
             }
