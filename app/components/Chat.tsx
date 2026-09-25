@@ -940,7 +940,8 @@ const ChatInput = observer((
     { onSubmit }: { onSubmit: ChatComponentProps["onSubmit"]}
 ) => {
     const { isStreaming } = ChatStore;
-    const [currentInput, setCurrentInput] = useState<string>("");
+    const currentInput = ChatStore.messageDraft;
+    const setCurrentInput = (value: string) => ChatStore.setMessageDraft(value);
     const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
     useEffect(() => {

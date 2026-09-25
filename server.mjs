@@ -1,9 +1,11 @@
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import http from "node:http";
+import { createSynapseProxy } from "./server/synapseProxy.mjs";
 
 const clientDir = join(process.cwd(), "build", "client");
 const port = Number(process.env.PORT ?? 3000);
+const synapseProxy = createSynapseProxy(process.env);
 
 const contentTypes = {
     ".css": "text/css; charset=utf-8",
@@ -33,7 +35,9 @@ function resolveFilePath(urlPath) {
     return join(clientDir, "index.html");
 }
 
-const server = http.createServer((request, response) => {
+const server = http.createServer(async (request, response) => {
+    if (await synapseProxy.handle(request, response)) return;
+
     const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
     const filePath = resolveFilePath(requestUrl.pathname);
     const extension = extname(filePath).toLowerCase();

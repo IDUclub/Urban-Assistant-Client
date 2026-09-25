@@ -1,4 +1,5 @@
 import { observer } from "mobx-react-lite";
+import MasBfmStore from "@lib/MasBfmStore";
 import ChatStore from "@lib/ChatStore";
 import DataStore from "@lib/DataStore";
 import {
@@ -356,16 +357,22 @@ const ChatStory = observer(() => {
         <button
           type="button"
           className="flex h-11 w-full cursor-pointer items-center justify-center gap-2 rounded-3xl bg-linear-to-r from-brand-gradient-start via-brand-gradient-middle to-brand-gradient-end px-4 text-sm font-medium text-white shadow-[0_10px_24px_-14px_var(--brand-shadow-strong)] transition-[filter,box-shadow] duration-200 hover:brightness-105 hover:shadow-[0_14px_28px_-14px_var(--brand-shadow-medium)] focus:outline-none focus:ring-2 focus:ring-brand-primary/25"
-          onClick={() => ChatStore.clearChat()}
+          onClick={() =>
+            MasBfmStore.isEnabled
+              ? MasBfmStore.newChat()
+              : ChatStore.clearChat()
+          }
         >
           <MdAdd aria-hidden="true" size={20} />
           <span>Новый чат</span>
         </button>
       </div>
-      <div className="border-t border-(--sidebar-divider-color) px-4 py-4 text-sm font-medium uppercase tracking-[0.14em] text-(--history-heading-color)">
-        История чатов
-      </div>
-      {!chatStoryPreview.length ? (
+      {!MasBfmStore.isEnabled && (
+        <div className="border-t border-(--sidebar-divider-color) px-4 py-4 text-sm font-medium uppercase tracking-[0.14em] text-(--history-heading-color)">
+          История чатов
+        </div>
+      )}
+      {!MasBfmStore.isEnabled && (!chatStoryPreview.length ? (
         <div className="px-4 py-3 text-sm text-gray-400 customer-dark:text-content-muted">
           {isUserChatsLoading ? "Загрузка истории..." : "История пока пуста"}
         </div>
@@ -450,7 +457,7 @@ const ChatStory = observer(() => {
             )}
           </div>
         </>
-      )}
+      ))}
     </div>
   );
 });

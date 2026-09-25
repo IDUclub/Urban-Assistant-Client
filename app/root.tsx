@@ -11,6 +11,7 @@ import { observer } from "mobx-react-lite";
 import type { Route } from "./+types/root";
 import AuthStore from "@lib/AuthStore";
 import PageLoader from "@components/PageLoader";
+import MasBfmToggle from "@components/mas-bfm/MasBfmToggle";
 import ThemeToggle from "@components/ThemeToggle";
 import UserMenu from "@components/UserMenu";
 import DocumentUploadStatus from "@components/documents/DocumentUploadStatus";
@@ -45,6 +46,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
       </head>
       <body>
         <div className="fixed right-4 top-4 z-50 flex items-start gap-2">
+          <MasBfmToggle />
           <ThemeToggle/>
           <UserMenu />
         </div>
