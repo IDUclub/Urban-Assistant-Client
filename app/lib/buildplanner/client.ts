@@ -159,7 +159,7 @@ function getBuildPlannerBaseUrl(baseUrl: string) {
 }
 
 function getScenarioChatStreamUrl(baseUrl: string, scenarioId: number) {
-    return `${getBuildPlannerBaseUrl(baseUrl)}/scenarios/${scenarioId}/chat/stream`;
+    return `${getBuildPlannerBaseUrl(baseUrl)}/buildplanner/scenarios/${scenarioId}/chat/stream`;
 }
 
 async function parseErrorResponse(response: Response) {
