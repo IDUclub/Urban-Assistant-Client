@@ -45,6 +45,8 @@ interface ChatComponentProps {
     emptyState?: ReactNode;
 }
 
+const LOADING_INDICATOR_GRACE_PERIOD_MS = 500;
+
 function parseFeatureCollection(layer: unknown) {
     if (!layer) return undefined;
 
@@ -897,6 +899,41 @@ const ChatComponent = observer(function ChatComponent(
     } = props;
     const messagesScrollRef = useRef<HTMLDivElement | null>(null);
     const hasMessages = ChatStore.chatMessages.length > 0;
+    const hasCurrentStatus = Boolean(ChatStore.currentStatus?.trim());
+    const statusRequestIdRef = useRef<number | null>(null);
+    const [showLoadingFallback, setShowLoadingFallback] = useState(false);
+
+    useEffect(() => {
+        const requestId = ChatStore.currentStreamRequestId;
+
+        if (!ChatStore.isStreaming) {
+            statusRequestIdRef.current = null;
+            setShowLoadingFallback(false);
+            return;
+        }
+
+        if (hasCurrentStatus) {
+            statusRequestIdRef.current = requestId;
+            setShowLoadingFallback(false);
+            return;
+        }
+
+        if (statusRequestIdRef.current === requestId) {
+            setShowLoadingFallback(false);
+            return;
+        }
+
+        setShowLoadingFallback(false);
+        const timeoutId = window.setTimeout(() => {
+            setShowLoadingFallback(true);
+        }, LOADING_INDICATOR_GRACE_PERIOD_MS);
+
+        return () => window.clearTimeout(timeoutId);
+    }, [
+        ChatStore.currentStreamRequestId,
+        ChatStore.isStreaming,
+        hasCurrentStatus,
+    ]);
 
     useEffect(() => {
         const messagesScrollContainer = messagesScrollRef.current;
@@ -1054,7 +1091,7 @@ const ChatComponent = observer(function ChatComponent(
                         </div>
                     )}
                     <div>
-                        {ChatStore.isStreaming && ChatStore.currentStatus && (
+                        {ChatStore.isStreaming && hasCurrentStatus && (
                             <span
                                 className="stream-status-shimmer"
                                 role="status"
@@ -1063,7 +1100,16 @@ const ChatComponent = observer(function ChatComponent(
                                 {ChatStore.currentStatus}
                             </span>
                         )}
-                        <SyncLoader size={8} color="var(--color-brand-primary)" loading={ChatStore.isStreaming} cssOverride={{ marginBlock: 12, marginLeft: "0.25rem" }} />
+                        <SyncLoader
+                            size={8}
+                            color="var(--color-brand-primary)"
+                            loading={
+                                ChatStore.isStreaming
+                                && !hasCurrentStatus
+                                && showLoadingFallback
+                            }
+                            cssOverride={{ marginBlock: 12, marginLeft: "0.25rem" }}
+                        />
                     </div>
                 </div>
             </div>
