@@ -6,6 +6,7 @@ import {
     MdDownload,
     MdMoreHoriz,
     MdOutlineMap,
+    MdOutlineDescription,
     MdArrowForwardIos,
     MdCheck,
 } from "react-icons/md";
@@ -28,6 +29,7 @@ import {
     GenPlannerSavePromptCard,
 } from "@components/GenPlannerMessages";
 import MarkdownMessage from "@components/MarkdownMessage";
+import MarkdownFilePreviewModal from "@components/MarkdownFilePreviewModal";
 
 
 type ChatMessageItemType = "title" | "plain" | "block" | "list";
@@ -186,6 +188,35 @@ function GeoJsonLayerRow({ name, layer }: { name: string; layer: unknown }) {
     );
 }
 
+function DownloadFileRow({ title, downloadUrl }: { title: string; downloadUrl: string }) {
+    const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+
+    const handlePreview = (event: React.MouseEvent<HTMLAnchorElement>) => {
+        event.preventDefault();
+        setIsPreviewOpen(true);
+    };
+
+    return (
+        <>
+            <a
+                href={downloadUrl}
+                onClick={handlePreview}
+                className="inline-flex min-w-0 items-center gap-2 font-medium text-blue-600 underline decoration-blue-300 underline-offset-2 transition-colors hover:text-blue-700 customer:text-brand-primary customer:decoration-brand-border customer:hover:text-brand-contrast"
+            >
+                <MdOutlineDescription className="shrink-0" size={18} />
+                <span className="min-w-0 truncate">{title}</span>
+            </a>
+            {isPreviewOpen && (
+                <MarkdownFilePreviewModal
+                    title={title}
+                    downloadUrl={downloadUrl}
+                    onClose={() => setIsPreviewOpen(false)}
+                />
+            )}
+        </>
+    );
+}
+
 type ChatStoreMessage = (typeof ChatStore.chatMessages)[number];
 
 type GeoJsonResponseMessage = ChatStoreMessage & {
@@ -202,6 +233,40 @@ type VriSetupData = Extract<ChatStoreMessage["message"], { type: "vri_setup" }>;
 type TableData = Extract<ChatStoreMessage["message"], { type: "table" }>;
 function isGeoJsonResponseMessage(message: ChatStoreMessage): message is GeoJsonResponseMessage {
     return message.type === "response" && message.message.type === "geojson";
+}
+
+function groupGeoJsonMessagesByTurn(messages: readonly ChatStoreMessage[]) {
+    const groupsByFirstIndex = new Map<number, GeoJsonResponseMessage[]>();
+    const groupedIndexes = new Set<number>();
+    let currentTurnLayerIndexes: number[] = [];
+
+    const registerCurrentTurn = () => {
+        if (currentTurnLayerIndexes.length > 1) {
+            const layers = currentTurnLayerIndexes.map(
+                (index) => messages[index] as GeoJsonResponseMessage,
+            );
+
+            groupsByFirstIndex.set(currentTurnLayerIndexes[0], layers);
+            currentTurnLayerIndexes.forEach((index) => groupedIndexes.add(index));
+        }
+
+        currentTurnLayerIndexes = [];
+    };
+
+    messages.forEach((message, index) => {
+        if (message.type === "request") {
+            registerCurrentTurn();
+            return;
+        }
+
+        if (isGeoJsonResponseMessage(message)) {
+            currentTurnLayerIndexes.push(index);
+        }
+    });
+
+    registerCurrentTurn();
+
+    return { groupsByFirstIndex, groupedIndexes };
 }
 
 function getMessageContainerClassName(message: ChatStoreMessage) {
@@ -841,38 +906,36 @@ const ChatComponent = observer(function ChatComponent(
             top: messagesScrollContainer.scrollHeight,
             behavior: "smooth",
         });
-    }, [ChatStore.chatMessages.length, ChatStore.streamedResponse, ChatStore.isStreaming]);
+    }, [
+        ChatStore.chatMessages.length,
+        ChatStore.currentStatus,
+        ChatStore.streamedResponse,
+        ChatStore.isStreaming,
+    ]);
 
     const renderedMessages: ReactNode[] = [];
+    const { groupsByFirstIndex, groupedIndexes } = groupGeoJsonMessagesByTurn(
+        ChatStore.chatMessages,
+    );
 
     for (let ind = 0; ind < ChatStore.chatMessages.length; ind += 1) {
         const message = ChatStore.chatMessages[ind];
+        const geoJsonGroup = groupsByFirstIndex.get(ind);
 
-        if (isGeoJsonResponseMessage(message)) {
-            const geoJsonMessages: GeoJsonResponseMessage[] = [message];
-            let nextIndex = ind + 1;
+        if (geoJsonGroup) {
+            renderedMessages.push(
+                <div
+                    key={`chat-message-geojson-group-${ind}`}
+                    className="w-full rounded-3xl py-4 pr-6 pl-1 text-gray-950 customer-dark:text-content-primary"
+                >
+                    <GeoJsonMessageAccordion messages={geoJsonGroup} />
+                </div>
+            );
+            continue;
+        }
 
-            while (nextIndex < ChatStore.chatMessages.length) {
-                const nextMessage = ChatStore.chatMessages[nextIndex];
-
-                if (!isGeoJsonResponseMessage(nextMessage)) break;
-
-                geoJsonMessages.push(nextMessage);
-                nextIndex += 1;
-            }
-
-            if (geoJsonMessages.length > 1) {
-                renderedMessages.push(
-                    <div
-                        key={`chat-message-geojson-group-${ind}`}
-                        className="w-full rounded-3xl py-4 pr-6 pl-1 text-gray-950 customer-dark:text-content-primary"
-                    >
-                        <GeoJsonMessageAccordion messages={geoJsonMessages} />
-                    </div>
-                );
-                ind = nextIndex - 1;
-                continue;
-            }
+        if (groupedIndexes.has(ind)) {
+            continue;
         }
 
         renderedMessages.push(
@@ -932,6 +995,12 @@ const ChatComponent = observer(function ChatComponent(
                         layer={message.message.layer}
                     />
                 )}
+                {message.message.type === "file" && (
+                    <DownloadFileRow
+                        title={message.message.title}
+                        downloadUrl={message.message.downloadUrl}
+                    />
+                )}
                 {message.message.type === "table" && (
                     <TableMessage table={message.message} />
                 )}
@@ -979,9 +1048,20 @@ const ChatComponent = observer(function ChatComponent(
             <div ref={messagesScrollRef} className="min-h-0 flex-1 overflow-y-auto pr-2">
                 <div className="flex min-h-full flex-col gap-2 pb-4 justify-start">
                     {renderedMessages}
+                    {ChatStore.streamedResponse && (
+                        <div className="w-full rounded-3xl pr-6 pl-1 py-4 text-gray-950 customer-dark:text-content-primary">
+                            <MarkdownMessage>{ChatStore.streamedResponse}</MarkdownMessage>
+                        </div>
+                    )}
                     <div>
                         {ChatStore.isStreaming && ChatStore.currentStatus && (
-                            <span>{ChatStore.currentStatus}</span>
+                            <span
+                                className="stream-status-shimmer"
+                                role="status"
+                                aria-live="polite"
+                            >
+                                {ChatStore.currentStatus}
+                            </span>
                         )}
                         <SyncLoader size={8} color="var(--color-brand-primary)" loading={ChatStore.isStreaming} cssOverride={{ marginBlock: 12, marginLeft: "0.25rem" }} />
                     </div>

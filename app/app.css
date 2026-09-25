@@ -3,6 +3,12 @@
 @custom-variant customer (&:where(html[data-brand="customer"] *));
 @custom-variant customer-dark (&:where(html[data-brand="customer"][data-color-scheme="dark"] *));
 
+@property --stream-status-shimmer-position {
+  syntax: "<percentage>";
+  inherits: false;
+  initial-value: -10%;
+}
+
 @font-face {
   font-family: "Inter";
   src: url("/fonts/inter/Inter-Thin.ttf") format("truetype");
@@ -215,6 +221,31 @@ html[data-brand="customer"][data-color-scheme="dark"] {
   .chat-context-panel-enter {
     animation: chat-context-panel-enter 180ms cubic-bezier(0.16, 1, 0.3, 1);
   }
+
+  .stream-status-shimmer {
+    --stream-status-shimmer-position: -10%;
+    --stream-status-base-color: color-mix(
+      in srgb,
+      var(--color-content-muted) 80%,
+      #64748b 20%
+    );
+    color: transparent;
+    background-image: linear-gradient(
+      90deg,
+      var(--stream-status-base-color) 0%,
+      var(--stream-status-base-color) calc(var(--stream-status-shimmer-position) - 10%),
+      #7dd3fc calc(var(--stream-status-shimmer-position) - 4%),
+      #bae6fd var(--stream-status-shimmer-position),
+      #7dd3fc calc(var(--stream-status-shimmer-position) + 4%),
+      var(--stream-status-base-color) calc(var(--stream-status-shimmer-position) + 10%),
+      var(--stream-status-base-color) 100%
+    );
+    background-size: 100% 100%;
+    background-clip: text;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: stream-status-shimmer 2s linear infinite;
+  }
 }
 
 @keyframes chat-context-panel-enter {
@@ -229,12 +260,29 @@ html[data-brand="customer"][data-color-scheme="dark"] {
   }
 }
 
+@keyframes stream-status-shimmer {
+  from {
+    --stream-status-shimmer-position: -10%;
+  }
+
+  to {
+    --stream-status-shimmer-position: 110%;
+  }
+}
+
 .chat-input-shell:has(.chat-context-panel) {
   filter: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .chat-context-panel-enter {
+    animation: none;
+  }
+
+  .stream-status-shimmer {
+    color: var(--stream-status-base-color);
+    background: none;
+    -webkit-text-fill-color: currentColor;
     animation: none;
   }
 }
