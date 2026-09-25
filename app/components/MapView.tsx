@@ -76,6 +76,18 @@ function extendBounds(bounds: Bounds | undefined, longitude: number, latitude: n
     ];
 }
 
+function mergeBounds(current: Bounds | undefined, incoming: Bounds | undefined) {
+    if (!incoming) {
+        return current;
+    }
+
+    return extendBounds(
+        extendBounds(current, incoming[0][0], incoming[0][1]),
+        incoming[1][0],
+        incoming[1][1],
+    );
+}
+
 function collectBounds(coordinates: unknown, bounds?: Bounds): Bounds | undefined {
     if (!Array.isArray(coordinates) || !coordinates.length) {
         return bounds;
@@ -95,6 +107,24 @@ function collectBounds(coordinates: unknown, bounds?: Bounds): Bounds | undefine
     );
 }
 
+function getGeometryBounds(geometry: unknown, bounds?: Bounds): Bounds | undefined {
+    if (!geometry || typeof geometry !== "object") {
+        return bounds;
+    }
+    const value = geometry as Record<string, unknown>;
+
+    if (value.type === "GeometryCollection" && Array.isArray(value.geometries)) {
+        return value.geometries.reduce(
+            (currentBounds: Bounds | undefined, childGeometry: unknown) => (
+                getGeometryBounds(childGeometry, currentBounds)
+            ),
+            bounds,
+        );
+    }
+
+    return collectBounds(value.coordinates, bounds);
+}
+
 function getFeatureBounds(featureCollection: any): Bounds | undefined {
     if (!featureCollection || typeof featureCollection !== "object") {
         return undefined;
@@ -103,15 +133,15 @@ function getFeatureBounds(featureCollection: any): Bounds | undefined {
     if (featureCollection.type === "FeatureCollection" && Array.isArray(featureCollection.features)) {
         const features = featureCollection.features as any[];
         return features.reduce((bounds: Bounds | undefined, feature: any) => {
-            return collectBounds(feature?.geometry?.coordinates, bounds);
+            return getGeometryBounds(feature?.geometry, bounds);
         }, undefined);
     }
 
     if (featureCollection.type === "Feature") {
-        return collectBounds(featureCollection.geometry?.coordinates);
+        return getGeometryBounds(featureCollection.geometry);
     }
 
-    return collectBounds(featureCollection.coordinates);
+    return getGeometryBounds(featureCollection);
 }
 
 function getRandomColor() {
@@ -707,6 +737,7 @@ const SELECTED_FEATURE_LAYER_IDS = [
 interface MapViewProps {
     isExpanded: boolean;
     onToggleExpanded: () => void;
+    fitAllLayers?: boolean;
 }
 
 type SelectedFeatureState = {
@@ -716,7 +747,11 @@ type SelectedFeatureState = {
     feature: Feature<Geometry, Record<string, unknown>>;
 };
 
-const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
+const MapView = observer(({
+    isExpanded,
+    onToggleExpanded,
+    fitAllLayers = false,
+}: MapViewProps) => {
     const { mapLayers, isMapLayersAvailable } = MapStore;
     const [isMounted, setIsMounted] = useState(false);
     const [mapStyle, setMapStyle] = useState(LIGHT_MAP_STYLE);
@@ -733,11 +768,17 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
         () => geoJsonMessages.map((message) => ({ ...message, parsedLayer: parseFeatureCollection(message.layer) })),
         [geoJsonMessages]
     );
-
-    const latestLayer = mapLayers.at(-1);
-    const latestLayerBounds = useMemo(() => {
-        return latestLayer ? getFeatureBounds(latestLayer.layer) : undefined;
-    }, [latestLayer?.id]);
+    const displayedLayersBounds = useMemo(
+        () => fitAllLayers
+            ? mapLayers.reduce<Bounds | undefined>(
+                (bounds, layer) => layer.isVisible
+                    ? mergeBounds(bounds, getFeatureBounds(layer.layer))
+                    : bounds,
+                undefined,
+            )
+            : getFeatureBounds(mapLayers.at(-1)?.layer),
+        [fitAllLayers, mapLayers, mapLayers.length],
+    );
     const interactiveLayers = mapLayers.flatMap((layer, index) => {
         if (!layer.isVisible) {
             return [];
@@ -761,6 +802,21 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
     const mapLegendItems = activeLayer
         ? getMapLegendItems(activeLayer, activeLayerStyle)
         : [];
+    const initialViewState = displayedLayersBounds
+        ? {
+            longitude: fitAllLayers
+                ? (displayedLayersBounds[0][0] + displayedLayersBounds[1][0]) / 2
+                : displayedLayersBounds[0][0],
+            latitude: fitAllLayers
+                ? (displayedLayersBounds[0][1] + displayedLayersBounds[1][1]) / 2
+                : displayedLayersBounds[0][1],
+            zoom: 11,
+        }
+        : {
+            longitude: 37.6173,
+            latitude: 55.7558,
+            zoom: 11,
+        };
 
     const downloadLayer = (name: string, layer: unknown) => {
         const fileName = `${(name || "layer")
@@ -890,14 +946,16 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
     }, []);
 
     useEffect(() => {
-        if (!isMounted || !latestLayerBounds) {
+        if (!isMounted || !displayedLayersBounds) {
             return;
         }
 
-        setTimeout(() => {
-            zoomToBounds(latestLayerBounds);
-        }, 300)
-    }, [isMounted, latestLayerBounds]);
+        const timeout = window.setTimeout(() => {
+            zoomToBounds(displayedLayersBounds);
+        }, 300);
+
+        return () => window.clearTimeout(timeout);
+    }, [isMounted, displayedLayersBounds]);
 
     useEffect(() => {
         if (!isMounted || !activeLayer) return;
@@ -937,15 +995,7 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                 <Map
                     ref={mapRef}
                     interactiveLayerIds={interactiveLayerIds}
-                    initialViewState={latestLayerBounds ? {
-                        longitude: latestLayerBounds[0][0],
-                        latitude: latestLayerBounds[0][1],
-                        zoom: 11,
-                    } : {
-                        longitude: 37.6173,
-                        latitude: 55.7558,
-                        zoom: 11,
-                    }}
+                    initialViewState={initialViewState}
                     mapStyle={mapStyle}
                     language="ru"
                     projection="mercator"

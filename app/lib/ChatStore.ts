@@ -1267,6 +1267,12 @@ function extractValidationErrorText(data: unknown) {
 }
 
 class ChatDataStore {
+    messageDraft = "";
+
+    setMessageDraft(value: string) {
+        this.messageDraft = value;
+    }
+
     selectedContext: string | number = "nonproject";
     selectedScenario: number | null = null;
     selectedChatTool: ChatTool | null = null;
@@ -1530,6 +1536,7 @@ class ChatDataStore {
     }
 
     clearChat() {
+        this.messageDraft = "";
         this.abortStream();
         this.currentStreamRequestId += 1;
         this.chatMessages = [];

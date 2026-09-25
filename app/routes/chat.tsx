@@ -1,5 +1,7 @@
 import type { Route } from "./+types/chat";
 import { redirect } from "react-router";
+import { observer } from "mobx-react-lite";
+import { IoIosMail } from "react-icons/io";
 import AuthStore from "@lib/AuthStore";
 import DataStore from "@lib/DataStore";
 import mskLogo from "/png/msk_logo.png";
@@ -7,8 +9,9 @@ import msiLogo from "/png/msi_logo.png";
 import iduLogo from "/png/idu_logo.png";
 import aiInstitute from "/png/ai_institute.png";
 import ChatSection from "@components/ChatSection";
-import { IoIosMail } from "react-icons/io";
 import ChatStore from "@lib/ChatStore";
+import MasBfmStore from "@lib/MasBfmStore";
+import MasBfmChat from "@components/mas-bfm/MasBfmChat";
 import ChatStory from "@components/ChatStory";
 
 export function meta({}: Route.MetaArgs) {
@@ -38,7 +41,7 @@ export async function clientLoader({
     await ChatStore.getUserChats();
 }
 
-const ChatPage = () => {
+const ChatPage = observer(() => {
     return (
         <main className="flex h-dvh w-screen items-center justify-center overflow-hidden">
             <div className="grid h-dvh w-screen grid-cols-[1fr_2fr] lg:grid-cols-[1fr_3fr] 2xl:grid-cols-[1fr_4fr] overflow-hidden">
@@ -81,10 +84,10 @@ const ChatPage = () => {
                         </div>
                     </div>
                 </aside>
-                <ChatSection />
+                {MasBfmStore.isEnabled ? <MasBfmChat /> : <ChatSection />}
             </div>
         </main>
     )
-};
+});
 
 export default ChatPage;
