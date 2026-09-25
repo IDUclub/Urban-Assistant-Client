@@ -246,12 +246,15 @@ type DownloadGeoJsonLayerOptions = {
     accessToken?: string;
 };
 
-export async function downloadGeoJsonLayer(
+async function fetchAuthenticatedDownload(
     uri: string,
     options: DownloadGeoJsonLayerOptions = {},
 ) {
+    const resolvedUri = typeof window === "undefined"
+        ? uri
+        : new URL(uri, window.location.origin).toString();
     const defaultAccessToken = AuthStore.accessToken;
-    const layerOrigin = new URL(uri).origin;
+    const layerOrigin = new URL(resolvedUri).origin;
     const isAuthenticatedApi = AUTHENTICATED_LAYER_API_URLS.some((apiUrl) => {
         try {
             return new URL(apiUrl).origin === layerOrigin;
@@ -260,12 +263,19 @@ export async function downloadGeoJsonLayer(
         }
     });
     const accessToken = options.accessToken ?? (isAuthenticatedApi ? defaultAccessToken : undefined);
-    const response = await fetch(uri, {
+    return fetch(resolvedUri, {
         redirect: "follow",
         ...(accessToken
             ? { headers: { Authorization: `Bearer ${accessToken}` } }
             : {}),
     });
+}
+
+export async function downloadGeoJsonLayer(
+    uri: string,
+    options: DownloadGeoJsonLayerOptions = {},
+) {
+    const response = await fetchAuthenticatedDownload(uri, options);
 
     if (!response.ok) {
         throw new Error(`GeoJSON layer request failed with ${response.status}`);
@@ -280,6 +290,18 @@ export async function downloadGeoJsonLayer(
     }
 
     return layer;
+}
+
+export async function downloadFile(uri: string) {
+    const response = await fetchAuthenticatedDownload(uri, {
+        accessToken: AuthStore.accessToken,
+    });
+
+    if (!response.ok) {
+        throw new Error(`File download failed with ${response.status}`);
+    }
+
+    return response.blob();
 }
 
 function parseJsonValue(value: unknown): unknown {
@@ -348,6 +370,18 @@ function isGeoJsonLayerUri(value: unknown) {
 
     try {
         const parsedUrl = new URL(uri);
+        return parsedUrl.protocol === "http:" || parsedUrl.protocol === "https:";
+    } catch {
+        return false;
+    }
+}
+
+function isSafeDownloadUri(value: unknown) {
+    const uri = toString(value);
+    if (!uri) return false;
+
+    try {
+        const parsedUrl = new URL(uri, "https://download.invalid");
         return parsedUrl.protocol === "http:" || parsedUrl.protocol === "https:";
     } catch {
         return false;
@@ -597,6 +631,63 @@ function extractGeoJsonFileLayer(
     };
 }
 
+function extractDownloadFileMessage(payload: unknown): DownloadFileMessage | undefined {
+    const parsed = parseJsonValue(payload);
+    const record = asRecord(parsed);
+    if (!record) return undefined;
+
+    const content = asRecord(record.content) ?? record;
+    const downloadUrl = toString(
+        content.download_url ??
+        content.downloadUrl ??
+        record.download_url ??
+        record.downloadUrl,
+    );
+
+    if (!downloadUrl || !isSafeDownloadUri(downloadUrl)) return undefined;
+
+    return {
+        type: "file",
+        title: (
+            toString(content.title) ??
+            toString(content.filename) ??
+            toString(content.name) ??
+            toString(record.title) ??
+            toString(record.filename) ??
+            toString(record.name) ??
+            "Скачать файл"
+        ),
+        downloadUrl,
+    };
+}
+
+function extractFeatureCollectionLayer(
+    payload: unknown,
+    fallbackName = "Результат проверки",
+): UserChatLayer | undefined {
+    const parsed = parseJsonValue(payload);
+    const record = asRecord(parsed);
+    if (!record) return undefined;
+
+    const rawContent = record.content;
+    const content = asRecord(rawContent) ?? record;
+    const featureCollection =
+        content.feature_collection ??
+        content.featureCollection ??
+        record.feature_collection ??
+        record.featureCollection ??
+        (isGeoJsonLike(content) ? content : undefined) ??
+        (typeof rawContent === "string" ? rawContent : undefined);
+    const layer = parseFeatureCollection(featureCollection);
+
+    if (!layer) return undefined;
+
+    return {
+        name: getLayerName(record) ?? fallbackName,
+        layer,
+    };
+}
+
 function getStreamFileLayer(payload: unknown, eventName?: string): UserChatLayer | undefined {
     const chunkKind = getStreamChunkKind(payload, eventName);
     if (chunkKind !== "file") return undefined;
@@ -704,6 +795,12 @@ type GeoJSONMessage = {
     type: "geojson";
     name: string;
     layer: any;
+};
+
+type DownloadFileMessage = {
+    type: "file";
+    title: string;
+    downloadUrl: string;
 };
 
 type TableMessage = {
@@ -844,6 +941,7 @@ type AddGeoJsonLayerOptions = {
 type ChatMessagePayload =
     | TextMessage
     | GeoJSONMessage
+    | DownloadFileMessage
     | TableMessage
     | ErrorMessage
     | WarningMessage
@@ -1185,6 +1283,13 @@ function getVriStatusText(payload: unknown, eventName?: string) {
     if (!chunkKind || !VRI_STATUS_CHUNK_KINDS.has(chunkKind)) return undefined;
 
     return extractTextFromPayload(payload) ?? "Проверка ВРИ выполняется";
+}
+
+function getNormsStatusText(payload: unknown) {
+    const record = asRecord(parseJsonValue(payload));
+    if (toString(record?.type)?.toLowerCase() !== "status") return undefined;
+
+    return toString(asRecord(record?.content)?.text);
 }
 
 function getVriWarningText(payload: unknown, eventName?: string) {
@@ -1750,6 +1855,8 @@ class ChatDataStore {
 
                 if (!layer) return;
 
+                this.commitStreamedResponse();
+
                 this.chatMessages.push({
                     type: "response",
                     message: {
@@ -1764,11 +1871,17 @@ class ChatDataStore {
                 return;
             }
 
-            if (chunkKind === "feature_collection") {
-                const layer = {
-                    name: parsed.content?.name ?? "",
-                    layer: parsed.content?.feature_collection,
-                };
+            if (
+                chunkKind === "feature_collection" ||
+                chunkKind === "featurecollection" ||
+                eventName?.toLowerCase() === "feature_collection" ||
+                eventName?.toLowerCase() === "featurecollection"
+            ) {
+                const layer = extractFeatureCollectionLayer(parsed);
+
+                if (!layer) return;
+
+                this.commitStreamedResponse();
 
                 this.chatMessages.push({
                     type: "response",
@@ -1789,6 +1902,8 @@ class ChatDataStore {
                 if (!table) {
                     return;
                 }
+
+                this.commitStreamedResponse();
 
                 this.chatMessages.push({
                     type: "response",
@@ -2263,6 +2378,34 @@ class ChatDataStore {
         .finally(this.finalizeStreamingState);
     }
 
+    private handleNormsStreamEvent(streamEvent: SseStreamEvent) {
+        const trimmedData = streamEvent.data.trim();
+        if (!trimmedData || trimmedData === "[DONE]") return;
+
+        const payload = parseJsonValue(trimmedData);
+        const statusText = getNormsStatusText(payload);
+
+        if (statusText) {
+            this.currentStatus = statusText;
+            return;
+        }
+
+        if (getStreamChunkKind(payload, streamEvent.eventName) === "file") {
+            const file = extractDownloadFileMessage(payload);
+
+            if (file) {
+                this.commitStreamedResponse();
+                this.chatMessages.push({
+                    type: "response",
+                    message: file,
+                });
+                return;
+            }
+        }
+
+        this.appendStreamChunk(trimmedData, streamEvent.eventName);
+    }
+
     sendNormsMessage(message: string, scenarioId: number) {
         const requestId = this.currentStreamRequestId;
 
@@ -2292,7 +2435,7 @@ class ChatDataStore {
                 runInAction(() => {
                     if (this.currentStreamRequestId !== requestId) return;
 
-                    this.appendStreamChunk(streamEvent.data, streamEvent.eventName);
+                    this.handleNormsStreamEvent(streamEvent);
                 });
             });
 
@@ -5186,6 +5329,19 @@ class ChatDataStore {
                     messages.push({
                         type: "response",
                         message: table,
+                    });
+                    continue;
+                }
+
+                const downloadFile = userMessage.role === "assistant" && part.kind === "file"
+                    ? extractDownloadFileMessage(part.payload)
+                    : undefined;
+
+                if (downloadFile) {
+                    flushText();
+                    messages.push({
+                        type: "response",
+                        message: downloadFile,
                     });
                     continue;
                 }
