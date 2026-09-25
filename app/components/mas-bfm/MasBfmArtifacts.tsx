@@ -245,18 +245,18 @@ export default function MasBfmArtifacts({
     try {
       if (artifact.spilled && artifact.archive_ref_id) {
         if (!projectId) {
-          throw new Error("Проект Synapse не найден.");
+          throw new Error("Проект МАС БФМ не найден.");
         }
         const { url } = await SynapseClient.getArchiveDownloadUrl(
           projectId,
           artifact.archive_ref_id,
         );
         if (!url) {
-          throw new Error("Synapse не вернул ссылку на файл.");
+          throw new Error("МАС БФМ не вернул ссылку на файл.");
         }
         const parsedUrl = new URL(url);
         if (parsedUrl.protocol !== "https:" && parsedUrl.protocol !== "http:") {
-          throw new Error("Synapse вернул некорректную ссылку на файл.");
+          throw new Error("МАС БФМ вернул некорректную ссылку на файл.");
         }
         const anchor = document.createElement("a");
         anchor.href = parsedUrl.toString();
@@ -276,7 +276,7 @@ export default function MasBfmArtifacts({
   };
 
   return (
-    <section aria-label="Артефакты Synapse" className="mt-2">
+    <section aria-label="Артефакты МАС БФМ" className="mt-2">
       <h2 className="mb-2 px-1 text-xs font-semibold uppercase tracking-wider text-content-muted">
         Артефакты
       </h2>
