@@ -18,6 +18,11 @@ import {
 } from "@lib/genbuilder/types";
 import { normalizeFunctionalZoneSources } from "@lib/genbuilder/utils";
 import {
+    BuildPlannerHttpError,
+    streamBuildPlannerScenarioChat,
+    type BuildPlannerStreamEvent,
+} from "@lib/buildplanner/client";
+import {
     GenPlannerHttpError,
     streamGenPlannerCustomChat,
     streamGenPlannerScenarioChat,
@@ -38,10 +43,12 @@ import MapStore from "@lib/MapStore";
 const URBAN_API_URL = import.meta.env.VITE_URBAN_API;
 const GENBUILDER_API_URL = import.meta.env.VITE_GENBUILDER_API;
 const GENPLANNER_API_URL = import.meta.env.VITE_GENPLANNER_API;
+const BUILDPLANNER_API_URL = import.meta.env.VITE_BUILDPLANNER_API;
 const AUTHENTICATED_LAYER_API_URLS = [
     URBAN_API_URL,
     GENBUILDER_API_URL,
     GENPLANNER_API_URL,
+    BUILDPLANNER_API_URL,
     import.meta.env.VITE_LLM_API,
     import.meta.env.VITE_LLM_CHAT_HISTORY_API,
     import.meta.env.VITE_LLM_RESTRICTIONS_API,
@@ -336,7 +343,7 @@ function toString(value: unknown) {
     return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function getGenPlannerErrorMessage(value: unknown, fallback: string) {
+function getPlannerErrorMessage(value: unknown, fallback: string) {
     const parsed = parseJsonValue(value);
     const record = asRecord(parsed);
     const detail = record?.detail;
@@ -531,12 +538,20 @@ function extractTextFromPayload(payload: unknown) {
 
     const record = asRecord(parsed);
     if (!record) return undefined;
+    const content = asRecord(record.content);
+    const data = asRecord(record.data);
 
     return (
         toString(record.text) ??
         toString(record.message) ??
         toString(record.response) ??
-        toString(asRecord(record.content)?.text) ??
+        toString(record.content) ??
+        toString(content?.text) ??
+        toString(content?.message) ??
+        toString(content?.content) ??
+        toString(data?.text) ??
+        toString(data?.message) ??
+        toString(data?.content) ??
         toString(asRecord(record.delta)?.text) ??
         toString(asRecord(record.result)?.text)
     );
@@ -595,7 +610,12 @@ function extractTableMessage(payload: unknown): TableMessage | undefined {
 function isGeoJsonFilePayload(content: Record<string, any>) {
     const mimeType = toString(content.mime_type ?? content.mimeType)?.toLowerCase();
     const filename = toString(content.filename)?.toLowerCase();
-    const url = toString(content.url)?.toLowerCase();
+    const url = toString(
+        content.url ??
+        content.download_url ??
+        content.downloadUrl ??
+        content.uri,
+    )?.toLowerCase();
 
     return (
         !!mimeType?.includes("geo+json") ||
@@ -616,7 +636,12 @@ function extractGeoJsonFileLayer(
     const content = asRecord(record.content) ?? record;
     if (!isGeoJsonFilePayload(content)) return undefined;
 
-    const url = toString(content.url);
+    const url = toString(
+        content.url ??
+        content.download_url ??
+        content.downloadUrl ??
+        content.uri,
+    );
 
     if (!isGeoJsonLayerUri(url)) return undefined;
 
@@ -629,6 +654,59 @@ function extractGeoJsonFileLayer(
         ),
         layer: url,
     };
+}
+
+function extractLayersFromUnknown(
+    value: unknown,
+    fallbackName = HISTORY_LAYER_FALLBACK_NAME,
+    depth = 0,
+): UserChatLayer[] {
+    if (depth > 5) return [];
+
+    const parsed = parseJsonValue(value);
+    const directLayer = normalizeHistoryLayer(parsed);
+    if (directLayer) {
+        return [{
+            name: getLayerName(parsed) ?? fallbackName,
+            layer: directLayer,
+        }];
+    }
+
+    if (Array.isArray(parsed)) {
+        return parsed.flatMap((item) => (
+            extractLayersFromUnknown(item, fallbackName, depth + 1)
+        ));
+    }
+
+    const record = asRecord(parsed);
+    if (!record) return [];
+
+    const nextFallbackName = getLayerName(record) ?? fallbackName;
+    const fileLayer = extractGeoJsonFileLayer(record, nextFallbackName);
+    if (fileLayer) return [fileLayer];
+
+    const candidateKeys = [
+        "layers",
+        "geojson_layers",
+        "geojsonLayers",
+        "files",
+        "artifacts",
+        "feature_collection",
+        "featureCollection",
+        "geojson",
+        "layer",
+        "result",
+        "data",
+        "content",
+        "output",
+        "structuredContent",
+    ];
+
+    return candidateKeys.flatMap((key) => (
+        key in record
+            ? extractLayersFromUnknown(record[key], nextFallbackName, depth + 1)
+            : []
+    ));
 }
 
 function extractDownloadFileMessage(payload: unknown): DownloadFileMessage | undefined {
@@ -932,6 +1010,11 @@ type GenPlannerStreamState = {
     resultId?: string;
 };
 
+type BuildPlannerStreamState = {
+    hasReceivedDone: boolean;
+    hasStreamError: boolean;
+};
+
 type AddGeoJsonLayerOptions = {
     requestId?: number;
     showError?: boolean;
@@ -973,6 +1056,7 @@ type ChatTool =
     | "Зоны ограничений"
     | "Генерация застройки"
     | "Генерация функционального зонирования"
+    | "План развития территории"
     | "Проверка нормативных ограничений"
     | "Справка по проекту";
 
@@ -1145,20 +1229,31 @@ function getStreamChunkKind(payload: unknown, eventName?: string) {
     const content = asRecord(record?.content);
     const data = asRecord(record?.data);
     const candidates = [
-        record?.type,
         record?.chunk_type,
         record?.chunkType,
+        content?.chunk_type,
+        content?.chunkType,
+        data?.chunk_type,
+        data?.chunkType,
+        record?.type,
         content?.type,
         data?.type,
         eventName,
     ];
+    let genericChunkKind: string | undefined;
 
     for (const candidate of candidates) {
         const chunkKind = toString(candidate)?.toLowerCase();
-        if (chunkKind && chunkKind !== "message") return chunkKind;
+        if (!chunkKind || chunkKind === "message") continue;
+        if (chunkKind === "chunk") {
+            genericChunkKind = chunkKind;
+            continue;
+        }
+
+        return chunkKind;
     }
 
-    return undefined;
+    return genericChunkKind;
 }
 
 function getVriErrorText(payload: unknown) {
@@ -1334,6 +1429,8 @@ function getVriWarningText(payload: unknown, eventName?: string) {
 const NORMS_ERROR_TEXT = "Не удалось выполнить проверку нормативных ограничений.";
 const NORMS_PROJECT_REQUIRED_TEXT =
     "Мод «Проверка нормативных ограничений» доступен только в рамках проекта. Выберите проект и сценарий.";
+const BUILDPLANNER_PROJECT_REQUIRED_TEXT =
+    "Мод «План развития территории» доступен только в рамках проекта. Выберите проект и сценарий.";
 
 async function readErrorResponseData(data: unknown) {
     const stream = data as ReadableStream<Uint8Array> | undefined;
@@ -4521,7 +4618,7 @@ class ChatDataStore {
                 return;
             }
             case "error": {
-                const errorText = getGenPlannerErrorMessage(
+                const errorText = getPlannerErrorMessage(
                     streamEvent.detail,
                     "Не удалось сгенерировать функциональное зонирование.",
                 );
@@ -4704,7 +4801,7 @@ class ChatDataStore {
 
             console.error("Error streaming custom GenPlanner generation:", error);
             const errorText = error instanceof GenPlannerHttpError
-                ? getGenPlannerErrorMessage(
+                ? getPlannerErrorMessage(
                     error.data,
                     `Не удалось подключиться к GenPlanner (ошибка ${error.status}).`,
                 )
@@ -4848,7 +4945,7 @@ class ChatDataStore {
             const errorText = error instanceof GenPlannerHttpError
                 ? error.status === 503
                     ? "Чат GenPlanner сейчас недоступен. Попробуйте ещё раз позже."
-                    : getGenPlannerErrorMessage(
+                    : getPlannerErrorMessage(
                         error.data,
                         `Не удалось подключиться к GenPlanner (ошибка ${error.status}).`,
                     )
@@ -4869,6 +4966,291 @@ class ChatDataStore {
             this.currentStatus = undefined;
             this.abortController = undefined;
             this.getUserChats();
+        }));
+    }
+
+    private handleBuildPlannerStreamEvent(
+        streamEvent: BuildPlannerStreamEvent,
+        streamState: BuildPlannerStreamState,
+    ) {
+        switch (streamEvent.type) {
+            case "chat_created":
+                if (!streamEvent.chatId) return;
+
+                this.activeChatId = streamEvent.chatId;
+                this.upsertCreatedUserChat({
+                    storage_event_type: "chat_created",
+                    chat_id: streamEvent.chatId,
+                    chat_title: streamEvent.title,
+                });
+                return;
+            case "token":
+                this.streamedResponse += streamEvent.content;
+                this.currentStatus = "BuildPlanner формирует ответ";
+                return;
+            case "status":
+            case "progress":
+                this.currentStatus = extractTextFromPayload(streamEvent.payload) ??
+                    "BuildPlanner формирует ответ";
+                return;
+            case "text": {
+                const text = extractTextFromPayload(streamEvent.payload);
+                if (text) this.streamedResponse += text;
+                return;
+            }
+            case "file": {
+                const layers = extractLayersFromUnknown(
+                    streamEvent.payload,
+                    "Слой плана развития территории",
+                );
+
+                if (layers.length) {
+                    this.commitStreamedResponse();
+                    layers.forEach((layer) => {
+                        this.appendGeoJsonLayer(layer, {
+                            accessToken: AuthStore.accessToken,
+                        });
+                    });
+                    return;
+                }
+
+                const file = extractDownloadFileMessage(streamEvent.payload);
+                if (file) {
+                    this.commitStreamedResponse();
+                    this.chatMessages.push({
+                        type: "response",
+                        message: file,
+                    });
+                }
+                return;
+            }
+            case "result": {
+                const layers = extractLayersFromUnknown(
+                    streamEvent.payload,
+                    "Слой плана развития территории",
+                );
+
+                if (layers.length) {
+                    this.commitStreamedResponse();
+                    layers.forEach((layer) => this.appendGeoJsonLayer(layer));
+                    return;
+                }
+
+                const text = extractTextFromPayload(streamEvent.payload);
+                if (text) this.streamedResponse += text;
+                return;
+            }
+            case "warning":
+                this.chatMessages.push({
+                    type: "response",
+                    message: {
+                        type: "warning",
+                        text: streamEvent.message ??
+                            "BuildPlanner вернул предупреждение при формировании ответа.",
+                    },
+                });
+                return;
+            case "error": {
+                const errorText = getPlannerErrorMessage(
+                    streamEvent.detail,
+                    "Не удалось сформировать план развития территории.",
+                );
+
+                streamState.hasStreamError = true;
+                this.commitStreamedResponse();
+                this.chatMessages.push({
+                    type: "response",
+                    message: { type: "error", text: errorText },
+                });
+                return;
+            }
+            case "done":
+                streamState.hasReceivedDone = true;
+                if (streamEvent.chatId) {
+                    this.activeChatId = streamEvent.chatId;
+                }
+                return;
+            case "unknown": {
+                const eventType = getStreamChunkKind(
+                    streamEvent.data,
+                    streamEvent.eventName,
+                );
+                const text = extractTextFromPayload(streamEvent.data);
+
+                if (eventType === "status" || eventType === "progress") {
+                    this.currentStatus = text ?? "BuildPlanner формирует ответ";
+                    return;
+                }
+
+                if (eventType === "file") {
+                    const layers = extractLayersFromUnknown(
+                        streamEvent.data,
+                        "Слой плана развития территории",
+                    );
+
+                    if (layers.length) {
+                        this.commitStreamedResponse();
+                        layers.forEach((layer) => {
+                            this.appendGeoJsonLayer(layer, {
+                                accessToken: AuthStore.accessToken,
+                            });
+                        });
+                        return;
+                    }
+
+                    const file = extractDownloadFileMessage(streamEvent.data);
+                    if (file) {
+                        this.commitStreamedResponse();
+                        this.chatMessages.push({
+                            type: "response",
+                            message: file,
+                        });
+                    }
+                    return;
+                }
+
+                if (
+                    eventType === "feature_collection" ||
+                    eventType === "featurecollection"
+                ) {
+                    const layers = extractLayersFromUnknown(
+                        streamEvent.data,
+                        "Слой плана развития территории",
+                    );
+                    if (layers.length) {
+                        this.commitStreamedResponse();
+                        layers.forEach((layer) => this.appendGeoJsonLayer(layer));
+                    }
+                    return;
+                }
+
+                if ((eventType === "chunk" || eventType === "text") && text) {
+                    this.streamedResponse += text;
+                }
+                return;
+            }
+        }
+    }
+
+    private sendBuildPlannerScenarioChatRequest(message: string) {
+        const userQuery = message.trim();
+        const scenarioId = this.selectedScenario;
+        const projectId = typeof this.selectedContext === "number"
+            ? this.selectedContext
+            : undefined;
+        const accessToken = AuthStore.accessToken;
+
+        if (!userQuery) return;
+
+        if (projectId === undefined || scenarioId === null) {
+            this.chatMessages.push({
+                type: "response",
+                message: {
+                    type: "error",
+                    text: BUILDPLANNER_PROJECT_REQUIRED_TEXT,
+                },
+            });
+            return;
+        }
+
+        if (!BUILDPLANNER_API_URL || !accessToken) {
+            this.chatMessages.push({
+                type: "response",
+                message: {
+                    type: "error",
+                    text: !BUILDPLANNER_API_URL
+                        ? "Не задан адрес сервиса BuildPlanner (VITE_BUILDPLANNER_API)."
+                        : "Не удалось получить токен пользователя. Авторизуйтесь заново.",
+                },
+            });
+            return;
+        }
+
+        this.abortController?.abort();
+        this.abortController = new AbortController();
+        this.currentStreamRequestId += 1;
+        const requestId = this.currentStreamRequestId;
+        this.streamedResponse = "";
+        this.isStreaming = true;
+        this.currentStatus = "BuildPlanner обрабатывает запрос";
+        this.chatMessages.push({
+            type: "request",
+            message: { type: "text", text: userQuery },
+        });
+
+        const streamState: BuildPlannerStreamState = {
+            hasReceivedDone: false,
+            hasStreamError: false,
+        };
+
+        return streamBuildPlannerScenarioChat({
+            baseUrl: BUILDPLANNER_API_URL,
+            accessToken,
+            request: {
+                scenarioId,
+                userQuery,
+                chatId: this.getActiveBackendChatId(),
+            },
+            signal: this.abortController.signal,
+            onOpen: () => {
+                runInAction(() => {
+                    if (this.currentStreamRequestId !== requestId) return;
+
+                    this.currentStatus = "BuildPlanner формирует ответ";
+                });
+            },
+            onEvent: (streamEvent) => {
+                runInAction(() => {
+                    if (this.currentStreamRequestId !== requestId) return;
+
+                    this.handleBuildPlannerStreamEvent(streamEvent, streamState);
+                });
+            },
+        })
+        .then(action(() => {
+            if (this.currentStreamRequestId !== requestId) return;
+
+            this.commitStreamedResponse();
+            if (!streamState.hasStreamError && !streamState.hasReceivedDone) {
+                streamState.hasStreamError = true;
+                this.chatMessages.push({
+                    type: "response",
+                    message: {
+                        type: "error",
+                        text: "Поток BuildPlanner завершился преждевременно. Попробуйте отправить запрос ещё раз.",
+                    },
+                });
+            }
+        }))
+        .catch(action((error) => {
+            if (this.currentStreamRequestId !== requestId) return;
+
+            if (error?.name === "AbortError" || error?.name === "CanceledError") {
+                this.commitStreamedResponse();
+                return;
+            }
+
+            console.error("Error streaming BuildPlanner response:", error);
+            const errorText = error instanceof BuildPlannerHttpError
+                ? getPlannerErrorMessage(
+                    error.data,
+                    `Не удалось подключиться к BuildPlanner (ошибка ${error.status}).`,
+                )
+                : "Не удалось подключиться к сервису BuildPlanner.";
+
+            this.commitStreamedResponse();
+            this.chatMessages.push({
+                type: "response",
+                message: { type: "error", text: errorText },
+            });
+        }))
+        .finally(action(() => {
+            if (this.currentStreamRequestId !== requestId) return;
+
+            this.isStreaming = false;
+            this.currentStatus = undefined;
+            this.abortController = undefined;
+            void this.getUserChats();
         }));
     }
 
@@ -4961,6 +5343,20 @@ class ChatDataStore {
     }
 
     sendChatMessage = async (message: string) => {
+        if (
+            this.selectedChatTool === "План развития территории"
+            && !(typeof this.selectedContext === "number" && this.selectedScenario)
+        ) {
+            this.setSelectedChatTool(null);
+            this.chatMessages.push({
+                type: "response",
+                message: {
+                    type: "info",
+                    text: BUILDPLANNER_PROJECT_REQUIRED_TEXT,
+                },
+            });
+            return;
+        }
         if (this.selectedChatTool === "Проверка нормативных ограничений"
             && !(typeof this.selectedContext === "number" && this.selectedScenario)
         ) {
@@ -4986,6 +5382,10 @@ class ChatDataStore {
             }
 
             return this.sendGenPlannerScenarioChatRequest(message);
+        }
+
+        if (this.selectedChatTool === "План развития территории") {
+            return this.sendBuildPlannerScenarioChatRequest(message);
         }
 
         if (this.selectedChatTool === "Генерация застройки") {
