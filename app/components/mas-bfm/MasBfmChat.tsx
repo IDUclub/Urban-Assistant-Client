@@ -246,6 +246,10 @@ const MasBfmChat = observer(() => {
 
   useEffect(() => {
     MasBfmStore.connect();
+    if (!hasConversation) {
+      MapStore.clearMapLayers();
+    }
+
     return () => {
       MasBfmStore.disconnect();
       MapStore.restoreMapLayers(previousMapLayersRef.current);
@@ -369,7 +373,7 @@ const MasBfmChat = observer(() => {
                 {MasBfmStore.isSending && (
                   <div className="flex items-center gap-2 px-3 py-2 text-sm text-content-muted">
                     <span className="h-2 w-2 animate-pulse rounded-full bg-brand-primary" />
-                    Отправляем запрос в Synapse…
+                    Отправляем запрос в МАС БФМ…
                   </div>
                 )}
                 {MasBfmStore.error && (

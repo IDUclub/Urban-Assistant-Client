@@ -72,7 +72,7 @@ export class SynapseHttpError extends Error {
   data: unknown;
 
   constructor(status: number, data: unknown) {
-    super(`Synapse request failed with status ${status}`);
+    super(`МАС БФМ вернул ошибку ${status}`);
     this.name = "SynapseHttpError";
     this.status = status;
     this.data = data;
@@ -198,7 +198,7 @@ class SynapseClient {
     const workflowId = selected?.id ?? selected?._id;
     if (!workflowId) {
       throw new Error(
-        `Synapse workflow "${configuredWorkflow}" was not found.`,
+        `Конфигурация МАС БФМ "${configuredWorkflow}" не найдена.`,
       );
     }
 
@@ -209,7 +209,7 @@ class SynapseClient {
   async createProject(userPrompt: string) {
     const prompt = userPrompt.trim();
     if (!prompt) {
-      throw new Error("Synapse prompt must not be empty.");
+      throw new Error("Запрос МАС БФМ не может быть пустым.");
     }
 
     const [runConfigId, workflowId] = await Promise.all([
@@ -231,7 +231,7 @@ class SynapseClient {
   async sendMessage(projectId: string, content: string) {
     const message = content.trim();
     if (!message) {
-      throw new Error("Synapse message must not be empty.");
+      throw new Error("Сообщение МАС БФМ не может быть пустым.");
     }
 
     return this.request<SynapseMessage>(`/projects/${projectId}/messages`, {

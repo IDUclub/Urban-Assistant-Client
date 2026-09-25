@@ -30,9 +30,9 @@ function errorText(error: unknown) {
         ? (error.data as { detail?: unknown }).detail
         : error.data;
     if (typeof detail === "string" && detail.trim()) {
-      return detail;
+      return detail.replaceAll("Synapse", "МАС БФМ");
     }
-    return `Synapse вернул ошибку ${error.status}.`;
+    return `МАС БФМ вернул ошибку ${error.status}.`;
   }
   return error instanceof Error
     ? error.message
