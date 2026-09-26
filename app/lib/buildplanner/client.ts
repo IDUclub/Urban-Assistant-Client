@@ -151,15 +151,9 @@ function normalizeStreamEvent(rawEvent: RawSseEvent): BuildPlannerStreamEvent {
     }
 }
 
-function getBuildPlannerBaseUrl(baseUrl: string) {
-    const normalizedBaseUrl = baseUrl.replace(/\/+$/, "");
-    return normalizedBaseUrl.endsWith("/buildplanner")
-        ? normalizedBaseUrl
-        : `${normalizedBaseUrl}/buildplanner`;
-}
-
 function getScenarioChatStreamUrl(baseUrl: string, scenarioId: number) {
-    return `${getBuildPlannerBaseUrl(baseUrl)}/buildplanner/scenarios/${scenarioId}/chat/stream`;
+    // The production base includes a gateway prefix; the API route itself starts with /buildplanner.
+    return `${baseUrl.replace(/\/+$/, "")}/buildplanner/scenarios/${scenarioId}/chat/stream`;
 }
 
 async function parseErrorResponse(response: Response) {
