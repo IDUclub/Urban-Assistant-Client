@@ -5,6 +5,11 @@ import type {
     FunctionalZoneGeometry,
     ScenarioImportedGeometry,
 } from "@lib/ScenarioGeoJson";
+import {
+    getCreatedPhysicalObjectIds,
+    type InfrastructureImportItem,
+    type InfrastructureTypeOption,
+} from "@lib/ScenarioInfrastructure";
 import AuthStore from "@lib/AuthStore";
 
 export type ProjectCreationTerritoryOption = {
@@ -38,6 +43,7 @@ export type CreateScenarioPayload = {
 };
 
 const SCENARIO_PHYSICAL_OBJECTS_BATCH_SIZE = 100;
+const SCENARIO_SERVICE_NOT_FOUND_RETRY_DELAYS_MS = [250, 500, 1000, 2000, 4000];
 const IMPORTED_ROAD_PHYSICAL_OBJECT_TYPE_ID = 52;
 const FUNCTIONAL_ZONE_REQUEST_FIELDS = new Set([
     "functional_zone_type_id",
@@ -142,6 +148,47 @@ function getAdditionalProperties(properties: Record<string, unknown>) {
     return Object.fromEntries(
         Object.entries(properties).filter(([key]) => !FUNCTIONAL_ZONE_REQUEST_FIELDS.has(key)),
     );
+}
+
+function getTypeOptions(data: unknown, idField: string): InfrastructureTypeOption[] {
+    const records = Array.isArray(data)
+        ? data
+        : getRecord(data)?.results;
+    if (!Array.isArray(records)) return [];
+
+    return records.flatMap((value): InfrastructureTypeOption[] => {
+        const record = getRecord(value);
+        const id = normalizeNumericId(record?.[idField] ?? record?.id);
+        const name = record?.name ?? record?.physical_object_type_name ?? record?.service_type_name;
+        const description = record?.description;
+        if (id === undefined) return [];
+        const labels = [name, description].filter((label): label is string => (
+            typeof label === "string" && !!label.trim()
+        ));
+        return [{ value: id, label: labels[0] ?? String(id), aliases: labels.slice(1) }];
+    });
+}
+
+async function postScenarioServiceWithRetry(
+    url: string,
+    payload: Record<string, unknown>,
+    headers: Record<string, string>,
+) {
+    for (let attempt = 0; ; attempt++) {
+        try {
+            await axios.post(url, payload, { headers });
+            return;
+        } catch (error) {
+            if (!axios.isAxiosError(error)
+                || error.response?.status !== 404
+                || attempt >= SCENARIO_SERVICE_NOT_FOUND_RETRY_DELAYS_MS.length) {
+                throw error;
+            }
+            await new Promise<void>((resolve) => {
+                setTimeout(resolve, SCENARIO_SERVICE_NOT_FOUND_RETRY_DELAYS_MS[attempt]);
+            });
+        }
+    }
 }
 
 class AppDataStore {
@@ -413,6 +460,22 @@ class AppDataStore {
         return functionalZoneTypes;
     }
 
+    async getPhysicalObjectTypes(): Promise<InfrastructureTypeOption[]> {
+        const { data } = await axios.get(
+            `${import.meta.env.VITE_URBAN_API}/physical_object_types`,
+            { headers: { Authorization: `Bearer ${AuthStore.accessToken}` } },
+        );
+        return getTypeOptions(data, "physical_object_type_id");
+    }
+
+    async getServiceTypes(): Promise<InfrastructureTypeOption[]> {
+        const { data } = await axios.get(
+            `${import.meta.env.VITE_URBAN_API}/service_types`,
+            { headers: { Authorization: `Bearer ${AuthStore.accessToken}` } },
+        );
+        return getTypeOptions(data, "service_type_id");
+    }
+
     async createProjectScenario(
         baseScenarioId: number,
         payload: CreateScenarioPayload,
@@ -511,6 +574,78 @@ class AppDataStore {
         }
 
         return failedFeatures;
+    }
+
+    async addScenarioInfrastructureObjects(
+        scenarioId: number,
+        territoryId: number,
+        items: InfrastructureImportItem[],
+        onItemSaved: (index: number, item: InfrastructureImportItem) => void,
+    ) {
+        const headers = {
+            Authorization: `Bearer ${AuthStore.accessToken}`,
+            "Content-Type": "application/json",
+        };
+
+        for (const [index, original] of items.entries()) {
+            const item = { ...original };
+            if (item.physicalObjectTypeId === undefined) {
+                throw new Error(`Не выбран тип физического объекта ${index + 1}.`);
+            }
+
+            if (!item.physicalObjectCreated && item.physicalObjectId === undefined) {
+                const { data } = await axios.post(
+                    `${import.meta.env.VITE_URBAN_API}/scenarios/${scenarioId}/physical_objects`,
+                    {
+                        geometry: item.feature.geometry,
+                        territory_id: territoryId,
+                        physical_object_type_id: item.physicalObjectTypeId,
+                        properties: item.feature.properties,
+                    },
+                    { headers },
+                );
+                const ids = getCreatedPhysicalObjectIds(data);
+                item.physicalObjectId = ids.physicalObjectId;
+                item.objectGeometryId = ids.objectGeometryId;
+                item.physicalObjectCreated = true;
+                onItemSaved(index, item);
+            }
+
+            if (!item.services.length) continue;
+
+            if (item.physicalObjectId === undefined || item.objectGeometryId === undefined) {
+                throw new Error(`API не вернул идентификаторы физического объекта ${index + 1} и его геометрии.`);
+            }
+
+            for (let serviceIndex = item.savedServiceCount ?? 0; serviceIndex < item.services.length; serviceIndex++) {
+                const service = item.services[serviceIndex];
+                try {
+                    await postScenarioServiceWithRetry(
+                        `${import.meta.env.VITE_URBAN_API}/scenarios/${scenarioId}/services`,
+                        {
+                            physical_object_id: item.physicalObjectId,
+                            object_geometry_id: item.objectGeometryId,
+                            is_scenario_physical_object: true,
+                            is_scenario_geometry: true,
+                            service_type_id: service.serviceTypeId,
+                            capacity: service.capacity,
+                        },
+                        headers,
+                    );
+                } catch (error) {
+                    if (axios.isAxiosError(error) && error.response?.status === 404) {
+                        throw new Error(
+                            `Сервис объекта ${index + 1}: API вернул 404 после повторных попыток `
+                            + `(physical_object_id=${item.physicalObjectId}, object_geometry_id=${item.objectGeometryId}).`,
+                            { cause: error },
+                        );
+                    }
+                    throw error;
+                }
+                item.savedServiceCount = serviceIndex + 1;
+                onItemSaved(index, item);
+            }
+        }
     }
 
     constructor() {

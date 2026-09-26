@@ -1,7 +1,7 @@
 import type { Geometry, MultiPolygon, Polygon } from "geojson";
 
 export type FunctionalZoneGeometry = Polygon | MultiPolygon;
-export type ScenarioGeoJsonKind = "functionalZones" | "roads";
+export type ScenarioGeoJsonKind = "functionalZones" | "roads" | "infrastructure";
 export type ScenarioImportedGeometry = {
     geometry: Geometry;
     properties: Record<string, unknown>;

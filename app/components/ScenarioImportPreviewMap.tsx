@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import Map, { Layer, Source } from "react-map-gl/mapbox";
 import type { Feature, FeatureCollection, Geometry } from "geojson";
 import type { ScenarioImportedGeometry } from "@lib/ScenarioGeoJson";
+import type { InfrastructureImportItem, InfrastructureTypeOption } from "@lib/ScenarioInfrastructure";
 import {
     FUNCTIONAL_ZONE_FALLBACK_COLOR,
     getFunctionalZoneColor,
@@ -14,6 +15,8 @@ type ScenarioImportPreviewMapProps = {
     functionalZoneTypeIds: Array<number | undefined>;
     roads: ScenarioImportedGeometry[];
     roadTypeIds: Array<number | undefined>;
+    infrastructure: InfrastructureImportItem[];
+    physicalObjectTypes: InfrastructureTypeOption[];
 };
 
 type Coordinates = [number, number];
@@ -107,15 +110,25 @@ function getLegendBackground(colors: string[]) {
     return `linear-gradient(to right, ${uniqueColors.join(", ")})`;
 }
 
+function getInfrastructureColor(typeId: number | undefined) {
+    if (typeId === undefined) return FUNCTIONAL_ZONE_FALLBACK_COLOR;
+    // Stable pseudo-random color: all objects of one physical type share a color.
+    const hue = ((Math.imul(typeId, 137) % 360) + 360) % 360;
+    return `hsl(${hue}, 68%, 43%)`;
+}
+
 function ScenarioImportPreviewMap({
     functionalZones,
     functionalZoneTypeIds,
     roads,
     roadTypeIds,
+    infrastructure,
+    physicalObjectTypes,
 }: ScenarioImportPreviewMapProps) {
     const allGeometries = useMemo<Geometry[]>(
-        () => [...functionalZones, ...roads].map(({ geometry }) => geometry),
-        [functionalZones, roads],
+        () => [...functionalZones, ...roads, ...infrastructure.map(({ feature }) => feature)]
+            .map(({ geometry }) => geometry),
+        [functionalZones, roads, infrastructure],
     );
     const bounds = useMemo(() => getGeometryBounds(allGeometries), [allGeometries]);
     const centre: Coordinates = bounds
@@ -146,6 +159,21 @@ function ScenarioImportPreviewMap({
         () => toFeatureCollection(roads, roadColors),
         [roadColors, roads],
     );
+    const infrastructureColors = useMemo(
+        () => infrastructure.map((item) => getInfrastructureColor(item.physicalObjectTypeId)),
+        [infrastructure],
+    );
+    const infrastructureFeatures = useMemo(
+        () => toFeatureCollection(infrastructure.map(({ feature }) => feature), infrastructureColors),
+        [infrastructure, infrastructureColors],
+    );
+    const infrastructureLegend = useMemo(() => Array.from(new Set(
+        infrastructure.map((item) => item.physicalObjectTypeId),
+    )).map((typeId) => ({
+        typeId,
+        color: getInfrastructureColor(typeId),
+        label: physicalObjectTypes.find((type) => type.value === typeId)?.label ?? "Тип не выбран",
+    })), [infrastructure, physicalObjectTypes]);
 
     return (
         <div className="overflow-hidden rounded-2xl border border-slate-200 customer-dark:border-ui-border">
@@ -177,6 +205,30 @@ function ScenarioImportPreviewMap({
                         paint={{
                             "line-color": ["get", PREVIEW_COLOR_PROPERTY],
                             "line-width": 2,
+                        }}
+                    />
+                </Source>
+
+                <Source id="scenario-import-infrastructure" type="geojson" data={infrastructureFeatures}>
+                    <Layer
+                        id="scenario-import-infrastructure-fill"
+                        type="fill"
+                        paint={{ "fill-color": ["get", PREVIEW_COLOR_PROPERTY], "fill-opacity": 0.55 }}
+                    />
+                    <Layer
+                        id="scenario-import-infrastructure-line"
+                        type="line"
+                        paint={{ "line-color": ["get", PREVIEW_COLOR_PROPERTY], "line-width": 3 }}
+                    />
+                    <Layer
+                        id="scenario-import-infrastructure-points"
+                        type="circle"
+                        filter={["==", "$type", "Point"]}
+                        paint={{
+                            "circle-color": ["get", PREVIEW_COLOR_PROPERTY],
+                            "circle-radius": 6,
+                            "circle-stroke-color": "#FFFFFF",
+                            "circle-stroke-width": 1.5,
                         }}
                     />
                 </Source>
@@ -218,6 +270,15 @@ function ScenarioImportPreviewMap({
                     />
                     Дорожная сеть: {roads.length}
                 </span>
+                {infrastructure.length > 0 && (
+                    <span className="font-medium">Объекты застройки: {infrastructure.length}</span>
+                )}
+                {infrastructureLegend.map(({ typeId, color, label }) => (
+                    <span key={typeId ?? "unmapped"} className="inline-flex items-center gap-1.5">
+                        <i className="h-2.5 w-2.5 rounded-sm" style={{ background: color }} />
+                        {label}
+                    </span>
+                ))}
             </div>
         </div>
     );

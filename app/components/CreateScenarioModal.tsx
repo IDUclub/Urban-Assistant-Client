@@ -22,8 +22,16 @@ import {
     type ScenarioImportedGeometry,
     type ScenarioGeoJsonKind,
 } from "@lib/ScenarioGeoJson";
+import {
+    getInfrastructurePropertyName,
+    getInfrastructurePropertyNames,
+    isInfrastructureItemMapped,
+    mapInfrastructureItems,
+    type InfrastructureImportItem,
+    type InfrastructureTypeOption,
+} from "@lib/ScenarioInfrastructure";
 
-type EditingImport = "functionalZones" | "roads";
+type EditingImport = ScenarioGeoJsonKind;
 
 const ROAD_TYPE_OPTIONS: ScenarioPropertyOption[] = [
     { value: 50, label: "Федеральная дорога", aliases: ["федеральная", "federal road"] },
@@ -72,6 +80,16 @@ function getZoneTypeLabel(zoneType: FunctionalZoneType) {
 }
 
 function getUploadErrorMessage(error: unknown) {
+    if (axios.isAxiosError(error)) {
+        const detail = error.response?.data?.detail;
+        if (typeof detail === "string" && detail.trim()) return detail;
+        if (Array.isArray(detail)) {
+            const messages = detail.flatMap((item) => (
+                typeof item?.msg === "string" && item.msg.trim() ? [item.msg] : []
+            ));
+            if (messages.length) return messages.join(". ");
+        }
+    }
     if (error instanceof Error && error.message.trim()) {
         return error.message;
     }
@@ -128,9 +146,19 @@ function CreateScenarioModal({
     const [shouldAddObjects, setShouldAddObjects] = useState(false);
     const [functionalZoneGeometries, setFunctionalZoneGeometries] = useState<ScenarioImportedGeometry[]>([]);
     const [roadGeometries, setRoadGeometries] = useState<ScenarioImportedGeometry[]>([]);
+    const [infrastructureItems, setInfrastructureItems] = useState<InfrastructureImportItem[]>([]);
+    const [physicalObjectTypes, setPhysicalObjectTypes] = useState<InfrastructureTypeOption[]>([]);
+    const [serviceTypes, setServiceTypes] = useState<InfrastructureTypeOption[]>([]);
+    const [areInfrastructureTypesLoading, setAreInfrastructureTypesLoading] = useState(true);
     const [pendingRoadGeometries, setPendingRoadGeometries] = useState<ScenarioImportedGeometry[]>([]);
     const [functionalZonesSource, setFunctionalZonesSource] = useState<string | null>(null);
     const [roadsSource, setRoadsSource] = useState<string | null>(null);
+    const [infrastructureSource, setInfrastructureSource] = useState<string | null>(null);
+    const [infrastructurePropertyMapping, setInfrastructurePropertyMapping] = useState({
+        type: "physical_object_type_id",
+        service: "service",
+        capacity: "capacity",
+    });
     const [functionalZonePropertyName, setFunctionalZonePropertyName] = useState("functional_zone_type_id");
     const [roadPropertyName, setRoadPropertyName] = useState("physical_object_type_id");
     const [functionalZoneTypeIds, setFunctionalZoneTypeIds] = useState<Array<number | undefined>>([]);
@@ -138,6 +166,7 @@ function CreateScenarioModal({
     const [editingImport, setEditingImport] = useState<EditingImport | null>(null);
     const [functionalZonesFileName, setFunctionalZonesFileName] = useState<string | null>(null);
     const [roadsFileName, setRoadsFileName] = useState<string | null>(null);
+    const [infrastructureFileName, setInfrastructureFileName] = useState<string | null>(null);
     const [loadingFileKind, setLoadingFileKind] = useState<ScenarioGeoJsonKind | null>(null);
     const [fileErrorText, setFileErrorText] = useState<string | null>(null);
     const [createdScenario, setCreatedScenario] = useState<ProjectScenario | null>(null);
@@ -159,8 +188,10 @@ function CreateScenarioModal({
                 .flatMap((value) => typeof value === "string" && value.trim() ? [value] : []),
         }));
     const hasImportedObjects = functionalZoneGeometries.length > 0 && roadGeometries.length > 0;
+    const isInfrastructureMapped = infrastructureItems.every(isInfrastructureItemMapped);
     const canSubmit = !isSubmitting
         && (!shouldAddObjects || hasImportedObjects)
+        && (!shouldAddObjects || isInfrastructureMapped)
         && (
             createdScenario !== null || (
                 !!name.trim()
@@ -233,6 +264,31 @@ function CreateScenarioModal({
         };
     }, []);
 
+    useEffect(() => {
+        let isActive = true;
+        void Promise.allSettled([DataStore.getPhysicalObjectTypes(), DataStore.getServiceTypes()])
+            .then(([objectTypesResult, servicesResult]) => {
+                if (!isActive) return;
+                if (objectTypesResult.status === "fulfilled") {
+                    setPhysicalObjectTypes(objectTypesResult.value);
+                } else {
+                    console.error("Error fetching physical object types:", objectTypesResult.reason);
+                }
+                if (servicesResult.status === "fulfilled") {
+                    setServiceTypes(servicesResult.value);
+                } else {
+                    console.error("Error fetching service types:", servicesResult.reason);
+                }
+                if (objectTypesResult.status === "rejected" || !objectTypesResult.value.length) {
+                    setFileErrorText("Не удалось загрузить типы физических объектов.");
+                } else if (servicesResult.status === "rejected") {
+                    setFileErrorText("Не удалось загрузить типы сервисов. Объекты без сервисов можно сохранить.");
+                }
+            })
+            .finally(() => { if (isActive) setAreInfrastructureTypesLoading(false); });
+        return () => { isActive = false; };
+    }, []);
+
     const handleGeoJsonFileSelect = async (
         kind: ScenarioGeoJsonKind,
         file: File,
@@ -261,6 +317,26 @@ function CreateScenarioModal({
                 )));
                 setFunctionalZonesFileName(file.name);
                 setAreFunctionalZonesUploaded(false);
+                return;
+            }
+
+            if (kind === "infrastructure") {
+                const names = getInfrastructurePropertyNames(features);
+                const mapping = {
+                    type: getInfrastructurePropertyName(names, ["physical_object_type_id", "physical_object_type", "Тип физического объекта", "type"]),
+                    service: ["service", "services", "service_type_id", "сервис", "Сервис"]
+                        .find((name) => names.includes(name)) ?? "",
+                    capacity: ["capacity", "service_capacity", "вместимость сервиса", "Вместимость сервиса"]
+                        .find((name) => names.includes(name)) ?? "",
+                };
+                setInfrastructureSource(source);
+                setInfrastructurePropertyMapping(mapping);
+                setInfrastructureItems(mapInfrastructureItems(
+                    features, mapping.type, mapping.service, mapping.capacity,
+                    physicalObjectTypes, serviceTypes,
+                ));
+                setInfrastructureFileName(file.name);
+                setEditingImport("infrastructure");
                 return;
             }
 
@@ -346,6 +422,19 @@ function CreateScenarioModal({
                             `Не удалось сохранить ${failedRoadGeometries.length} из ${pendingRoadGeometries.length} объектов дорожной сети.`,
                         );
                     }
+                }
+
+                if (infrastructureItems.some((item) => (!item.physicalObjectCreated && item.physicalObjectId === undefined)
+                    || (item.savedServiceCount ?? 0) < item.services.length)) {
+                    const territoryId = await DataStore.getProjectTerritoryId(projectId);
+                    await DataStore.addScenarioInfrastructureObjects(
+                        scenario.id,
+                        territoryId,
+                        infrastructureItems,
+                        (index, item) => setInfrastructureItems((current) => current.map(
+                            (currentItem, currentIndex) => currentIndex === index ? item : currentItem,
+                        )),
+                    );
                 }
             }
 
@@ -463,7 +552,7 @@ function CreateScenarioModal({
                             <div>
                                 <h3 className="text-sm font-semibold">Объекты сценария</h3>
                                 <p className="mt-1 text-xs text-slate-500 customer-dark:text-content-muted">
-                                    Загрузите GeoJSON-файлы функциональных зон и дорожно-транспортной сети.
+                                    Загрузите GeoJSON-файлы функциональных зон и дорожно-транспортной сети. Объекты застройки можно добавить без сервисов.
                                 </p>
                             </div>
 
@@ -500,6 +589,23 @@ function CreateScenarioModal({
                                         onClick: () => setEditingImport("roads"),
                                     }}
                                 />
+                                <FileUpload
+                                    label="Объекты застройки"
+                                    fileName={loadingFileKind === "infrastructure"
+                                        ? "Чтение файла..."
+                                        : infrastructureFileName ?? undefined}
+                                    disabled={isSubmitting || createdScenario !== null || loadingFileKind !== null
+                                        || areInfrastructureTypesLoading || !physicalObjectTypes.length}
+                                    accept=".geojson,application/geo+json"
+                                    onFileSelected={(file) => void handleGeoJsonFileSelect("infrastructure", file)}
+                                    trailingAction={infrastructureSource === null ? undefined : {
+                                        icon: <MdEdit aria-hidden="true" size={20} />,
+                                        label: "Редактировать GeoJSON объектов застройки",
+                                        title: "Редактировать GeoJSON и свойства",
+                                        disabled: isSubmitting || createdScenario !== null,
+                                        onClick: () => setEditingImport("infrastructure"),
+                                    }}
+                                />
                             </div>
 
                             {fileErrorText && (
@@ -511,6 +617,12 @@ function CreateScenarioModal({
                                 </div>
                             )}
 
+                            {infrastructureItems.length > 0 && !isInfrastructureMapped && (
+                                <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800" role="status">
+                                    Сопоставьте типы объектов и заполните добавленные сервисы с вместимостью в редакторе файла.
+                                </div>
+                            )}
+
                             <div>
                                 <div className="mb-2 text-sm font-medium">Предпросмотр объектов</div>
                                 <ScenarioImportPreviewMap
@@ -518,6 +630,8 @@ function CreateScenarioModal({
                                     functionalZoneTypeIds={functionalZoneTypeIds}
                                     roads={roadGeometries}
                                     roadTypeIds={roadTypeIds}
+                                    infrastructure={infrastructureItems}
+                                    physicalObjectTypes={physicalObjectTypes}
                                 />
                             </div>
                         </div>
@@ -592,6 +706,24 @@ function CreateScenarioModal({
                             setPendingRoadGeometries(features);
                             setRoadPropertyName(propertyName);
                             setRoadTypeIds(values);
+                            setEditingImport(null);
+                        }}
+                    />
+                )}
+
+                {editingImport === "infrastructure" && infrastructureSource !== null && (
+                    <ScenarioGeoJsonEditorModal
+                        kind="infrastructure"
+                        initialSource={infrastructureSource}
+                        initialMapping={infrastructurePropertyMapping}
+                        initialItems={infrastructureItems}
+                        physicalObjectTypes={physicalObjectTypes}
+                        serviceTypes={serviceTypes}
+                        onClose={() => setEditingImport(null)}
+                        onSave={({ source, mapping, items }) => {
+                            setInfrastructureSource(source);
+                            setInfrastructurePropertyMapping(mapping);
+                            setInfrastructureItems(items);
                             setEditingImport(null);
                         }}
                     />
