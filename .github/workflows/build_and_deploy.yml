@@ -50,6 +50,7 @@ jobs:
         run: |
           docker run -d \
             --name urban-assistant-client \
+            --env-file ./service.env \
             --publish 3100:3000 \
             --restart unless-stopped \
             ${IMAGE_NAME}:$TAG

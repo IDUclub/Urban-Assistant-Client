@@ -17,6 +17,7 @@ import {
     FUNCTIONAL_ZONE_FALLBACK_COLOR,
     FUNCTIONAL_ZONE_ID_PROPERTY,
     FUNCTIONAL_ZONE_NAME_PROPERTY,
+    FUNCTIONAL_ZONE_TYPE_PROPERTY,
     getFunctionalZoneColor,
     getFunctionalZoneName,
 } from "@lib/functionalZones";
@@ -75,6 +76,18 @@ function extendBounds(bounds: Bounds | undefined, longitude: number, latitude: n
     ];
 }
 
+function mergeBounds(current: Bounds | undefined, incoming: Bounds | undefined) {
+    if (!incoming) {
+        return current;
+    }
+
+    return extendBounds(
+        extendBounds(current, incoming[0][0], incoming[0][1]),
+        incoming[1][0],
+        incoming[1][1],
+    );
+}
+
 function collectBounds(coordinates: unknown, bounds?: Bounds): Bounds | undefined {
     if (!Array.isArray(coordinates) || !coordinates.length) {
         return bounds;
@@ -94,6 +107,24 @@ function collectBounds(coordinates: unknown, bounds?: Bounds): Bounds | undefine
     );
 }
 
+function getGeometryBounds(geometry: unknown, bounds?: Bounds): Bounds | undefined {
+    if (!geometry || typeof geometry !== "object") {
+        return bounds;
+    }
+    const value = geometry as Record<string, unknown>;
+
+    if (value.type === "GeometryCollection" && Array.isArray(value.geometries)) {
+        return value.geometries.reduce(
+            (currentBounds: Bounds | undefined, childGeometry: unknown) => (
+                getGeometryBounds(childGeometry, currentBounds)
+            ),
+            bounds,
+        );
+    }
+
+    return collectBounds(value.coordinates, bounds);
+}
+
 function getFeatureBounds(featureCollection: any): Bounds | undefined {
     if (!featureCollection || typeof featureCollection !== "object") {
         return undefined;
@@ -102,15 +133,15 @@ function getFeatureBounds(featureCollection: any): Bounds | undefined {
     if (featureCollection.type === "FeatureCollection" && Array.isArray(featureCollection.features)) {
         const features = featureCollection.features as any[];
         return features.reduce((bounds: Bounds | undefined, feature: any) => {
-            return collectBounds(feature?.geometry?.coordinates, bounds);
+            return getGeometryBounds(feature?.geometry, bounds);
         }, undefined);
     }
 
     if (featureCollection.type === "Feature") {
-        return collectBounds(featureCollection.geometry?.coordinates);
+        return getGeometryBounds(featureCollection.geometry);
     }
 
-    return collectBounds(featureCollection.coordinates);
+    return getGeometryBounds(featureCollection);
 }
 
 function getRandomColor() {
@@ -147,6 +178,8 @@ const VRI_TOP1_FILL_OPACITY = 0.65;
 const GENERATED_LAYER_FILL_OPACITY = 0.65;
 const SELECTED_FEATURE_COLOR = "#EF4444";
 const SELECTED_FEATURE_OUTLINE_COLOR = "#FFFFFF";
+const LIGHT_MAP_STYLE = "mapbox://styles/mapbox/light-v11";
+const DARK_MAP_STYLE = "mapbox://styles/mapbox/dark-v11";
 
 function getPropertyMatchValue(value: unknown) {
     if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") return undefined;
@@ -300,6 +333,7 @@ function getFunctionalZoneStyle(name: string | undefined, layer: unknown): Categ
     const functionalZoneProperty = [
         FUNCTIONAL_ZONE_ID_PROPERTY,
         FUNCTIONAL_ZONE_NAME_PROPERTY,
+        FUNCTIONAL_ZONE_TYPE_PROPERTY,
         GENBUILDER_FUNCTIONAL_ZONE_PROPERTY,
     ].map((propertyName) => ({
         propertyName,
@@ -316,7 +350,9 @@ function getFunctionalZoneStyle(name: string | undefined, layer: unknown): Categ
     if (hasFeaturesWithoutPropertyValue(layer, functionalZoneProperty.propertyName)) {
         valueColors.push([undefined, FUNCTIONAL_ZONE_FALLBACK_COLOR]);
     }
-    const isGenPlannerLayer = name?.trim().toLowerCase() === GENPLANNER_ZONE_LAYER_NAME.toLowerCase();
+    const isGenPlannerLayer =
+        name?.trim().toLowerCase() === GENPLANNER_ZONE_LAYER_NAME.toLowerCase() &&
+        functionalZoneProperty.propertyName === FUNCTIONAL_ZONE_ID_PROPERTY;
 
     return {
         propertyName: functionalZoneProperty.propertyName,
@@ -469,6 +505,7 @@ function getLegendValueLabel(
     if (
         propertyName === FUNCTIONAL_ZONE_ID_PROPERTY
         || propertyName === FUNCTIONAL_ZONE_NAME_PROPERTY
+        || propertyName === FUNCTIONAL_ZONE_TYPE_PROPERTY
         || propertyName === GENBUILDER_FUNCTIONAL_ZONE_PROPERTY
     ) {
         return getFunctionalZoneName(value) ?? value;
@@ -700,6 +737,7 @@ const SELECTED_FEATURE_LAYER_IDS = [
 interface MapViewProps {
     isExpanded: boolean;
     onToggleExpanded: () => void;
+    fitAllLayers?: boolean;
 }
 
 type SelectedFeatureState = {
@@ -709,31 +747,17 @@ type SelectedFeatureState = {
     feature: Feature<Geometry, Record<string, unknown>>;
 };
 
-type ScrollShadowState = {
-    top: boolean;
-    bottom: boolean;
-};
-
-function getScrollShadowState(element: HTMLElement | null): ScrollShadowState {
-    if (!element) {
-        return { top: false, bottom: false };
-    }
-
-    const hasOverflow = element.scrollHeight > element.clientHeight + 1;
-
-    return {
-        top: hasOverflow && element.scrollTop > 1,
-        bottom: hasOverflow && element.scrollTop + element.clientHeight < element.scrollHeight - 1,
-    };
-}
-
-const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
+const MapView = observer(({
+    isExpanded,
+    onToggleExpanded,
+    fitAllLayers = false,
+}: MapViewProps) => {
     const { mapLayers, isMapLayersAvailable } = MapStore;
     const [isMounted, setIsMounted] = useState(false);
+    const [mapStyle, setMapStyle] = useState(LIGHT_MAP_STYLE);
     const [isLegendExpanded, setIsLegendExpanded] = useState(true);
     const [activeLayerId, setActiveLayerId] = useState<string>();
     const [selectedFeature, setSelectedFeature] = useState<SelectedFeatureState | null>(null);
-    const [propertyScrollShadows, setPropertyScrollShadows] = useState<ScrollShadowState>({ top: false, bottom: false });
     const mapRef = useRef<MapRef | null>(null);
     const propertyListRef = useRef<HTMLDivElement | null>(null);
     const mapboxToken = import.meta.env.VITE_MAPBOX_TOKEN;
@@ -744,11 +768,17 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
         () => geoJsonMessages.map((message) => ({ ...message, parsedLayer: parseFeatureCollection(message.layer) })),
         [geoJsonMessages]
     );
-
-    const latestLayer = mapLayers.at(-1);
-    const latestLayerBounds = useMemo(() => {
-        return latestLayer ? getFeatureBounds(latestLayer.layer) : undefined;
-    }, [latestLayer?.id]);
+    const displayedLayersBounds = useMemo(
+        () => fitAllLayers
+            ? mapLayers.reduce<Bounds | undefined>(
+                (bounds, layer) => layer.isVisible
+                    ? mergeBounds(bounds, getFeatureBounds(layer.layer))
+                    : bounds,
+                undefined,
+            )
+            : getFeatureBounds(mapLayers.at(-1)?.layer),
+        [fitAllLayers, mapLayers, mapLayers.length],
+    );
     const interactiveLayers = mapLayers.flatMap((layer, index) => {
         if (!layer.isVisible) {
             return [];
@@ -772,6 +802,21 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
     const mapLegendItems = activeLayer
         ? getMapLegendItems(activeLayer, activeLayerStyle)
         : [];
+    const initialViewState = displayedLayersBounds
+        ? {
+            longitude: fitAllLayers
+                ? (displayedLayersBounds[0][0] + displayedLayersBounds[1][0]) / 2
+                : displayedLayersBounds[0][0],
+            latitude: fitAllLayers
+                ? (displayedLayersBounds[0][1] + displayedLayersBounds[1][1]) / 2
+                : displayedLayersBounds[0][1],
+            zoom: 11,
+        }
+        : {
+            longitude: 37.6173,
+            latitude: 55.7558,
+            zoom: 11,
+        };
 
     const downloadLayer = (name: string, layer: unknown) => {
         const fileName = `${(name || "layer")
@@ -801,16 +846,6 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
         anchor.click();
 
         URL.revokeObjectURL(url);
-    };
-
-    const updatePropertyScrollShadows = () => {
-        const nextShadows = getScrollShadowState(propertyListRef.current);
-
-        setPropertyScrollShadows((currentShadows) => (
-            currentShadows.top === nextShadows.top && currentShadows.bottom === nextShadows.bottom
-                ? currentShadows
-                : nextShadows
-        ));
     };
 
     const getMapLayerByRenderedLayerId = (renderedLayerId?: string) => {
@@ -893,14 +928,34 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
     }, []);
 
     useEffect(() => {
-        if (!isMounted || !latestLayerBounds) {
+        const updateMapStyle = () => {
+            const isDarkTheme = document.documentElement.dataset.colorScheme === "dark";
+
+            setMapStyle(isDarkTheme ? DARK_MAP_STYLE : LIGHT_MAP_STYLE);
+        };
+
+        const themeObserver = new MutationObserver(updateMapStyle);
+
+        updateMapStyle();
+        themeObserver.observe(document.documentElement, {
+            attributes: true,
+            attributeFilter: ["data-color-scheme"],
+        });
+
+        return () => themeObserver.disconnect();
+    }, []);
+
+    useEffect(() => {
+        if (!isMounted || !displayedLayersBounds) {
             return;
         }
 
-        setTimeout(() => {
-            zoomToBounds(latestLayerBounds);
-        }, 300)
-    }, [isMounted, latestLayerBounds]);
+        const timeout = window.setTimeout(() => {
+            zoomToBounds(displayedLayersBounds);
+        }, 300);
+
+        return () => window.clearTimeout(timeout);
+    }, [isMounted, displayedLayersBounds]);
 
     useEffect(() => {
         if (!isMounted || !activeLayer) return;
@@ -915,13 +970,9 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
     }, [mapLayers]);
 
     useEffect(() => {
-        const animationFrameId = requestAnimationFrame(updatePropertyScrollShadows);
-
         if (propertyListRef.current) {
             propertyListRef.current.scrollTop = 0;
         }
-
-        return () => cancelAnimationFrame(animationFrameId);
     }, [selectedFeature]);
 
     return (
@@ -944,16 +995,8 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                 <Map
                     ref={mapRef}
                     interactiveLayerIds={interactiveLayerIds}
-                    initialViewState={latestLayerBounds ? {
-                        longitude: latestLayerBounds[0][0],
-                        latitude: latestLayerBounds[0][1],
-                        zoom: 11,
-                    } : {
-                        longitude: 37.6173,
-                        latitude: 55.7558,
-                        zoom: 11,
-                    }}
-                    mapStyle="mapbox://styles/mapbox/light-v11"
+                    initialViewState={initialViewState}
+                    mapStyle={mapStyle}
                     language="ru"
                     projection="mercator"
                     mapboxAccessToken={mapboxToken}
@@ -1122,9 +1165,9 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                                             type="button"
                                             className={`
                                                 min-w-0 flex-1 cursor-pointer truncate text-left transition-colors
-                                                hover:text-[#0788CE] customer:hover:text-brand-primary
+                                                hover:text-[#0788CE] customer:hover:text-brand-primary customer-dark:hover:text-[#9A252B]
                                                 ${isActiveLayer
-                                                  ? "font-semibold text-[#0788CE] customer:text-brand-primary"
+                                                  ? "font-semibold text-[#0788CE] customer:text-brand-primary customer-dark:text-[#9A252B]"
                                                   : ""}
                                             `}
                                             onClick={() => {
@@ -1204,49 +1247,32 @@ const MapView = observer(({ isExpanded, onToggleExpanded }: MapViewProps) => {
                             <IoClose aria-hidden="true" size={16} />
                         </button>
                     </div>
-                    <div className="relative min-h-0 overflow-hidden rounded-xl bg-slate-50/60 customer-dark:bg-surface-muted/60">
-                        <div
-                            className="h-full max-h-[calc(50vh-7rem)] overflow-y-auto overscroll-contain py-2"
-                            ref={propertyListRef}
-                            onScroll={updatePropertyScrollShadows}
-                            onWheel={(event) => event.stopPropagation()}
-                            onTouchMove={(event) => event.stopPropagation()}
-                        >
-                            {Object.keys(selectedFeature.properties).length ? (
-                                Object.entries(selectedFeature.properties).map(([key, propertyValue]) => (
-                                    <div key={key} className="mx-3 border-b border-slate-200 py-2 last:border-b-0 customer-dark:border-ui-border">
-                                        <div className="text-xs font-medium uppercase tracking-[0.08em] text-slate-500 customer-dark:text-content-muted">
-                                            {key}
-                                        </div>
-                                        <div className="mt-1 wrap-break-word text-sm text-slate-800 customer-dark:text-content-primary">
-                                            {formatSelectedFeaturePropertyValue(
-                                                selectedFeature.layerName,
-                                                key,
-                                                propertyValue,
-                                            )}
-                                        </div>
+                    <div
+                        className="map-property-scroll min-h-0 overflow-y-auto overscroll-contain rounded-xl bg-slate-50/60 py-2 customer-dark:bg-surface-muted/60"
+                        ref={propertyListRef}
+                        onWheel={(event) => event.stopPropagation()}
+                        onTouchMove={(event) => event.stopPropagation()}
+                    >
+                        {Object.keys(selectedFeature.properties).length ? (
+                            Object.entries(selectedFeature.properties).map(([key, propertyValue]) => (
+                                <div key={key} className="mx-3 border-b border-slate-200 py-2 last:border-b-0 customer-dark:border-ui-border">
+                                    <div className="text-xs font-medium uppercase tracking-[0.08em] text-slate-500 customer-dark:text-content-muted">
+                                        {key}
                                     </div>
-                                ))
-                            ) : (
-                                <div className="mx-3 py-2 text-sm text-slate-500 customer-dark:text-content-muted">
-                                    У объекта нет свойств
+                                    <div className="mt-1 wrap-break-word text-sm text-slate-800 customer-dark:text-content-primary">
+                                        {formatSelectedFeaturePropertyValue(
+                                            selectedFeature.layerName,
+                                            key,
+                                            propertyValue,
+                                        )}
+                                    </div>
                                 </div>
-                            )}
-                        </div>
-                        <div
-                            className={`
-                                pointer-events-none absolute inset-x-0 top-0 h-5 bg-linear-to-b from-slate-400/55 to-transparent
-                                backdrop-blur-[1px]
-                                transition-opacity duration-200 ${propertyScrollShadows.top ? "opacity-100" : "opacity-0"}
-                            `}
-                        />
-                        <div
-                            className={`
-                                pointer-events-none absolute inset-x-0 bottom-0 h-5 bg-linear-to-t from-slate-400/55 to-transparent
-                                backdrop-blur-[1px]
-                                transition-opacity duration-200 ${propertyScrollShadows.bottom ? "opacity-100" : "opacity-0"}
-                            `}
-                        />
+                            ))
+                        ) : (
+                            <div className="mx-3 py-2 text-sm text-slate-500 customer-dark:text-content-muted">
+                                У объекта нет свойств
+                            </div>
+                        )}
                     </div>
                 </div>
             )}

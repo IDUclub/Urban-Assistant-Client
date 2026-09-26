@@ -6,6 +6,7 @@ import {
     MdDownload,
     MdMoreHoriz,
     MdOutlineMap,
+    MdOutlineDescription,
     MdArrowForwardIos,
     MdCheck,
 } from "react-icons/md";
@@ -27,6 +28,8 @@ import {
     GenPlannerCustomSetupCard,
     GenPlannerSavePromptCard,
 } from "@components/GenPlannerMessages";
+import MarkdownMessage from "@components/MarkdownMessage";
+import MarkdownFilePreviewModal from "@components/MarkdownFilePreviewModal";
 
 
 type ChatMessageItemType = "title" | "plain" | "block" | "list";
@@ -42,204 +45,7 @@ interface ChatComponentProps {
     emptyState?: ReactNode;
 }
 
-function renderInlineText(text: string) {
-    const parts = text.split(/(<br\s*\/?>|\*\*.*?\*\*|(?<!\*)\*[^*]+\*(?!\*))/g);
-
-    return parts.map((part, index) => {
-        const boldMatch = part.match(/^\*\*(.*?)\*\*$/);
-        const italicMatch = part.match(/^\*(.*?)\*$/);
-        const lineBreakMatch = part.match(/^<br\s*\/?>$/i);
-
-        if (lineBreakMatch) {
-            return <br key={`br-${index}`} />;
-        }
-
-        if (boldMatch) {
-            return <strong key={`bold-${index}`}>{boldMatch[1]}</strong>;
-        }
-
-        if (italicMatch) {
-            return <em key={`italic-${index}`}>{italicMatch[1]}</em>;
-        }
-
-        return <span key={`text-${index}`}>{part}</span>;
-    });
-}
-
-function isMarkdownTableSeparator(line: string) {
-    const trimmedLine = line.trim();
-    return /^\|?(\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?$/.test(trimmedLine);
-}
-
-function parseMarkdownTableRow(line: string) {
-    return line
-        .trim()
-        .replace(/^\|/, "")
-        .replace(/\|$/, "")
-        .split("|")
-        .map((cell) => cell.trim());
-}
-
-function parseMarkdownHeading(line: string) {
-    const headingMatch = line.trim().match(/^(#{1,6})\s*(.+)$/);
-
-    if (!headingMatch) return undefined;
-
-    return {
-        level: headingMatch[1].length,
-        text: headingMatch[2].trim(),
-    };
-}
-
-function getMarkdownHeadingClassName(level: number) {
-    switch (level) {
-        case 1:
-            return "mt-2 text-2xl font-semibold leading-tight text-gray-950 customer-dark:text-content-primary";
-        case 2:
-            return "mt-2 text-xl font-semibold leading-tight text-gray-950 customer-dark:text-content-primary";
-        case 3:
-            return "mt-1 text-lg font-semibold leading-snug text-gray-950 customer-dark:text-content-primary";
-        default:
-            return "mt-1 text-base font-semibold leading-snug text-gray-900 customer-dark:text-content-primary";
-    }
-}
-
-function renderFormattedText(text: string) {
-    const lines = text.split("\n");
-    const blocks: ReactNode[] = [];
-    let currentParagraph: string[] = [];
-
-    const flushParagraph = () => {
-        if (!currentParagraph.length) return;
-
-        blocks.push(
-            <p key={`paragraph-${blocks.length}`} className="whitespace-pre-wrap">
-                {currentParagraph.map((line, lineIndex) => (
-                    <span key={`line-${lineIndex}`}>
-                        {renderInlineText(line)}
-                        {lineIndex < currentParagraph.length - 1 ? <br /> : null}
-                    </span>
-                ))}
-            </p>
-        );
-        currentParagraph = [];
-    };
-
-    for (let index = 0; index < lines.length; index += 1) {
-        const line = lines[index];
-        const nextLine = lines[index + 1];
-
-        if (line.trim().startsWith("```")) {
-            flushParagraph();
-
-            const language = line.trim().slice(3).trim();
-            const codeLines: string[] = [];
-            index += 1;
-
-            while (index < lines.length && !lines[index].trim().startsWith("```")) {
-                codeLines.push(lines[index]);
-                index += 1;
-            }
-
-            blocks.push(
-                <div key={`code-${blocks.length}`} className="my-2 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 shadow-sm customer-dark:border-ui-border customer-dark:bg-surface-muted">
-                    {language ? (
-                        <div className="border-b border-slate-200 bg-white px-4 py-2 text-xs font-medium uppercase tracking-[0.12em] text-slate-500 customer-dark:border-ui-border customer-dark:bg-surface-raised customer-dark:text-content-muted">
-                            {language}
-                        </div>
-                    ) : null}
-                    <pre className="overflow-x-auto bg-[#f8f9fa] px-4 py-4 text-sm leading-6 text-[#1f1555] customer-dark:bg-surface-muted customer-dark:text-content-primary">
-                        <code>{codeLines.join("\n")}</code>
-                    </pre>
-                </div>
-            );
-            continue;
-        }
-
-        if (/^-{3,}$/.test(line.trim())) {
-            flushParagraph();
-            blocks.push(
-                <hr
-                    key={`divider-${blocks.length}`}
-                    className="my-1 border-0 border-t border-slate-200 customer-dark:border-ui-border"
-                />
-            );
-            continue;
-        }
-
-        const heading = parseMarkdownHeading(line);
-
-        if (heading) {
-            flushParagraph();
-
-            const HeadingTag = `h${heading.level}` as "h1" | "h2" | "h3" | "h4" | "h5" | "h6";
-
-            blocks.push(
-                <HeadingTag
-                    key={`heading-${blocks.length}`}
-                    className={getMarkdownHeadingClassName(heading.level)}
-                >
-                    {renderInlineText(heading.text)}
-                </HeadingTag>
-            );
-            continue;
-        }
-
-        if (line.trim().includes("|") && nextLine && isMarkdownTableSeparator(nextLine)) {
-            flushParagraph();
-
-            const header = parseMarkdownTableRow(line);
-            const rows: string[][] = [];
-            index += 2;
-
-            while (index < lines.length && lines[index].trim().includes("|") && lines[index].trim()) {
-                rows.push(parseMarkdownTableRow(lines[index]));
-                index += 1;
-            }
-
-            index -= 1;
-
-            blocks.push(
-                <div key={`table-${blocks.length}`} className="my-2 overflow-x-auto">
-                    <table className="min-w-full border-collapse overflow-hidden rounded-2xl border border-gray-200 text-left text-sm customer-dark:border-ui-border">
-                        <thead className="bg-gray-50 customer-dark:bg-surface-muted">
-                            <tr className="bg-gray-400/10 customer-dark:bg-surface-hover/60">
-                                {header.map((cell, cellIndex) => (
-                                    <th key={`header-${cellIndex}`} className="border-b border-gray-200 px-4 py-3 font-semibold text-gray-900 customer-dark:border-ui-border customer-dark:text-content-primary">
-                                        {renderInlineText(cell)}
-                                    </th>
-                                ))}
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {rows.map((row, rowIndex) => (
-                                <tr key={`row-${rowIndex}`} className="odd:bg-white even:bg-gray-50/50 customer-dark:odd:bg-surface-panel customer-dark:even:bg-surface-muted/50">
-                                    {row.map((cell, cellIndex) => (
-                                        <td key={`cell-${rowIndex}-${cellIndex}`} className="border-t border-gray-200 px-4 py-3 align-top text-gray-800 customer-dark:border-ui-border customer-dark:text-content-primary">
-                                            {renderInlineText(cell)}
-                                        </td>
-                                    ))}
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-            );
-            continue;
-        }
-
-        if (!line.trim()) {
-            flushParagraph();
-            continue;
-        }
-
-        currentParagraph.push(line);
-    }
-
-    flushParagraph();
-
-    return <div className="flex flex-col gap-3">{blocks}</div>;
-}
+const LOADING_INDICATOR_GRACE_PERIOD_MS = 500;
 
 function parseFeatureCollection(layer: unknown) {
     if (!layer) return undefined;
@@ -384,6 +190,35 @@ function GeoJsonLayerRow({ name, layer }: { name: string; layer: unknown }) {
     );
 }
 
+function DownloadFileRow({ title, downloadUrl }: { title: string; downloadUrl: string }) {
+    const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+
+    const handlePreview = (event: React.MouseEvent<HTMLAnchorElement>) => {
+        event.preventDefault();
+        setIsPreviewOpen(true);
+    };
+
+    return (
+        <>
+            <a
+                href={downloadUrl}
+                onClick={handlePreview}
+                className="inline-flex min-w-0 items-center gap-2 font-medium text-blue-600 underline decoration-blue-300 underline-offset-2 transition-colors hover:text-blue-700 customer:text-brand-primary customer:decoration-brand-border customer:hover:text-brand-contrast"
+            >
+                <MdOutlineDescription className="shrink-0" size={18} />
+                <span className="min-w-0 truncate">{title}</span>
+            </a>
+            {isPreviewOpen && (
+                <MarkdownFilePreviewModal
+                    title={title}
+                    downloadUrl={downloadUrl}
+                    onClose={() => setIsPreviewOpen(false)}
+                />
+            )}
+        </>
+    );
+}
+
 type ChatStoreMessage = (typeof ChatStore.chatMessages)[number];
 
 type GeoJsonResponseMessage = ChatStoreMessage & {
@@ -400,6 +235,40 @@ type VriSetupData = Extract<ChatStoreMessage["message"], { type: "vri_setup" }>;
 type TableData = Extract<ChatStoreMessage["message"], { type: "table" }>;
 function isGeoJsonResponseMessage(message: ChatStoreMessage): message is GeoJsonResponseMessage {
     return message.type === "response" && message.message.type === "geojson";
+}
+
+function groupGeoJsonMessagesByTurn(messages: readonly ChatStoreMessage[]) {
+    const groupsByFirstIndex = new Map<number, GeoJsonResponseMessage[]>();
+    const groupedIndexes = new Set<number>();
+    let currentTurnLayerIndexes: number[] = [];
+
+    const registerCurrentTurn = () => {
+        if (currentTurnLayerIndexes.length > 1) {
+            const layers = currentTurnLayerIndexes.map(
+                (index) => messages[index] as GeoJsonResponseMessage,
+            );
+
+            groupsByFirstIndex.set(currentTurnLayerIndexes[0], layers);
+            currentTurnLayerIndexes.forEach((index) => groupedIndexes.add(index));
+        }
+
+        currentTurnLayerIndexes = [];
+    };
+
+    messages.forEach((message, index) => {
+        if (message.type === "request") {
+            registerCurrentTurn();
+            return;
+        }
+
+        if (isGeoJsonResponseMessage(message)) {
+            currentTurnLayerIndexes.push(index);
+        }
+    });
+
+    registerCurrentTurn();
+
+    return { groupsByFirstIndex, groupedIndexes };
 }
 
 function getMessageContainerClassName(message: ChatStoreMessage) {
@@ -488,7 +357,7 @@ function TableMessage({ table }: { table: TableData }) {
                                 {table.columns.map((column) => (
                                     <td
                                         key={column.key}
-                                        className="max-w-xs border-t border-gray-200 px-4 py-3 align-top whitespace-pre-wrap break-words text-gray-800 customer-dark:border-ui-border customer-dark:text-content-primary"
+                                        className="max-w-xs border-t border-gray-200 px-4 py-3 align-top whitespace-pre-wrap wrap-break-word text-gray-800 customer-dark:border-ui-border customer-dark:text-content-primary"
                                     >
                                         {formatTableCell(row[column.key])}
                                     </td>
@@ -940,7 +809,8 @@ const ChatInput = observer((
     { onSubmit }: { onSubmit: ChatComponentProps["onSubmit"]}
 ) => {
     const { isStreaming } = ChatStore;
-    const [currentInput, setCurrentInput] = useState<string>("");
+    const currentInput = ChatStore.messageDraft;
+    const setCurrentInput = (value: string) => ChatStore.setMessageDraft(value);
     const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
     useEffect(() => {
@@ -1027,43 +897,82 @@ const ChatComponent = observer(function ChatComponent(
         onSubmit = (request: string) => {ChatStore.sendChatMessage(request)},
         emptyState,
     } = props;
-    const messagesEndRef = useRef<HTMLDivElement | null>(null);
+    const messagesScrollRef = useRef<HTMLDivElement | null>(null);
     const hasMessages = ChatStore.chatMessages.length > 0;
+    const hasCurrentStatus = Boolean(ChatStore.currentStatus?.trim());
+    const statusRequestIdRef = useRef<number | null>(null);
+    const [showLoadingFallback, setShowLoadingFallback] = useState(false);
 
     useEffect(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-    }, [ChatStore.chatMessages.length, ChatStore.streamedResponse, ChatStore.isStreaming]);
+        const requestId = ChatStore.currentStreamRequestId;
+
+        if (!ChatStore.isStreaming) {
+            statusRequestIdRef.current = null;
+            setShowLoadingFallback(false);
+            return;
+        }
+
+        if (hasCurrentStatus) {
+            statusRequestIdRef.current = requestId;
+            setShowLoadingFallback(false);
+            return;
+        }
+
+        if (statusRequestIdRef.current === requestId) {
+            setShowLoadingFallback(false);
+            return;
+        }
+
+        setShowLoadingFallback(false);
+        const timeoutId = window.setTimeout(() => {
+            setShowLoadingFallback(true);
+        }, LOADING_INDICATOR_GRACE_PERIOD_MS);
+
+        return () => window.clearTimeout(timeoutId);
+    }, [
+        ChatStore.currentStreamRequestId,
+        ChatStore.isStreaming,
+        hasCurrentStatus,
+    ]);
+
+    useEffect(() => {
+        const messagesScrollContainer = messagesScrollRef.current;
+        if (!messagesScrollContainer) return;
+
+        messagesScrollContainer.scrollTo({
+            top: messagesScrollContainer.scrollHeight,
+            behavior: "smooth",
+        });
+    }, [
+        ChatStore.chatMessages.length,
+        ChatStore.currentStatus,
+        ChatStore.streamedResponse,
+        ChatStore.isStreaming,
+    ]);
 
     const renderedMessages: ReactNode[] = [];
+    const { groupsByFirstIndex, groupedIndexes } = groupGeoJsonMessagesByTurn(
+        ChatStore.chatMessages,
+    );
 
     for (let ind = 0; ind < ChatStore.chatMessages.length; ind += 1) {
         const message = ChatStore.chatMessages[ind];
+        const geoJsonGroup = groupsByFirstIndex.get(ind);
 
-        if (isGeoJsonResponseMessage(message)) {
-            const geoJsonMessages: GeoJsonResponseMessage[] = [message];
-            let nextIndex = ind + 1;
+        if (geoJsonGroup) {
+            renderedMessages.push(
+                <div
+                    key={`chat-message-geojson-group-${ind}`}
+                    className="w-full rounded-3xl py-4 pr-6 pl-1 text-gray-950 customer-dark:text-content-primary"
+                >
+                    <GeoJsonMessageAccordion messages={geoJsonGroup} />
+                </div>
+            );
+            continue;
+        }
 
-            while (nextIndex < ChatStore.chatMessages.length) {
-                const nextMessage = ChatStore.chatMessages[nextIndex];
-
-                if (!isGeoJsonResponseMessage(nextMessage)) break;
-
-                geoJsonMessages.push(nextMessage);
-                nextIndex += 1;
-            }
-
-            if (geoJsonMessages.length > 1) {
-                renderedMessages.push(
-                    <div
-                        key={`chat-message-geojson-group-${ind}`}
-                        className="w-full rounded-3xl py-4 pr-6 pl-1 text-gray-950 customer-dark:text-content-primary"
-                    >
-                        <GeoJsonMessageAccordion messages={geoJsonMessages} />
-                    </div>
-                );
-                ind = nextIndex - 1;
-                continue;
-            }
+        if (groupedIndexes.has(ind)) {
+            continue;
         }
 
         renderedMessages.push(
@@ -1071,7 +980,7 @@ const ChatComponent = observer(function ChatComponent(
                 key={`chat-message-${message.type}-${ind}`}
                 className={getMessageContainerClassName(message)}
             >
-                {message.message.type === "text" ? renderFormattedText(message.message.text) : ""}
+                {message.message.type === "text" ? <MarkdownMessage>{message.message.text}</MarkdownMessage> : ""}
                 {message.message.type === "error" && (
                     <div className="flex items-start gap-3">
                         <span className="mt-0.5 shrink-0 text-red-500 customer:text-danger">
@@ -1123,6 +1032,12 @@ const ChatComponent = observer(function ChatComponent(
                         layer={message.message.layer}
                     />
                 )}
+                {message.message.type === "file" && (
+                    <DownloadFileRow
+                        title={message.message.title}
+                        downloadUrl={message.message.downloadUrl}
+                    />
+                )}
                 {message.message.type === "table" && (
                     <TableMessage table={message.message} />
                 )}
@@ -1167,16 +1082,35 @@ const ChatComponent = observer(function ChatComponent(
 
     return (
         <div className="w-full flex flex-col min-h-0 flex-1">
-            <div className="min-h-0 flex-1 overflow-y-auto pr-2">
+            <div ref={messagesScrollRef} className="min-h-0 flex-1 overflow-y-auto pr-2">
                 <div className="flex min-h-full flex-col gap-2 pb-4 justify-start">
                     {renderedMessages}
+                    {ChatStore.streamedResponse && (
+                        <div className="w-full rounded-3xl pr-6 pl-1 py-4 text-gray-950 customer-dark:text-content-primary">
+                            <MarkdownMessage>{ChatStore.streamedResponse}</MarkdownMessage>
+                        </div>
+                    )}
                     <div>
-                        {ChatStore.isStreaming && ChatStore.currentStatus && (
-                            <span>{ChatStore.currentStatus}</span>
+                        {ChatStore.isStreaming && hasCurrentStatus && (
+                            <span
+                                className="stream-status-shimmer"
+                                role="status"
+                                aria-live="polite"
+                            >
+                                {ChatStore.currentStatus}
+                            </span>
                         )}
-                        <SyncLoader size={8} color="var(--color-brand-primary)" loading={ChatStore.isStreaming} cssOverride={{ marginBlock: 12, marginLeft: "0.25rem" }} />
+                        <SyncLoader
+                            size={8}
+                            color="var(--color-brand-primary)"
+                            loading={
+                                ChatStore.isStreaming
+                                && !hasCurrentStatus
+                                && showLoadingFallback
+                            }
+                            cssOverride={{ marginBlock: 12, marginLeft: "0.25rem" }}
+                        />
                     </div>
-                    <div ref={messagesEndRef} />
                 </div>
             </div>
             <div className="shrink-0 border-t border-gray-100 bg-white pt-4 customer-dark:border-ui-border customer-dark:bg-surface-page">

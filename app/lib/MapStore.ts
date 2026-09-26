@@ -74,6 +74,10 @@ class MapDataStore {
         }));
     }
 
+    restoreMapLayers(layers: MapLayer[]) {
+        this.mapLayers = layers;
+    }
+
     toggleLayerVisibility(id: string) {
         this.mapLayers = this.mapLayers.map((layer) =>
             layer.id === id

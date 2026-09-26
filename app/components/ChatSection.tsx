@@ -25,14 +25,12 @@ const ChatSection = observer(() => {
     const visibleMapOffset = isMapLayersAvailable
         ? (isMapExpanded ? mapHeight : collapsedMapOffset)
         : "4px";
-    const selectedContextLabel = parsedContext ?? (
-        selectedContext === "nonproject"
+    const selectedContextLabel = selectedContext === "nonproject"
         ? "Вне проекта"
-        : `${selectedProject?.name ?? "Без названия"} / ${selectedSceanrioItem?.name ?? "Сценарий"}`
-    );
+        : parsedContext ?? `${selectedProject?.name ?? "Без названия"} / ${selectedSceanrioItem?.name ?? "Сценарий"}`;
 
     return (
-        <section className="relative flex h-screen w-full flex-col overflow-hidden bg-white customer:bg-surface-page">
+        <section className="relative flex h-screen w-full flex-col overflow-clip bg-white customer:bg-surface-page">
             {chatMessages.length ? (
                 <div className="sticky top-0 z-10 shrink-0 border-b border-gray-200 bg-white/95 px-8 py-4 backdrop-blur customer-dark:border-ui-border customer-dark:bg-surface-panel/95">
                     <div className="mx-auto flex w-fit max-w-7xl items-center gap-6">
