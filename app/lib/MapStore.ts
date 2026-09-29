@@ -63,6 +63,22 @@ class MapDataStore {
         });
     }
 
+    addOrUpdateLayerToMap(layer: {name: string; layer: any}) {
+        const existingLayerIndex = this.mapLayers.findIndex(
+            (currentLayer) => currentLayer.name === layer.name,
+        );
+
+        if (existingLayerIndex < 0) {
+            this.addLayerToMap(layer);
+            return;
+        }
+
+        this.mapLayers[existingLayerIndex] = {
+            ...this.mapLayers[existingLayerIndex],
+            layer: layer.layer,
+        };
+    }
+
     setMapLayers(layers: {name: string; layer: any}[]) {
         this.mapLayers = layers.map(layer => ({
             ...layer,
