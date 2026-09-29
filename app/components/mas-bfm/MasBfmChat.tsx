@@ -17,6 +17,7 @@ import MasBfmStore from "@lib/MasBfmStore";
 import MapStore from "@lib/MapStore";
 import DataStore, { type ProjectScenario } from "@lib/DataStore";
 import AuthStore from "@lib/AuthStore";
+import MarkdownMessage from "@components/MarkdownMessage";
 import Select from "@components/ui/Select";
 import DocumentLibraryModal from "@components/documents/DocumentLibraryModal";
 import MasBfmArtifacts from "@components/mas-bfm/MasBfmArtifacts";
@@ -134,7 +135,7 @@ function MessageCard({ message }: { message: SynapseMessage }) {
               {time && <time>{time}</time>}
             </div>
           )}
-          <div className="whitespace-pre-wrap break-words">{text}</div>
+          <MarkdownMessage>{text}</MarkdownMessage>
         </div>
       </div>
     );
