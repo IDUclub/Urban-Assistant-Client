@@ -48,6 +48,20 @@ function asText(value: unknown) {
   }
 }
 
+function assistantText(content: unknown) {
+  let parsedContent = content;
+  if (typeof content === "string") {
+    try {
+      parsedContent = JSON.parse(content);
+    } catch {
+      return content;
+    }
+  }
+
+  const data = asRecord(parsedContent);
+  return typeof data?.markdown === "string" ? data.markdown : asText(content);
+}
+
 function messageTime(message: SynapseMessage) {
   const createdAt = message.created_at;
   if (typeof createdAt !== "string") {
@@ -135,7 +149,7 @@ function MessageCard({ message }: { message: SynapseMessage }) {
               {time && <time>{time}</time>}
             </div>
           )}
-          <MarkdownMessage>{text}</MarkdownMessage>
+          <MarkdownMessage>{assistantText(message.content)}</MarkdownMessage>
         </div>
       </div>
     );
