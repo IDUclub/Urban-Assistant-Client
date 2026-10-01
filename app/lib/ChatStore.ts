@@ -24,6 +24,7 @@ import {
 } from "@lib/buildplanner/client";
 import {
     GenPlannerHttpError,
+    getDefaultZoneAdjacencyMatrix,
     streamGenPlannerCustomChat,
     streamGenPlannerScenarioChat,
     type GenPlannerStreamEvent,
@@ -36,8 +37,16 @@ import {
 import {
     type GenPlannerResult,
     type GenPlannerCustomSetupMessage,
+    type GenPlannerAdjacencyPromptMessage,
     type GenPlannerSavePromptMessage,
 } from "@lib/genplanner/types";
+import {
+    applyForbiddenPairsToMatrix,
+} from "@lib/genplanner/zoneAdjacencyMatrix";
+import type {
+    ZoneAdjacencyMatrixState,
+    ZonePair,
+} from "@lib/genplanner/zoneAdjacencyMatrix";
 import MapStore from "@lib/MapStore";
 
 const URBAN_API_URL = import.meta.env.VITE_URBAN_API;
@@ -1003,6 +1012,7 @@ type GenPlannerStreamState = {
     hasReceivedResult: boolean;
     hasReceivedDone: boolean;
     hasStreamError: boolean;
+    needsAdjacencyClarification: boolean;
     mode: "scenario" | "custom";
     projectId?: number;
     scenarioId?: number;
@@ -1035,6 +1045,7 @@ type ChatMessagePayload =
     | GenBuilderClarificationMessage
     | GenBuilderSavePromptMessage
     | GenPlannerCustomSetupMessage
+    | GenPlannerAdjacencyPromptMessage
     | GenPlannerSavePromptMessage;
 
 type ChatMessage = {
@@ -1103,6 +1114,12 @@ function isGenPlannerCustomSetupMessage(
     message: ChatMessage["message"],
 ): message is GenPlannerCustomSetupMessage {
     return message.type === "genplanner_custom_setup";
+}
+
+function isGenPlannerAdjacencyPromptMessage(
+    message: ChatMessage["message"],
+): message is GenPlannerAdjacencyPromptMessage {
+    return message.type === "genplanner_adjacency_prompt";
 }
 
 function normalizePzzTaskStatus(value: unknown): PzzTaskStatus | undefined {
@@ -1494,6 +1511,7 @@ class ChatDataStore {
     nextGenPlannerResultId: number = 0;
     nextGenPlannerSavePromptId: number = 0;
     nextGenPlannerCustomSetupId: number = 0;
+    nextGenPlannerAdjacencyPromptId: number = 0;
     userChats: UserChat[] = [];
     isUserChatsLoading = false;
     isUserChatOpening = false;
@@ -2772,6 +2790,18 @@ class ChatDataStore {
         }
 
         return;
+    }
+
+    private getGenPlannerAdjacencyPromptMessage(promptId: string) {
+        const chatMessage = this.chatMessages.find(
+            (message) =>
+                message.type === "response" &&
+                isGenPlannerAdjacencyPromptMessage(message.message) &&
+                message.message.id === promptId,
+        );
+        return chatMessage && isGenPlannerAdjacencyPromptMessage(chatMessage.message)
+            ? chatMessage.message
+            : undefined;
     }
 
     private getGenPlannerSavePromptMessage(promptId: string) {
@@ -4474,6 +4504,31 @@ class ChatDataStore {
         }));
     }
 
+    loadDefaultGenPlannerAdjacencyMatrix = async (): Promise<ZoneAdjacencyMatrixState> => {
+        const accessToken = AuthStore.accessToken;
+
+        if (!GENPLANNER_API_URL) {
+            throw new Error(
+                "Не задан адрес сервиса GenPlanner (VITE_GENPLANNER_API).",
+            );
+        }
+
+        if (!accessToken) {
+            throw new Error(
+                "Не удалось получить токен пользователя. Авторизуйтесь заново.",
+            );
+        }
+
+        const response = await getDefaultZoneAdjacencyMatrix({
+            baseUrl: GENPLANNER_API_URL,
+            accessToken,
+        });
+
+        return applyForbiddenPairsToMatrix(
+            response.forbidden_pairs,
+        );
+    };
+
     private startGenPlannerCustomSetup() {
         const setupId = `genplanner-custom-${this.nextGenPlannerCustomSetupId}`;
         this.nextGenPlannerCustomSetupId += 1;
@@ -4531,10 +4586,23 @@ class ChatDataStore {
                     }
                 }
                 this.streamedResponse += streamEvent.content;
+                if (
+                    streamState.mode === "scenario" &&
+                    this.streamedResponse
+                        .toLowerCase()
+                        .replace(/\s+/g, " ")
+                        .includes("запустить генерацию")
+                ) {
+                    streamState.needsAdjacencyClarification = true;
+                }
                 this.currentStatus = "GenPlanner формирует ответ";
                 return;
             case "warning":
                 if (streamEvent.stage === "run_generation") {
+                    if (streamState.mode === "scenario") {
+                        streamState.needsAdjacencyClarification = true;
+                    }
+
                     this.currentStatus = "Параметры генерации требуют уточнения";
                     return;
                 }
@@ -4659,6 +4727,46 @@ class ChatDataStore {
         }
     }
 
+    private addGenPlannerAdjacencyPrompt(streamState: GenPlannerStreamState) {
+        if (
+            streamState.mode !== "scenario" ||
+            !streamState.needsAdjacencyClarification ||
+            streamState.hasStreamError ||
+            streamState.hasReceivedResult ||
+            !streamState.hasReceivedDone
+        ) {
+            return;
+        }
+
+        const hasActivePrompt = this.chatMessages.some(
+            (chatMessage) =>
+                chatMessage.type === "response" &&
+                isGenPlannerAdjacencyPromptMessage(chatMessage.message) &&
+                (
+                    chatMessage.message.status === "pending" ||
+                    chatMessage.message.status === "submitting"
+                ),
+        );
+
+        if (hasActivePrompt) {
+            return;
+        }
+
+        const promptId =
+            `genplanner-adjacency-${this.nextGenPlannerAdjacencyPromptId}`;
+
+        this.nextGenPlannerAdjacencyPromptId += 1;
+
+        this.chatMessages.push({
+            type: "response",
+            message: {
+                type: "genplanner_adjacency_prompt",
+                id: promptId,
+                status: "pending",
+            },
+        });
+    }
+
     private addGenPlannerSavePrompt(streamState: GenPlannerStreamState) {
         if (
             streamState.hasStreamError ||
@@ -4741,6 +4849,7 @@ class ChatDataStore {
             hasReceivedResult: false,
             hasReceivedDone: false,
             hasStreamError: false,
+            needsAdjacencyClarification: false,
             mode: "custom",
             setupId: setup.id,
         };
@@ -4827,8 +4936,16 @@ class ChatDataStore {
         }));
     }
 
-    private sendGenPlannerScenarioChatRequest(message: string) {
+    private sendGenPlannerScenarioChatRequest(
+        message: string,
+        adjacency?: {
+            neighbourPairs: ZonePair[];
+            forbiddenPairs: ZonePair[];
+        },
+        displayMessage?: string,
+    ) {
         const userQuery = message.trim();
+        const visibleMessage = displayMessage?.trim() || userQuery;
         const scenarioId = this.selectedScenario;
         const projectId = typeof this.selectedContext === "number"
             ? this.selectedContext
@@ -4872,13 +4989,14 @@ class ChatDataStore {
         this.currentStatus = "GenPlanner обрабатывает запрос";
         this.chatMessages.push({
             type: "request",
-            message: { type: "text", text: userQuery },
+            message: { type: "text", text: visibleMessage },
         });
 
         const streamState: GenPlannerStreamState = {
             hasReceivedResult: false,
             hasReceivedDone: false,
             hasStreamError: false,
+            needsAdjacencyClarification: false,
             mode: "scenario",
             projectId,
             scenarioId,
@@ -4893,6 +5011,8 @@ class ChatDataStore {
                 userQuery,
                 chatId: this.activeGenPlannerChatId ?? this.getActiveBackendChatId(),
                 test: false,
+                neighbourPairs: adjacency?.neighbourPairs,
+                forbiddenPairs: adjacency?.forbiddenPairs,
             },
             signal: this.abortController.signal,
             onOpen: () => {
@@ -4914,12 +5034,14 @@ class ChatDataStore {
         })
         .then(action(() => {
             if (this.currentStreamRequestId !== requestId) {
-                return;
+                return false;
             }
 
             this.commitStreamedResponse();
+
             if (!streamState.hasStreamError && !streamState.hasReceivedDone) {
                 streamState.hasStreamError = true;
+
                 this.chatMessages.push({
                     type: "response",
                     message: {
@@ -4928,16 +5050,23 @@ class ChatDataStore {
                     },
                 });
             }
+
+            this.addGenPlannerAdjacencyPrompt(streamState);
             this.addGenPlannerSavePrompt(streamState);
+
+            return (
+                !streamState.hasStreamError &&
+                streamState.hasReceivedDone
+            );
         }))
         .catch(action((error) => {
             if (this.currentStreamRequestId !== requestId) {
-                return;
+                return false;
             }
 
             if (error?.name === "AbortError" || error?.name === "CanceledError") {
                 this.commitStreamedResponse();
-                return;
+                return false;
             }
 
             console.error("Error streaming GenPlanner generation:", error);
@@ -4956,6 +5085,7 @@ class ChatDataStore {
                 type: "response",
                 message: { type: "error", text: errorText },
             });
+            return false;
         }))
         .finally(action(() => {
             if (this.currentStreamRequestId !== requestId) {
@@ -5253,6 +5383,48 @@ class ChatDataStore {
             void this.getUserChats();
         }));
     }
+    submitGenPlannerAdjacencyMatrix = async (
+        promptId: string,
+        value: {
+            neighbourPairs: ZonePair[];
+            forbiddenPairs: ZonePair[];
+        },
+    ) => {
+        const promptMessage =
+            this.getGenPlannerAdjacencyPromptMessage(promptId);
+
+        if (
+            !promptMessage ||
+            (
+                promptMessage.status !== "pending" &&
+                promptMessage.status !== "error"
+            ) ||
+            this.isStreaming
+        ) {
+            return;
+        }
+
+        promptMessage.status = "submitting";
+        promptMessage.errorText = undefined;
+
+        const succeeded = await this.sendGenPlannerScenarioChatRequest(
+            "Да, запускай генерацию. Все настройки соседства уже переданы в матрице. Считай их окончательными, не запрашивай описание соседств текстом и используй переданные обязательные и запрещённые пары.",
+            value,
+            "Запускай генерацию с заданными соседствами зон.",
+        );
+
+        runInAction(() => {
+            if (succeeded) {
+                promptMessage.status = "submitted";
+                promptMessage.errorText = undefined;
+                return;
+            }
+
+            promptMessage.status = "error";
+            promptMessage.errorText =
+                "Не удалось отправить матрицу соседства. Попробуйте ещё раз.";
+        });
+    };
 
     saveGenPlannerResult = async (promptId: string) => {
         const promptMessage = this.getGenPlannerSavePromptMessage(promptId);

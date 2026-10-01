@@ -25,6 +25,7 @@ import {
     GenBuilderSetupMessageCard,
 } from "@components/GenBuilderMessages";
 import {
+    GenPlannerAdjacencyPromptCard,
     GenPlannerCustomSetupCard,
     GenPlannerSavePromptCard,
 } from "@components/GenPlannerMessages";
@@ -284,6 +285,8 @@ function getMessageContainerClassName(message: ChatStoreMessage) {
         case "info":
         case "genbuilder_clarification":
             return "w-full rounded-3xl border border-blue-200 bg-blue-50 px-5 py-4 text-blue-950 customer-dark:border-ui-border customer-dark:bg-surface-muted customer-dark:text-content-primary";
+        case "genplanner_adjacency_prompt":
+            return "w-full pr-6 pl-1 pt-0 pb-4 text-gray-950 customer-dark:text-content-primary";
         default:
             return "w-full rounded-3xl pr-6 pl-1 py-4 text-gray-950 customer-dark:text-content-primary";
     }
@@ -291,7 +294,7 @@ function getMessageContainerClassName(message: ChatStoreMessage) {
 
 function GeoJsonMessageAccordion({ messages }: { messages: GeoJsonResponseMessage[] }) {
     return (
-        <details className="group w-full rounded-2xl border border-blue-100 bg-blue-50/40 text-blue-700 customer:border-brand-border customer:bg-brand-soft/40 customer:text-brand-contrast">
+        <details className="group w-full rounded-2xl border border-blue-100 bg-blue-50/40 text-blue-700 customer:border-brand-primary/30 customer:bg-brand-soft/40 customer:text-brand-contrast">
             <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 marker:hidden">
                 <span className="inline-flex min-w-0 items-center gap-2 font-medium">
                     <LuLayers3 className="shrink-0" />
@@ -1055,6 +1058,9 @@ const ChatComponent = observer(function ChatComponent(
                 )}
                 {message.message.type === "genbuilder_save_prompt" && (
                     <GenBuilderSavePromptCard prompt={message.message} />
+                )}
+                {message.message.type === "genplanner_adjacency_prompt" && (
+                    <GenPlannerAdjacencyPromptCard prompt={message.message} />
                 )}
                 {message.message.type === "genplanner_save_prompt" && (
                     <GenPlannerSavePromptCard prompt={message.message} />
