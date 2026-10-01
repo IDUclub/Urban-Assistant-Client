@@ -533,10 +533,15 @@ function getMapLegendItems(
         return [{ color: layer.style.color, label: layer.name || "Без названия" }];
     }
 
-    return categoricalStyle.valueColors.map(([value, color]) => ({
-        color,
-        label: getLegendValueLabel(layer.name, categoricalStyle.propertyName, value),
-    }));
+    const legendItems: MapLegendItem[] = [];
+    for (const [value, color] of categoricalStyle.valueColors) {
+        const label = getLegendValueLabel(layer.name, categoricalStyle.propertyName, value);
+        if (!legendItems.some((item) => item.label === label && item.color === color)) {
+            legendItems.push({ color, label });
+        }
+    }
+
+    return legendItems;
 }
 
 function getCategoricalLayerStyle(name: string | undefined, layer: unknown): CategoricalLayerStyle | undefined {

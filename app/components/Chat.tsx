@@ -178,15 +178,22 @@ function GeoJsonMessageActions({ name, layer }: { name: string; layer: unknown }
     );
 };
 
-function GeoJsonLayerRow({ name, layer }: { name: string; layer: unknown }) {
+function GeoJsonLayerRow({
+    name,
+    layer,
+    unavailable,
+}: {
+    name: string;
+    layer: unknown;
+    unavailable?: boolean;
+}) {
     return (
         <span className="inline-flex min-w-0 items-center gap-2 text-blue-600 customer:text-brand-primary">
             <LuLayers3 className="shrink-0" />
             <span className="min-w-0 truncate">{name}</span>
-            <GeoJsonMessageActions
-                name={name}
-                layer={layer}
-            />
+            {unavailable
+                ? <span className="shrink-0 text-xs text-slate-500 customer-dark:text-content-muted">Недоступен</span>
+                : <GeoJsonMessageActions name={name} layer={layer} />}
         </span>
     );
 }
@@ -228,6 +235,7 @@ type GeoJsonResponseMessage = ChatStoreMessage & {
         type: "geojson";
         name: string;
         layer: unknown;
+        unavailable?: boolean;
     };
 };
 
@@ -311,6 +319,7 @@ function GeoJsonMessageAccordion({ messages }: { messages: GeoJsonResponseMessag
                         <GeoJsonLayerRow
                             name={message.message.name}
                             layer={message.message.layer}
+                            unavailable={message.message.unavailable}
                         />
                     </div>
                 ))}
@@ -1033,6 +1042,7 @@ const ChatComponent = observer(function ChatComponent(
                     <GeoJsonLayerRow
                         name={message.message.name}
                         layer={message.message.layer}
+                        unavailable={message.message.unavailable}
                     />
                 )}
                 {message.message.type === "file" && (

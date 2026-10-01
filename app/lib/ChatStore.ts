@@ -63,6 +63,12 @@ const AUTHENTICATED_LAYER_API_URLS = [
     import.meta.env.VITE_LLM_RESTRICTIONS_API,
     import.meta.env.VITE_PZZ_COMPARE_API,
 ].filter((url): url is string => typeof url === "string" && !!url.trim());
+const SERVICE_API_BASE_URLS: Record<string, string | undefined> = {
+    genbuilder: GENBUILDER_API_URL,
+    buildplanner: BUILDPLANNER_API_URL,
+    genplanner: GENPLANNER_API_URL,
+    pzzcompare: import.meta.env.VITE_PZZ_COMPARE_API,
+};
 
 interface UserChat {
     chat_id: string;
@@ -294,7 +300,10 @@ export async function downloadGeoJsonLayer(
     const response = await fetchAuthenticatedDownload(uri, options);
 
     if (!response.ok) {
-        throw new Error(`GeoJSON layer request failed with ${response.status}`);
+        throw Object.assign(
+            new Error("GeoJSON layer request failed with " + response.status),
+            { status: response.status },
+        );
     }
 
     const text = await response.text();
@@ -389,6 +398,36 @@ function isGeoJsonLayerUri(value: unknown) {
         return parsedUrl.protocol === "http:" || parsedUrl.protocol === "https:";
     } catch {
         return false;
+    }
+}
+
+function resolveServiceFileUrl(value: unknown, sourceService: unknown) {
+    const uri = toString(value);
+    if (!uri) {
+        return;
+    }
+
+    const sourceServiceName = toString(sourceService)?.toLowerCase();
+    const serviceBaseUrl = sourceServiceName ? SERVICE_API_BASE_URLS[sourceServiceName] : undefined;
+
+    if (!serviceBaseUrl) {
+        return isGeoJsonLayerUri(uri) ? uri : undefined;
+    }
+
+    try {
+        const serviceUrl = new URL(serviceBaseUrl);
+        const originalUrl = new URL(uri, serviceUrl.origin);
+        const layerPath = originalUrl.pathname.match(/\/(?:files|layers)\/.*$/)?.[0];
+        if (!layerPath) {
+            return isGeoJsonLayerUri(uri) ? uri : undefined;
+        }
+
+        return new URL(
+            `${serviceUrl.pathname.replace(/\/$/, "")}${layerPath}${originalUrl.search}${originalUrl.hash}`,
+            serviceUrl.origin,
+        ).toString();
+    } catch {
+        return isGeoJsonLayerUri(uri) ? uri : undefined;
     }
 }
 
@@ -522,7 +561,11 @@ function extractGenPlannerResultLayers(value: unknown): UserChatLayer[] {
         asRecord(content?.result),
         asRecord(response.data),
     ].find((resultWithLayers) => (
-        resultWithLayers && ("zones" in resultWithLayers || "roads" in resultWithLayers)
+        resultWithLayers && (
+            "zones" in resultWithLayers ||
+            "roads" in resultWithLayers ||
+            "territory" in resultWithLayers
+        )
     ));
 
     if (!result) {
@@ -619,6 +662,7 @@ function extractTableMessage(payload: unknown): TableMessage | undefined {
 function isGeoJsonFilePayload(content: Record<string, any>) {
     const mimeType = toString(content.mime_type ?? content.mimeType)?.toLowerCase();
     const filename = toString(content.filename)?.toLowerCase();
+    const name = toString(content.name)?.toLowerCase();
     const url = toString(
         content.url ??
         content.download_url ??
@@ -627,6 +671,7 @@ function isGeoJsonFilePayload(content: Record<string, any>) {
     )?.toLowerCase();
 
     return (
+        name === "functional_zones" ||
         !!mimeType?.includes("geo+json") ||
         !!mimeType?.includes("geojson") ||
         !!filename?.endsWith(".geojson") ||
@@ -645,14 +690,15 @@ function extractGeoJsonFileLayer(
     const content = asRecord(record.content) ?? record;
     if (!isGeoJsonFilePayload(content)) return undefined;
 
-    const url = toString(
+    const url = resolveServiceFileUrl(
         content.url ??
         content.download_url ??
         content.downloadUrl ??
         content.uri,
+        content.source_service ?? record.source_service,
     );
 
-    if (!isGeoJsonLayerUri(url)) return undefined;
+    if (!url) return undefined;
 
     return {
         name: (
@@ -782,22 +828,27 @@ function getStreamFileLayer(payload: unknown, eventName?: string): UserChatLayer
     return extractGeoJsonFileLayer(payload);
 }
 
-const INPUT_ZONE_LAYER_NAMES: Record<string, string> = {
+const GENBUILDER_INPUT_LAYER_NAMES: Record<string, string> = {
     input_zones: "Зоны ПЗЗ",
     functional_zones: "Функциональные зоны",
+    blocks_input: "Загруженные кварталы",
+    existing_buildings: "Существующие здания",
 };
 
-function getInputZonesLayer(payload: unknown, eventName?: string): UserChatLayer | undefined {
+function getGenBuilderInputLayer(payload: unknown, eventName?: string): UserChatLayer | undefined {
     if (getStreamChunkKind(payload, eventName) !== "file") {
         return;
     }
 
     const record = asRecord(payload);
     const content = asRecord(record?.content) ?? record;
-    const displayName = INPUT_ZONE_LAYER_NAMES[toString(content?.name)?.toLowerCase() ?? ""];
-    const url = toString(content?.url);
+    const displayName = GENBUILDER_INPUT_LAYER_NAMES[toString(content?.name)?.toLowerCase() ?? ""];
+    const url = resolveServiceFileUrl(
+        content?.url,
+        content?.source_service ?? record?.source_service,
+    );
 
-    return displayName && isGeoJsonLayerUri(url)
+    return displayName && url
         ? { name: displayName, layer: url }
         : undefined;
 }
@@ -882,6 +933,7 @@ type GeoJSONMessage = {
     type: "geojson";
     name: string;
     layer: any;
+    unavailable?: boolean;
 };
 
 type DownloadFileMessage = {
@@ -1029,6 +1081,7 @@ type AddGeoJsonLayerOptions = {
     requestId?: number;
     showError?: boolean;
     accessToken?: string;
+    onNotFound?: () => void;
 };
 
 type ChatMessagePayload =
@@ -1912,6 +1965,9 @@ class ChatDataStore {
                 if (requestId !== this.currentStreamRequestId) return;
 
                 console.error("Error downloading GeoJSON layer:", error);
+                if (asRecord(error)?.status === 404) {
+                    options.onNotFound?.();
+                }
 
                 if (options.showError) {
                     this.appendGeoJsonLayerLoadError(layer.name);
@@ -2097,12 +2153,18 @@ class ChatDataStore {
                 {
                     name: message.message?.name,
                     layer: parseFeatureCollection(message.message.layer),
+                    message: message.message,
                 } : []
         );
 
         MapStore.clearMapLayers();
         lastResponseLayers.forEach((layer) => {
-            this.addGeoJsonLayerToMap(layer);
+            layer.message.unavailable = undefined;
+            this.addGeoJsonLayerToMap(layer, {
+                onNotFound: () => {
+                    layer.message.unavailable = true;
+                },
+            });
         });
 
         if (
@@ -2203,26 +2265,7 @@ class ChatDataStore {
         this.genPlannerResults.clear();
         this.genPlannerTerritoryFiles.clear();
 
-        const lastRequestIndex = chat.messages.findLastIndex(message => message.type === "request");
-        const lastResponseLayers = chat.messages.flatMap((message, ind) =>
-            ind > lastRequestIndex && message.type === "response" && message.message?.type === "geojson" ?
-                {
-                    name: message.message?.name,
-                    layer: parseFeatureCollection(message.message.layer),
-                } : []
-        );
-
-        MapStore.clearMapLayers();
-        lastResponseLayers.forEach((layer) => {
-            this.addGeoJsonLayerToMap(layer);
-        });
-
-        if (
-            typeof chat.selectedContext === "number" &&
-            !lastResponseLayers.some((layer) => layer.name === PROJECT_BOUNDARY_LAYER_NAME)
-        ) {
-            this.requestProjectBoundary(chat.selectedContext);
-        }
+        this.restoreMapLayersFromMessages(this.chatMessages);
     };
 
     sendNormativeDocumentMessage(message: string, scenarioId?: number) {
@@ -3061,9 +3104,9 @@ class ChatDataStore {
                 this.currentStatus = streamEvent.content ?? "Генерация застройки выполняется";
                 return;
             case "file": {
-                const inputZonesLayer = getInputZonesLayer(streamEvent.content, "file");
-                if (inputZonesLayer) {
-                    this.appendGeoJsonLayer(inputZonesLayer, { accessToken: AuthStore.accessToken });
+                const inputLayer = getGenBuilderInputLayer(streamEvent.content, "file");
+                if (inputLayer) {
+                    this.appendGeoJsonLayer(inputLayer, { accessToken: AuthStore.accessToken });
                 }
                 return;
             }
@@ -4607,6 +4650,15 @@ class ChatDataStore {
                     return;
                 }
 
+                if (streamEvent.stage === "store_layer") {
+                    this.addChatNotice(
+                        "warning",
+                        streamEvent.message ??
+                            "Не удалось сохранить слой — он не появится в истории чата. Генерация продолжается.",
+                    );
+                    return;
+                }
+
                 this.chatMessages.push({
                     type: "response",
                     message: {
@@ -4708,6 +4760,45 @@ class ChatDataStore {
             }
             case "done":
                 streamState.hasReceivedDone = true;
+                if (streamState.mode === "custom" && streamEvent.territory !== undefined) {
+                    const territory = normalizeBoundaryLayer(streamEvent.territory);
+                    if (territory) {
+                        this.commitStreamedResponse();
+                        const lastRequestIndex = this.chatMessages.findLastIndex(
+                            (message) => message.type === "request",
+                        );
+                        const existingTerritoryMessage = this.chatMessages.findLast(
+                            (message, index) => (
+                                index > lastRequestIndex &&
+                                message.type === "response" &&
+                                message.message.type === "geojson" &&
+                                message.message.name === PROJECT_BOUNDARY_LAYER_NAME
+                            ),
+                        );
+
+                        if (
+                            existingTerritoryMessage?.type === "response" &&
+                            existingTerritoryMessage.message.type === "geojson"
+                        ) {
+                            existingTerritoryMessage.message.layer = territory;
+                            existingTerritoryMessage.message.unavailable = undefined;
+                        } else {
+                            this.chatMessages.push({
+                                type: "response",
+                                message: {
+                                    type: "geojson",
+                                    name: PROJECT_BOUNDARY_LAYER_NAME,
+                                    layer: territory,
+                                },
+                            });
+                        }
+
+                        MapStore.addOrUpdateLayerToMap({
+                            name: PROJECT_BOUNDARY_LAYER_NAME,
+                            layer: territory,
+                        });
+                    }
+                }
                 if (streamState.setupId) {
                     const setup = this.getGenPlannerCustomSetup(streamState.setupId);
                     if (setup && setup.status !== "error") {
@@ -6016,7 +6107,7 @@ class ChatDataStore {
                 if (this.activeChatId !== chatId || this.currentStreamRequestId !== requestId) return;
 
                 this.chatMessages = chatMessages;
-                this.restoreMapLayersFromMessages(chatMessages);
+                this.restoreMapLayersFromMessages(this.chatMessages);
             });
 
             if (chat && chat.scenario_id) {
