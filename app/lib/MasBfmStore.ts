@@ -1,9 +1,11 @@
 import { makeAutoObservable, runInAction } from "mobx";
 import SynapseClient, {
   SynapseHttpError,
+  SYNAPSE_MESSAGES_PAGE_SIZE,
   type SynapseArchiveRef,
   type SynapseArtifact,
   type SynapseMessage,
+  type SynapseProjectSummary,
 } from "@lib/synapse/client";
 
 const PROJECT_POLL_INTERVAL_MS = 3_000;
@@ -86,8 +88,14 @@ class MasBfmStore {
   archiveRefs: SynapseArchiveRef[] = [];
   latestSequence = 0;
   projectStatus?: string = undefined;
+  isHistoryLoading = false;
+  isStopping = false;
+  projects: SynapseProjectSummary[] = [];
+  isProjectsLoading = false;
+  projectsError?: string = undefined;
   isSending = false;
   error?: string = undefined;
+  monitorError?: string = undefined;
   private monitorController?: AbortController = undefined;
   private monitorTask?: Promise<void> = undefined;
   private conversationVersion = 0;
@@ -189,10 +197,10 @@ class MasBfmStore {
       !this.shouldMonitor ||
       !this.isEnabled ||
       !this.synapseProjectId ||
-      this.isProjectTerminal() ||
       this.monitorTask
-    )
+    ) {
       return;
+    }
 
     const projectId = this.synapseProjectId;
     const controller = new AbortController();
@@ -222,6 +230,11 @@ class MasBfmStore {
           return;
         }
 
+        const incomingMessages = messagePage.messages ?? [];
+        const conversationMessages = incomingMessages.filter(
+          (message) => message.type !== "tool_call" && message.type !== "tool_result",
+        );
+        const hasMoreMessages = conversationMessages.length >= SYNAPSE_MESSAGES_PAGE_SIZE;
         const status = project.status?.trim().toLowerCase();
         const isTerminal = !!status && TERMINAL_PROJECT_STATUSES.has(status);
         let archiveRefs: SynapseArchiveRef[] | undefined;
@@ -247,8 +260,20 @@ class MasBfmStore {
           ? project.artifacts.filter((artifact) => !!artifact?.path)
           : [];
         runInAction(() => {
-          this.upsertMessages(messagePage.messages ?? []);
+          this.upsertMessages(incomingMessages);
+          if (hasMoreMessages) {
+            this.latestSequence = Math.max(
+              ...conversationMessages.map((message) => message.sequence),
+            );
+          }
+          this.isHistoryLoading = hasMoreMessages;
           this.projectStatus = status || undefined;
+          const listedProject = this.projects.find(
+            (project) => project.project_id === projectId,
+          );
+          if (listedProject && status) {
+            listedProject.status = status;
+          }
           if (!sameArtifacts(this.artifacts, artifacts)) {
             this.artifacts = artifacts;
           }
@@ -258,12 +283,12 @@ class MasBfmStore {
           ) {
             this.archiveRefs = archiveRefs;
           }
-          this.error = archiveError
+          this.monitorError = archiveError
             ? `Не удалось получить список артефактов. ${errorText(archiveError)}`
             : undefined;
         });
 
-        if (isTerminal && archiveRefs) {
+        if (isTerminal && archiveRefs && !hasMoreMessages) {
           return;
         }
       } catch (error) {
@@ -271,7 +296,7 @@ class MasBfmStore {
           return;
         }
         runInAction(() => {
-          this.error = errorText(error);
+          this.monitorError = errorText(error);
         });
       }
 
@@ -279,9 +304,101 @@ class MasBfmStore {
     }
   }
 
+  get canStop() {
+    return (
+      !!this.synapseProjectId &&
+      !!this.projectStatus &&
+      !this.isProjectTerminal()
+    );
+  }
+
+  async refreshProjects() {
+    if (this.isProjectsLoading) {
+      return;
+    }
+
+    this.isProjectsLoading = true;
+
+    try {
+      const projects: SynapseProjectSummary[] = [];
+      let offset = 0;
+      while (true) {
+        const page = await SynapseClient.listProjects(offset);
+        projects.push(...page.projects);
+
+        if (
+          page.next_offset === null ||
+          page.next_offset === undefined ||
+          page.next_offset <= offset
+        ) {
+          break;
+        }
+        offset = page.next_offset;
+      }
+      runInAction(() => {
+        this.projects = projects;
+        this.projectsError = undefined;
+      });
+    } catch (error) {
+      runInAction(() => {
+        this.projectsError = errorText(error);
+      });
+    } finally {
+      runInAction(() => {
+        this.isProjectsLoading = false;
+      });
+    }
+  }
+
+  openProject(project: SynapseProjectSummary) {
+    if (project.project_id === this.synapseProjectId) {
+      return;
+    }
+    this.newChat();
+    this.synapseProjectId = project.project_id;
+    this.projectStatus = project.status;
+    this.isHistoryLoading = true;
+    this.startMonitoring();
+  }
+
+  async stopProject() {
+    const projectId = this.synapseProjectId;
+
+    if (!projectId || !this.canStop || this.isStopping || this.isSending) {
+      return;
+    }
+
+    const conversationVersion = this.conversationVersion;
+    this.isStopping = true;
+    this.error = undefined;
+
+    try {
+      await SynapseClient.stopProject(projectId);
+
+      if (conversationVersion === this.conversationVersion) {
+        this.stopMonitoring();
+        this.startMonitoring();
+      }
+
+      void this.refreshProjects();
+    } catch (error) {
+      if (conversationVersion === this.conversationVersion) {
+        runInAction(() => {
+          this.error = errorText(error);
+        });
+      }
+    } finally {
+      if (conversationVersion === this.conversationVersion) {
+        runInAction(() => {
+          this.isStopping = false;
+        });
+      }
+    }
+  }
+
   async sendDraft() {
     const content = this.draft.trim();
-    if (!content || this.isSending) {
+    if (!content || this.isSending || this.isStopping || this.isHistoryLoading) {
       return;
     }
     const prompt = this.addProjectContext(content);
@@ -312,6 +429,7 @@ class MasBfmStore {
           this.projectStatus = project.status?.trim().toLowerCase();
         });
         this.startMonitoring();
+        void this.refreshProjects();
       } else {
         const projectId = this.synapseProjectId;
         const message = await SynapseClient.sendMessage(projectId, prompt);
@@ -354,7 +472,10 @@ class MasBfmStore {
     this.latestSequence = 0;
     this.projectStatus = undefined;
     this.isSending = false;
+    this.isHistoryLoading = false;
+    this.isStopping = false;
     this.error = undefined;
+    this.monitorError = undefined;
   }
 }
 

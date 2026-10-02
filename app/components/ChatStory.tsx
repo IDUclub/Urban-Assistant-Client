@@ -1,4 +1,5 @@
 import { observer } from "mobx-react-lite";
+import MasBfmProjects from "@components/mas-bfm/MasBfmProjects";
 import MasBfmStore from "@lib/MasBfmStore";
 import ChatStore from "@lib/ChatStore";
 import DataStore from "@lib/DataStore";
@@ -367,6 +368,7 @@ const ChatStory = observer(() => {
           <span>Новый чат</span>
         </button>
       </div>
+      {MasBfmStore.isEnabled && <MasBfmProjects />}
       {!MasBfmStore.isEnabled && (
         <div className="border-t border-(--sidebar-divider-color) px-4 py-4 text-sm font-medium uppercase tracking-[0.14em] text-(--history-heading-color)">
           История чатов
