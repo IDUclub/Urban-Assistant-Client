@@ -12,7 +12,9 @@ import {
   MdArrowBack,
   MdClose,
   MdOutlineDescription,
+  MdStopCircle,
 } from "react-icons/md";
+import MasBfmProjectStatus from "@components/mas-bfm/MasBfmProjectStatus";
 import MasBfmStore from "@lib/MasBfmStore";
 import MapStore from "@lib/MapStore";
 import DataStore, { type ProjectScenario } from "@lib/DataStore";
@@ -158,56 +160,6 @@ function MessageCard({ message }: { message: SynapseMessage }) {
   return <StatusMessage message={message} />;
 }
 
-function ProjectStatus({ status }: { status?: string }) {
-  if (!status) {
-    return null;
-  }
-
-  const normalized = status.toLowerCase();
-  const isCompleted = normalized === "completed";
-  const isFailed = normalized === "failed";
-  const isCancelled = normalized === "cancelled";
-  const isWaiting = normalized === "waiting_approval_timeout";
-  const label = isCompleted
-    ? "Завершено"
-    : isFailed
-      ? "Ошибка выполнения"
-      : isCancelled
-        ? "Остановлено"
-        : isWaiting
-          ? "Ожидает подтверждения"
-          : "Выполняется";
-  const Icon = isCompleted
-    ? IoCheckmarkCircleOutline
-    : isFailed
-      ? IoAlertCircleOutline
-      : IoTimeOutline;
-
-  return (
-    <div
-      role="status"
-      className={`flex items-center gap-1.5 text-xs font-medium ${
-        isFailed
-          ? "text-red-600 customer-dark:text-red-300"
-          : isCompleted
-            ? "text-emerald-600 customer-dark:text-emerald-300"
-            : "text-content-muted"
-      }`}
-    >
-      <Icon
-        size={15}
-        aria-hidden="true"
-        className={
-          !isCompleted && !isFailed && !isCancelled && !isWaiting
-            ? "animate-pulse"
-            : undefined
-        }
-      />
-      <span>{label}</span>
-    </div>
-  );
-}
-
 const MasBfmChat = observer(() => {
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [projectSelectionOpen, setProjectSelectionOpen] = useState(false);
@@ -246,12 +198,17 @@ const MasBfmChat = observer(() => {
   const selectedContextLabel = selectedScenarioLabel
     ? `${selectedProjectLabel} / ${selectedScenarioLabel}`
     : selectedProjectLabel;
+  const error = MasBfmStore.error ?? MasBfmStore.monitorError;
   const hasConversation =
     MasBfmStore.messages.length > 0 ||
     MasBfmStore.isSending ||
     !!MasBfmStore.synapseProjectId ||
-    !!MasBfmStore.error;
-  const canSend = !!MasBfmStore.draft.trim() && !MasBfmStore.isSending;
+    !!error;
+  const canSend =
+    !!MasBfmStore.draft.trim() &&
+    !MasBfmStore.isSending &&
+    !MasBfmStore.isStopping &&
+    !MasBfmStore.isHistoryLoading;
   const mapHeight = "50vh";
   const visibleMapOffset = MapStore.isMapLayersAvailable
     ? isMapExpanded
@@ -270,6 +227,12 @@ const MasBfmChat = observer(() => {
       MapStore.restoreMapLayers(previousMapLayersRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    if (!MasBfmStore.synapseProjectId) {
+      MapStore.clearMapLayers();
+    }
+  }, [MasBfmStore.synapseProjectId]);
 
   useEffect(() => {
     const projectId = MasBfmStore.selectedProjectId;
@@ -315,7 +278,7 @@ const MasBfmChat = observer(() => {
       behavior: "smooth",
       block: "end",
     });
-  }, [MasBfmStore.messages.length, MasBfmStore.isSending, MasBfmStore.error]);
+  }, [MasBfmStore.messages.length, MasBfmStore.isSending, error]);
 
   useEffect(() => {
     if (!projectMenuOpen) {
@@ -375,7 +338,7 @@ const MasBfmChat = observer(() => {
                   <span className="rounded-full bg-brand-soft px-3 py-1 text-xs font-semibold tracking-wider text-brand-primary">
                     МАС БФМ
                   </span>
-                  <ProjectStatus status={MasBfmStore.projectStatus} />
+                  <MasBfmProjectStatus status={MasBfmStore.projectStatus} />
                 </div>
                 {MasBfmStore.messages.map((message) => (
                   <MessageCard key={message.id} message={message} />
@@ -385,19 +348,24 @@ const MasBfmChat = observer(() => {
                   archiveRefs={MasBfmStore.archiveRefs}
                   projectId={MasBfmStore.synapseProjectId}
                 />
+                {MasBfmStore.isHistoryLoading && (
+                  <div role="status" className="px-3 py-2 text-sm text-content-muted">
+                    Загружаем историю проекта…
+                  </div>
+                )}
                 {MasBfmStore.isSending && (
                   <div className="flex items-center gap-2 px-3 py-2 text-sm text-content-muted">
                     <span className="h-2 w-2 animate-pulse rounded-full bg-brand-primary" />
                     Отправляем запрос в МАС БФМ…
                   </div>
                 )}
-                {MasBfmStore.error && (
+                {error && (
                   <div className="flex items-start gap-2 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 customer-dark:border-red-900/50 customer-dark:bg-red-950/30 customer-dark:text-red-300">
                     <IoAlertCircleOutline
                       size={19}
                       className="mt-0.5 shrink-0"
                     />
-                    <span>{MasBfmStore.error}</span>
+                    <span>{error}</span>
                   </div>
                 )}
                 <div ref={messagesEndRef} />
@@ -590,6 +558,18 @@ const MasBfmChat = observer(() => {
                   </div>
                 )}
               </div>
+              {MasBfmStore.canStop && (
+                <button
+                  type="button"
+                  onClick={() => void MasBfmStore.stopProject()}
+                  disabled={MasBfmStore.isStopping || MasBfmStore.isSending}
+                  aria-label="Остановить процесс МАС БФМ"
+                  title="Остановить процесс"
+                  className="shrink-0 cursor-pointer text-red-600 hover:text-red-700 disabled:cursor-wait disabled:opacity-40"
+                >
+                  <MdStopCircle size={30} />
+                </button>
+              )}
               <button
                 type="button"
                 disabled={!canSend}

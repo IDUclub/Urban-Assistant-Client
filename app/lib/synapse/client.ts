@@ -2,6 +2,7 @@ import AuthStore from "@lib/AuthStore";
 
 const DEFAULT_WORKFLOW_ID = "urban_school_provisioning";
 const SYNAPSE_PROXY_URL = "/api/synapse";
+export const SYNAPSE_MESSAGES_PAGE_SIZE = 1000;
 
 type SynapseRunConfiguration = {
   _id: string;
@@ -18,6 +19,8 @@ type SynapseWorkflow = {
 export type SynapseProjectSummary = {
   project_id: string;
   status: string;
+  title?: string;
+  user_prompt?: string;
 };
 
 export type SynapseArtifact = {
@@ -241,6 +244,21 @@ class SynapseClient {
     });
   }
 
+  async listProjects(offset = 0) {
+    return this.request<{
+      projects: SynapseProjectSummary[];
+      next_offset: number | null;
+    }>(`/projects?limit=100&offset=${offset}&sort_by=created_at&sort_dir=desc`);
+  }
+
+  async stopProject(projectId: string) {
+    return this.request<unknown>(`/projects/${projectId}/stop`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+  }
+
   async getProject(projectId: string, signal?: AbortSignal) {
     return this.request<SynapseProject>(`/projects/${projectId}`, { signal });
   }
@@ -248,7 +266,7 @@ class SynapseClient {
   async getMessages(projectId: string, after = 0, signal?: AbortSignal) {
     const params = new URLSearchParams({
       after: String(after),
-      limit: "1000",
+      limit: String(SYNAPSE_MESSAGES_PAGE_SIZE),
       include_journal: "true",
     });
     return this.request<SynapseMessagesResponse>(
