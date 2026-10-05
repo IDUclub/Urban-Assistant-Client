@@ -1,3 +1,5 @@
+import useResizableMap from "@/hooks/useResizableMap";
+import CollapsibleChatInput from "@components/CollapsibleChatInput";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { observer } from "mobx-react-lite";
 import { IoIosSend } from "react-icons/io";
@@ -164,7 +166,7 @@ const MasBfmChat = observer(() => {
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [projectSelectionOpen, setProjectSelectionOpen] = useState(false);
   const [documentLibraryOpen, setDocumentLibraryOpen] = useState(false);
-  const [isMapExpanded, setIsMapExpanded] = useState(false);
+  const { mapHeight, isMapExpanded, toggleMapExpanded, resizeHandleProps } = useResizableMap();
   const menuRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -209,11 +211,8 @@ const MasBfmChat = observer(() => {
     !MasBfmStore.isSending &&
     !MasBfmStore.isStopping &&
     !MasBfmStore.isHistoryLoading;
-  const mapHeight = "50vh";
   const visibleMapOffset = MapStore.isMapLayersAvailable
-    ? isMapExpanded
-      ? mapHeight
-      : "25vh"
+    ? mapHeight
     : "4px";
 
   useEffect(() => {
@@ -270,7 +269,7 @@ const MasBfmChat = observer(() => {
     }
 
     textarea.style.height = "0px";
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 120)}px`;
+    textarea.style.height = `${Math.max(24, Math.min(textarea.scrollHeight, 120))}px`;
   }, [MasBfmStore.draft]);
 
   useEffect(() => {
@@ -320,7 +319,7 @@ const MasBfmChat = observer(() => {
     <>
       <section
         aria-label="Чат МАС БФМ"
-        className="relative flex h-dvh min-w-0 flex-col overflow-hidden bg-white px-8 pt-20 transition-[padding-bottom] duration-300 ease-out customer:bg-surface-page"
+        className="relative flex h-dvh min-w-0 flex-col overflow-hidden bg-white px-8 pt-20 customer:bg-surface-page"
         style={{ paddingBottom: `calc(1.5rem + ${visibleMapOffset})` }}
       >
         <div
@@ -385,6 +384,7 @@ const MasBfmChat = observer(() => {
               </h1>
             </div>
           )}
+          <CollapsibleChatInput canCollapse={hasConversation}>
           <div className="chat-input-shell relative mb-1.5 flex w-full shrink-0 flex-col rounded-3xl border border-gray-300 bg-white px-6 py-4 text-gray-950 shadow-gray-300 drop-shadow-lg customer-dark:border-ui-border-strong customer-dark:bg-surface-panel customer-dark:text-content-primary">
             <textarea
               ref={textareaRef}
@@ -585,19 +585,20 @@ const MasBfmChat = observer(() => {
               </button>
             </div>
           </div>
+          </CollapsibleChatInput>
         </div>
         {MapStore.isMapLayersAvailable && (
           <div
-            className="absolute inset-x-0 bottom-0 px-8 pb-6 pt-4 transition-transform duration-300 ease-out"
+            className="absolute inset-x-0 bottom-0 px-8 pb-6 pt-4"
             style={{
               height: mapHeight,
-              transform: isMapExpanded ? "translateY(0)" : "translateY(50%)",
             }}
           >
+            <div {...resizeHandleProps} />
             <div className="mx-auto h-full w-full max-w-7xl">
               <MapView
                 isExpanded={isMapExpanded}
-                onToggleExpanded={() => setIsMapExpanded((current) => !current)}
+                onToggleExpanded={toggleMapExpanded}
                 fitAllLayers
               />
             </div>

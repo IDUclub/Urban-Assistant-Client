@@ -1,3 +1,4 @@
+import useResizableMap from "@/hooks/useResizableMap";
 import { useEffect, useState } from "react";
 import { observer } from "mobx-react-lite";
 import ChatStore from "@lib/ChatStore";
@@ -13,7 +14,7 @@ const ChatSection = observer(() => {
     const { chatMessages, parsedContext, selectedContext, selectedScenario, isUserChatOpening } = ChatStore;
     const { userProjects, projectScenarios } = DataStore;
     const { isMapLayersAvailable, facadeScene } = MapStore;
-    const [isMapExpanded, setIsMapExpanded] = useState(false);
+    const { mapHeight, isMapExpanded, toggleMapExpanded, resizeHandleProps } = useResizableMap();
 
     useEffect(() => {
         if (facadeScene?.resultId) setIsMapExpanded(true);
@@ -24,10 +25,8 @@ const ChatSection = observer(() => {
     const selectedSceanrioItem = selectedProject?.id
         ? projectScenarios.get(selectedProject.id)?.find((scenario) => scenario.id === selectedScenario)
         : undefined;
-    const mapHeight = "50vh";
-    const collapsedMapOffset = "25vh";
     const visibleMapOffset = isMapLayersAvailable
-        ? (isMapExpanded ? mapHeight : collapsedMapOffset)
+        ? mapHeight
         : "4px";
     const selectedContextLabel = selectedContext === "nonproject"
         ? "Вне проекта"
@@ -46,7 +45,7 @@ const ChatSection = observer(() => {
             ) : null}
             <div className="min-h-0 flex-1 overflow-hidden">
                 <div
-                    className="mx-auto flex h-full w-full max-w-7xl flex-col px-8 pb-6 pt-2 transition-[padding-bottom] duration-300 ease-out"
+                    className="mx-auto flex h-full w-full max-w-7xl flex-col px-8 pb-6 pt-2"
                     style={{ paddingBottom: `calc(1.5rem + ${visibleMapOffset})` }}
                 >
                     <div className="min-h-0 flex-1 overflow-hidden">
@@ -75,17 +74,17 @@ const ChatSection = observer(() => {
             </div>
             {isMapLayersAvailable && (
                 <div
-                    className="absolute inset-x-0 bottom-0 px-8 pb-6 pt-4 transition-transform duration-300 ease-out"
+                    className="absolute inset-x-0 bottom-0 px-8 pb-6 pt-4"
                     style={{
                         height: mapHeight,
-                        transform: isMapExpanded ? "translateY(0)" : "translateY(50%)",
                         pointerEvents: "auto",
                     }}
                 >
+                    <div {...resizeHandleProps} />
                     <div className="mx-auto h-full w-full max-w-7xl">
                         <MapView
                             isExpanded={isMapExpanded}
-                            onToggleExpanded={() => setIsMapExpanded((current) => !current)}
+                            onToggleExpanded={toggleMapExpanded}
                         />
                     </div>
                 </div>
