@@ -1,3 +1,4 @@
+import CollapsibleChatInput from "@components/CollapsibleChatInput";
 import { AiOutlinePlusCircle } from "react-icons/ai";
 import { IoIosSend } from "react-icons/io";
 import { FaStopCircle } from "react-icons/fa";
@@ -830,7 +831,7 @@ const ChatInput = observer((
         if (!textarea) return;
 
         textarea.style.height = "0px";
-        const nextHeight = Math.min(textarea.scrollHeight, 24 * 3);
+        const nextHeight = Math.max(24, Math.min(textarea.scrollHeight, 24 * 3));
         textarea.style.height = `${nextHeight}px`;
     }, [currentInput]);
 
@@ -1130,7 +1131,9 @@ const ChatComponent = observer(function ChatComponent(
                 </div>
             </div>
             <div className="shrink-0 border-t border-gray-100 bg-white pt-4 customer-dark:border-ui-border customer-dark:bg-surface-page">
-                <ChatInput onSubmit={onSubmit}/>
+                <CollapsibleChatInput canCollapse>
+                    <ChatInput onSubmit={onSubmit}/>
+                </CollapsibleChatInput>
             </div>
         </div>
     )

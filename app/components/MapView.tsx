@@ -760,10 +760,12 @@ const MapView = observer(({
     const { mapLayers, isMapLayersAvailable } = MapStore;
     const [isMounted, setIsMounted] = useState(false);
     const [mapStyle, setMapStyle] = useState(LIGHT_MAP_STYLE);
+    const [isLayersExpanded, setIsLayersExpanded] = useState(true);
     const [isLegendExpanded, setIsLegendExpanded] = useState(true);
     const [activeLayerId, setActiveLayerId] = useState<string>();
     const [selectedFeature, setSelectedFeature] = useState<SelectedFeatureState | null>(null);
     const mapRef = useRef<MapRef | null>(null);
+    const containerRef = useRef<HTMLDivElement | null>(null);
     const propertyListRef = useRef<HTMLDivElement | null>(null);
     const mapboxToken = import.meta.env.VITE_MAPBOX_TOKEN;
     const geoJsonMessages = ChatStore.chatMessages.flatMap(
@@ -971,6 +973,16 @@ const MapView = observer(({
     }, [isMounted, activeLayer?.id, mapLayers.length]);
 
     useEffect(() => {
+        const container = containerRef.current;
+        if (!container || !isMounted) {
+            return;
+        }
+        const resizeObserver = new ResizeObserver(() => mapRef.current?.resize());
+        resizeObserver.observe(container);
+        return () => resizeObserver.disconnect();
+    }, [isMounted]);
+
+    useEffect(() => {
         setSelectedFeature(null);
     }, [mapLayers]);
 
@@ -981,7 +993,7 @@ const MapView = observer(({
     }, [selectedFeature]);
 
     return (
-        <div className="relative h-full w-full overflow-hidden rounded-3xl border border-gray-200 bg-white shadow-sm customer-dark:border-ui-border customer-dark:bg-surface-panel">
+        <div ref={containerRef} className="relative h-full w-full overflow-hidden rounded-3xl border border-gray-200 bg-white shadow-sm customer-dark:border-ui-border customer-dark:bg-surface-panel">
             <div className="pointer-events-none absolute left-1/2 top-4 z-10 -translate-x-1/2">
                 <button
                     type="button"
@@ -1124,12 +1136,20 @@ const MapView = observer(({
                 </Map>
             )}
             {isMapLayersAvailable && (
-                <div className="pointer-events-auto absolute left-4 top-4 z-10 h-[40%] w-[min(18rem,calc(100%-2rem))] max-w-72">
+                <div className={`pointer-events-auto absolute left-4 top-4 z-10 w-[min(18rem,calc(100%-2rem))] max-w-72 ${isLayersExpanded ? "h-[40%]" : ""}`}>
                     <div className="flex h-full flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white/30 px-4 py-3 shadow-sm backdrop-blur-lg customer-dark:border-ui-border customer-dark:bg-surface-panel/30">
-                        <div className="mb-3 shrink-0 text-xs font-semibold uppercase tracking-[0.14em] text-gray-500 customer-dark:text-content-muted">
-                            Отображаемые слои
-                        </div>
-                        <div className="min-h-0 flex flex-1 flex-col gap-1.5 overflow-y-auto">
+                        <button
+                            type="button"
+                            onClick={() => setIsLayersExpanded((current) => !current)}
+                            aria-expanded={isLayersExpanded}
+                            className={`flex shrink-0 cursor-pointer items-center justify-between gap-2 text-left text-gray-500 customer-dark:text-content-muted ${isLayersExpanded ? "mb-3" : ""}`}
+                        >
+                            <span className="text-xs font-semibold uppercase tracking-[0.14em]">
+                                Отображаемые слои
+                            </span>
+                            {isLayersExpanded ? <IoChevronDown size={16} /> : <IoChevronUp size={16} />}
+                        </button>
+                        <div className={`min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto ${isLayersExpanded ? "flex" : "hidden"}`}>
                             {mapLayers.map((layer) => {
                                 const categoricalStyle = getCategoricalLayerStyle(layer.name, layer.layer);
                                 const legendGradient = categoricalStyle?.legendGradient;
