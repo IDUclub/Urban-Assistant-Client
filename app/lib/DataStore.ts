@@ -97,6 +97,8 @@ function normalizeProjectScenario(value: any): ProjectScenario | null {
 
     if (!Number.isFinite(scenarioId) || !scenarioName) return null;
 
+    if (value?.parent_scenario?.name !== "Исходный региональный сценарий") return null;
+
     return {
         id: scenarioId,
         name: scenarioName,
