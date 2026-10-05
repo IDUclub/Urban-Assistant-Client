@@ -27,7 +27,8 @@
     "react-spinners": "^0.17.0",
     "rehype-raw": "^7.0.0",
     "rehype-sanitize": "^6.0.0",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "three": "^0.126.0"
   },
   "devDependencies": {
     "@react-router/dev": "7.14.0",

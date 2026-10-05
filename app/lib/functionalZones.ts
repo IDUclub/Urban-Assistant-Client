@@ -1,4 +1,4 @@
-export const FUNCTIONAL_ZONE_FALLBACK_COLOR = "#969696";
+export const FUNCTIONAL_ZONE_FALLBACK_COLOR = "#59956F";
 export const FUNCTIONAL_ZONE_ID_PROPERTY = "territory_zone";
 export const FUNCTIONAL_ZONE_NAME_PROPERTY = "Территориальная зона";
 export const FUNCTIONAL_ZONE_TYPE_PROPERTY = "Тип зоны";
@@ -15,6 +15,7 @@ const FUNCTIONAL_ZONE_COLORS_BY_ID: Record<number, string> = {
     11: "#faaf1c",
     12: "#f26142",
     13: "#782b2b",
+    15: "#0057D9",
 };
 
 const FUNCTIONAL_ZONE_NAMES_BY_ID: Record<number, string> = {
@@ -30,6 +31,7 @@ const FUNCTIONAL_ZONE_NAMES_BY_ID: Record<number, string> = {
     12: "Среднеэтажная жилая зона",
     13: "Многоэтажная жилая зона",
     14: "Неизвестная зона",
+    15: "Многофункциональная зона",
 };
 
 const FUNCTIONAL_ZONE_IDS_BY_VALUE: Record<string, number> = {

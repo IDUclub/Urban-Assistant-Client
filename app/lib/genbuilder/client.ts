@@ -4,6 +4,22 @@ import { readSseStream, type RawSseEvent } from "@lib/sse";
 type GenBuilderChatRequestBase = {
     userQuery: string;
     chatId?: string;
+    facadeStyleId?: string;
+};
+
+export type FacadeSceneResult = {
+    status: "ready";
+    resultId: string;
+    glbUrl: string;
+    origin: { lon: number; lat: number };
+    facadeStyle?: string;
+    buildings?: number;
+};
+
+export type FacadeStyle = {
+    id: string;
+    name: string;
+    code?: string;
 };
 
 export type GenBuilderScenarioChatRequest = GenBuilderChatRequestBase & {
@@ -30,6 +46,7 @@ export type GenBuilderStreamEvent =
     | { type: "progress"; stage?: string; content?: string }
     | { type: "file"; content: unknown }
     | { type: "result"; content: unknown; summary?: unknown }
+    | { type: "facade_scene"; content: unknown }
     | { type: "token"; content: string }
     | { type: "warning"; stage?: string; detail?: string; message?: string; code?: string }
     | { type: "error"; stage?: string; detail?: string; message?: string; code?: string }
@@ -100,6 +117,8 @@ function normalizeStreamEvent(rawEvent: RawSseEvent): GenBuilderStreamEvent {
                 content: record?.content ?? data,
                 summary: record?.summary,
             };
+        case "facade_scene":
+            return { type: "facade_scene", content: record?.content ?? data };
         case "token":
             return {
                 type: "token",
@@ -137,6 +156,10 @@ function createFormData(request: GenBuilderChatRequest) {
 
     formData.set("user_query", request.userQuery);
 
+    if (request.facadeStyleId) {
+        formData.set("facade_style", request.facadeStyleId);
+    }
+
     if ("blocksFile" in request) {
         formData.set("blocks_file", request.blocksFile, request.blocksFile.name);
 
@@ -166,6 +189,85 @@ function createFormData(request: GenBuilderChatRequest) {
     return formData;
 }
 
+export async function getFacadeStyles(baseUrl: string, accessToken: string, signal: AbortSignal): Promise<FacadeStyle[]> {
+    const { data } = await axios.get(`${baseUrl.replace(/\/+$/, "")}/facade-styles`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        signal,
+    });
+    const items = Array.isArray(data) ? data
+        : Array.isArray(data?.styles) ? data.styles
+            : Array.isArray(data?.facade_styles) ? data.facade_styles
+                : Array.isArray(data?.items) ? data.items
+                    : Array.isArray(data?.data) ? data.data : [];
+
+    return items.flatMap((item: unknown) => {
+        const record = asRecord(item);
+        const id = record?.id ?? record?.style_id;
+        if (typeof id !== "string" && typeof id !== "number") return [];
+        const name = asString(record?.name_ru) ?? asString(record?.name) ?? asString(record?.title) ?? asString(record?.label) ?? String(id);
+        const code = asString(record?.code) ?? asString(record?.slug) ?? asString(record?.style_key) ?? asString(record?.name_en);
+        return [{ id: String(id), name, code }];
+    });
+}
+
+export async function getFacadeStylePreview(
+    baseUrl: string,
+    accessToken: string,
+    styleId: string,
+    signal: AbortSignal,
+): Promise<Blob> {
+    const { data } = await axios.get(
+        `${baseUrl.replace(/\/+$/, "")}/facade-styles/${encodeURIComponent(styleId)}/preview.glb`,
+        {
+            headers: { Authorization: `Bearer ${accessToken}` },
+            responseType: "blob",
+            signal,
+        },
+    );
+    return data;
+}
+
+export function parseFacadeScene(value: unknown): FacadeSceneResult | undefined {
+    const record = asRecord(value);
+    const origin = asRecord(record?.origin);
+    const lon = origin?.lon;
+    const lat = origin?.lat;
+    const resultId = asString(record?.result_id);
+    const glbUrl = asString(record?.glb_url);
+
+    if (
+        record?.status !== "ready" || !resultId || !glbUrl ||
+        typeof lon !== "number" || typeof lat !== "number" ||
+        !Number.isFinite(lon) || !Number.isFinite(lat) ||
+        lon < -180 || lon > 180 || lat < -90 || lat > 90
+    ) return undefined;
+
+    const stats = asRecord(record.stats);
+    return {
+        status: "ready",
+        resultId,
+        glbUrl,
+        origin: { lon, lat },
+        facadeStyle: asString(record.facade_style),
+        buildings: typeof stats?.buildings === "number" ? stats.buildings : undefined,
+    };
+}
+
+export async function getFacadeSceneGlb(
+    baseUrl: string,
+    accessToken: string,
+    glbUrl: string,
+    signal: AbortSignal,
+): Promise<Blob> {
+    const url = `${baseUrl.replace(/\/+$/, "")}/${glbUrl.replace(/^\/+/, "")}`;
+    const { data } = await axios.get(url, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        responseType: "blob",
+        signal,
+    });
+    return data;
+}
+
 export async function streamGenBuilderChat({
     baseUrl,
     accessToken,
@@ -176,7 +278,7 @@ export async function streamGenBuilderChat({
 }: StreamGenBuilderChatOptions) {
     const normalizedBaseUrl = baseUrl.replace(/\/+$/, "");
     const { data } = await axios.post(
-        `${normalizedBaseUrl}/generate/chat/stream`,
+        `${normalizedBaseUrl}/generate/chat/stream${request.facadeStyleId ? "/3d" : ""}`,
         createFormData(request),
         {
             headers: {
