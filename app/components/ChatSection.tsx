@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { observer } from "mobx-react-lite";
 import ChatStore from "@lib/ChatStore";
 import NewUser from "@lib/AuthStore";
@@ -12,8 +12,12 @@ const ChatSection = observer(() => {
     const { firstName } = NewUser;
     const { chatMessages, parsedContext, selectedContext, selectedScenario, isUserChatOpening } = ChatStore;
     const { userProjects, projectScenarios } = DataStore;
-    const { isMapLayersAvailable } = MapStore;
+    const { isMapLayersAvailable, facadeScene } = MapStore;
     const [isMapExpanded, setIsMapExpanded] = useState(false);
+
+    useEffect(() => {
+        if (facadeScene?.resultId) setIsMapExpanded(true);
+    }, [facadeScene?.resultId]);
 
     // const hasGeoJsonMessages = chatMessages.some((message) => message.message.type === "geojson");
     const selectedProject = userProjects?.find((project) => project.id === Number(selectedContext));

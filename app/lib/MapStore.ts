@@ -10,6 +10,16 @@ type MapLayer = {
     };
 };
 
+export type MapFacadeScene = {
+    resultId: string;
+    glbUrl: string;
+    origin: { lon: number; lat: number };
+    facadeStyle?: string;
+    isVisible: boolean;
+};
+
+export type FacadeSceneLoadStatus = "loading" | "ready" | "error";
+
 function getRandomColor() {
     const red = 40 + Math.floor(Math.random() * 180);
     const green = 40 + Math.floor(Math.random() * 180);
@@ -21,6 +31,8 @@ function getRandomColor() {
 class MapDataStore {
     _idSeed: number = 0;
     mapLayers: MapLayer[] = [];
+    facadeScene?: MapFacadeScene;
+    facadeSceneLoadStatus?: FacadeSceneLoadStatus;
 
     getIdSeed() {
         return this._idSeed++;
@@ -31,7 +43,25 @@ class MapDataStore {
     }
 
     get isMapLayersAvailable() {
-        return !!this.mapLayers.length;
+        return !!this.mapLayers.length || !!this.facadeScene;
+    }
+
+    setFacadeScene(scene: Omit<MapFacadeScene, "isVisible">) {
+        this.facadeScene = { ...scene, isVisible: true };
+        this.facadeSceneLoadStatus = "loading";
+    }
+
+    setFacadeSceneLoadStatus(resultId: string, status: FacadeSceneLoadStatus) {
+        if (this.facadeScene?.resultId === resultId) {
+            this.facadeSceneLoadStatus = status;
+        }
+    }
+
+    toggleFacadeSceneVisibility() {
+        if (this.facadeScene) {
+            this.facadeScene.isVisible = !this.facadeScene.isVisible;
+            if (this.facadeScene.isVisible) this.facadeSceneLoadStatus = "loading";
+        }
     }
 
     private getLayerSignature(layer: {name: string; layer: any}) {
@@ -104,6 +134,8 @@ class MapDataStore {
 
     clearMapLayers() {
         this.mapLayers = [];
+        this.facadeScene = undefined;
+        this.facadeSceneLoadStatus = undefined;
     }
 
     constructor() {

@@ -12,6 +12,8 @@ export type GenBuilderSetupStatus =
     | "validating_file"
     | "ready"
     | "awaiting_parameters"
+    | "awaiting_3d_choice"
+    | "awaiting_facade_style"
     | "submitting"
     | "running"
     | "finished"
@@ -41,6 +43,25 @@ export type GenBuilderSetupMessage = {
     backendChatId?: string;
     errorText?: string;
     savePromptId?: string;
+    generate3d?: boolean;
+    facadeStyleId?: string;
+};
+
+export type GenBuilder3DPromptMessage = {
+    type: "genbuilder_3d_prompt";
+    setupId: string;
+    userQuery: string;
+    status: "choice" | "styles" | "submitted";
+    selectedStyleName?: string;
+};
+
+export type GenBuilderFacadeSceneMessage = {
+    type: "genbuilder_facade_scene";
+    resultId: string;
+    glbUrl: string;
+    origin: { lon: number; lat: number };
+    facadeStyle?: string;
+    buildings?: number;
 };
 
 export type GenBuilderClarificationMessage = {

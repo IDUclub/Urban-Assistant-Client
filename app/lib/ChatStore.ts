@@ -3,6 +3,7 @@ import { action, makeAutoObservable, reaction, runInAction } from "mobx";
 import AuthStore from "@lib/AuthStore";
 import DataStore from "@lib/DataStore";
 import {
+    parseFacadeScene,
     streamGenBuilderChat,
     type GenBuilderChatRequest,
     type GenBuilderStreamEvent,
@@ -12,6 +13,8 @@ import {
 } from "@lib/genbuilder/saveGeneratedBuildings";
 import {
     type FunctionalZoneSource,
+    type GenBuilder3DPromptMessage,
+    type GenBuilderFacadeSceneMessage,
     type GenBuilderClarificationMessage,
     type GenBuilderSavePromptMessage,
     type GenBuilderSetupMessage,
@@ -1056,6 +1059,7 @@ type VriStreamState = {
 
 type GenBuilderStreamState = {
     hasReceivedResult: boolean;
+    hasReceivedFacadeScene: boolean;
     hasReceivedClarification: boolean;
     hasStreamError: boolean;
 };
@@ -1095,6 +1099,8 @@ type ChatMessagePayload =
     | PzzSetupMessage
     | VriSetupMessage
     | GenBuilderSetupMessage
+    | GenBuilder3DPromptMessage
+    | GenBuilderFacadeSceneMessage
     | GenBuilderClarificationMessage
     | GenBuilderSavePromptMessage
     | GenPlannerCustomSetupMessage
@@ -1134,6 +1140,14 @@ function isVriSetupMessage(message: ChatMessage["message"]): message is VriSetup
 
 function isGenBuilderSetupMessage(message: ChatMessage["message"]): message is GenBuilderSetupMessage {
     return message.type === "genbuilder_setup";
+}
+
+function isGenBuilder3DPromptMessage(message: ChatMessage["message"]): message is GenBuilder3DPromptMessage {
+    return message.type === "genbuilder_3d_prompt";
+}
+
+function isGenBuilderFacadeSceneMessage(message: ChatMessage["message"]): message is GenBuilderFacadeSceneMessage {
+    return message.type === "genbuilder_facade_scene";
 }
 
 function isGenBuilderSavePromptMessage(
@@ -1717,7 +1731,9 @@ class ChatDataStore {
                         setup.status === "loading" ||
                         setup.status === "validating_file" ||
                         setup.status === "ready" ||
-                        setup.status === "awaiting_parameters"
+                        setup.status === "awaiting_parameters" ||
+                        setup.status === "awaiting_3d_choice" ||
+                        setup.status === "awaiting_facade_style"
                     );
 
                 if (shouldRemove) {
@@ -1745,6 +1761,11 @@ class ChatDataStore {
             this.chatMessages = this.chatMessages.filter((chatMessage) =>
                 chatMessage.type !== "response"
                 || !isGenBuilderClarificationMessage(chatMessage.message)
+                || !removedSetupIds.has(chatMessage.message.setupId)
+            );
+            this.chatMessages = this.chatMessages.filter((chatMessage) =>
+                chatMessage.type !== "response"
+                || !isGenBuilder3DPromptMessage(chatMessage.message)
                 || !removedSetupIds.has(chatMessage.message.setupId)
             );
         }
@@ -2166,6 +2187,20 @@ class ChatDataStore {
                 },
             });
         });
+
+        const lastFacadeScene = messages.findLast((message, index) =>
+            index > lastRequestIndex &&
+            message.type === "response" &&
+            isGenBuilderFacadeSceneMessage(message.message)
+        );
+        if (lastFacadeScene?.type === "response" && isGenBuilderFacadeSceneMessage(lastFacadeScene.message)) {
+            MapStore.setFacadeScene({
+                resultId: lastFacadeScene.message.resultId,
+                glbUrl: lastFacadeScene.message.glbUrl,
+                origin: lastFacadeScene.message.origin,
+                facadeStyle: lastFacadeScene.message.facadeStyle,
+            });
+        }
 
         if (
             typeof this.selectedContext === "number" &&
@@ -2786,6 +2821,89 @@ class ChatDataStore {
             : undefined;
     }
 
+    private getGenBuilder3DPromptMessage(setupId: string) {
+        const chatMessage = this.chatMessages.find((message) =>
+            message.type === "response" &&
+            isGenBuilder3DPromptMessage(message.message) &&
+            message.message.setupId === setupId
+        );
+        return chatMessage && isGenBuilder3DPromptMessage(chatMessage.message)
+            ? chatMessage.message : undefined;
+    }
+
+    requestGenBuilder3DChoice(message: string, setupId: string) {
+        const setup = this.getGenBuilderSetupMessage(setupId);
+        const userQuery = message.trim();
+        if (!setup || setup.status !== "awaiting_parameters" || !userQuery) return;
+
+        if (setup.mode === "files" && !this.genBuilderSetupFiles.get(setupId)?.blocks) {
+            setup.status = "ready";
+            setup.errorText = "Загрузите GeoJSON-файл функциональных зон.";
+            return;
+        }
+
+        setup.status = "awaiting_3d_choice";
+        setup.errorText = undefined;
+        this.chatMessages.push({
+            type: "request",
+            message: { type: "text", text: userQuery },
+        });
+        this.chatMessages.push({
+            type: "response",
+            message: {
+                type: "genbuilder_3d_prompt",
+                setupId,
+                userQuery,
+                status: "choice",
+            },
+        });
+    }
+
+    chooseGenBuilder3D(setupId: string, enabled: boolean) {
+        const setup = this.getGenBuilderSetupMessage(setupId);
+        const prompt = this.getGenBuilder3DPromptMessage(setupId);
+        if (!setup || !prompt || setup.status !== "awaiting_3d_choice" || prompt.status !== "choice") return;
+
+        if (enabled) {
+            prompt.status = "styles";
+            setup.status = "awaiting_facade_style";
+            return;
+        }
+
+        const userQuery = prompt.userQuery;
+        this.chatMessages = this.chatMessages.filter((message) =>
+            message.type !== "response" ||
+            !isGenBuilder3DPromptMessage(message.message) ||
+            message.message.setupId !== setupId
+        );
+        setup.generate3d = false;
+        setup.facadeStyleId = undefined;
+        setup.status = "awaiting_parameters";
+        void this.sendGenBuilderChatRequest(userQuery, setupId, false);
+    }
+
+    returnToGenBuilder3DChoice(setupId: string) {
+        const setup = this.getGenBuilderSetupMessage(setupId);
+        const prompt = this.getGenBuilder3DPromptMessage(setupId);
+        if (!setup || !prompt || setup.status !== "awaiting_facade_style" || prompt.status !== "styles") return;
+
+        prompt.status = "choice";
+        setup.status = "awaiting_3d_choice";
+    }
+
+    confirmGenBuilderFacadeStyle(setupId: string, styleId: string, styleName: string) {
+        const setup = this.getGenBuilderSetupMessage(setupId);
+        const prompt = this.getGenBuilder3DPromptMessage(setupId);
+        if (!setup || !prompt || setup.status !== "awaiting_facade_style" || prompt.status !== "styles" || !styleId) return;
+
+        prompt.status = "submitted";
+        prompt.selectedStyleName = styleName;
+        setup.generate3d = true;
+        setup.facadeStyleId = styleId;
+        setup.status = "awaiting_parameters";
+        void this.sendGenBuilderChatRequest(prompt.userQuery, setupId, false);
+    }
+
     private getActiveGenBuilderSetupMessage() {
         for (let index = this.chatMessages.length - 1; index >= 0; index -= 1) {
             const chatMessage = this.chatMessages[index];
@@ -3151,6 +3269,37 @@ class ChatDataStore {
                 );
                 return;
             }
+            case "facade_scene": {
+                const scene = parseFacadeScene(streamEvent.content);
+                if (!scene) {
+                    this.chatMessages.push({
+                        type: "response",
+                        message: { type: "warning", text: "GenBuilder вернул некорректные данные 3D-модели." },
+                    });
+                    return;
+                }
+
+                streamState.hasReceivedFacadeScene = true;
+                MapStore.setFacadeScene({
+                    resultId: scene.resultId,
+                    glbUrl: scene.glbUrl,
+                    origin: scene.origin,
+                    facadeStyle: scene.facadeStyle,
+                });
+                this.chatMessages.push({
+                    type: "response",
+                    message: {
+                        type: "genbuilder_facade_scene",
+                        resultId: scene.resultId,
+                        glbUrl: scene.glbUrl,
+                        origin: scene.origin,
+                        facadeStyle: scene.facadeStyle,
+                        buildings: scene.buildings,
+                    },
+                });
+                this.currentStatus = "3D-модель застройки получена";
+                return;
+            }
             case "token":
                 this.streamedResponse += streamEvent.content;
                 return;
@@ -3207,10 +3356,10 @@ class ChatDataStore {
             return;
         }
 
-        if (streamState.hasReceivedResult) {
+        if (streamState.hasReceivedResult || streamState.hasReceivedFacadeScene) {
             setupMessage.status = "finished";
 
-            if (setupMessage.mode === "scenario" && !setupMessage.savePromptId) {
+            if (streamState.hasReceivedResult && setupMessage.mode === "scenario" && !setupMessage.savePromptId) {
                 const promptId = `genbuilder-save-${this.currentGenBuilderSavePromptId}`;
                 this.currentGenBuilderSavePromptId += 1;
                 setupMessage.savePromptId = promptId;
@@ -3245,6 +3394,11 @@ class ChatDataStore {
             setupMessage.status !== "awaiting_parameters" ||
             !userQuery
         ) return;
+
+        if (setupMessage.generate3d && !setupMessage.facadeStyleId) {
+            setupMessage.errorText = "Выберите стиль фасада для 3D-генерации.";
+            return;
+        }
 
         let request: GenBuilderChatRequest;
         const backendChatId = setupMessage.backendChatId ?? this.getActiveBackendChatId();
@@ -3291,6 +3445,7 @@ class ChatDataStore {
                 userQuery,
                 blocksFile,
                 chatId: backendChatId,
+                facadeStyleId: setupMessage.facadeStyleId,
                 ...(existingBuildingsClarification?.existingBuildingsChoice === "file" && files?.existingBuildings
                     ? { buildingsFile: files.existingBuildings }
                     : {}),
@@ -3330,6 +3485,7 @@ class ChatDataStore {
                 source: setupMessage.selectedSource,
                 projectId: setupMessage.projectId,
                 chatId: backendChatId,
+                facadeStyleId: setupMessage.facadeStyleId,
             };
         }
 
@@ -3382,6 +3538,7 @@ class ChatDataStore {
 
         const streamState: GenBuilderStreamState = {
             hasReceivedResult: false,
+            hasReceivedFacadeScene: false,
             hasReceivedClarification: false,
             hasStreamError: false,
         };
@@ -5660,7 +5817,9 @@ class ChatDataStore {
             }
 
             if (setupMessage.status === "awaiting_parameters") {
-                return this.sendGenBuilderChatRequest(message, setupMessage.id);
+                return setupMessage.generate3d === undefined
+                    ? this.requestGenBuilder3DChoice(message, setupMessage.id)
+                    : this.sendGenBuilderChatRequest(message, setupMessage.id);
             }
 
             this.chatMessages.push({
@@ -5669,6 +5828,10 @@ class ChatDataStore {
                     type: "info",
                     text: setupMessage.status === "submitting" || setupMessage.status === "running"
                         ? "Дождитесь завершения текущей генерации."
+                        : setupMessage.status === "awaiting_3d_choice"
+                            ? "Выберите, нужно ли отображать застройку в 3D."
+                            : setupMessage.status === "awaiting_facade_style"
+                                ? "Выберите стиль фасада и подтвердите выбор."
                         : setupMessage.status === "validating_file"
                             ? "Дождитесь завершения проверки файла."
                             : setupMessage.mode === "files"
