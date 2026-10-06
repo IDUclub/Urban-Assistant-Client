@@ -14,11 +14,13 @@ const ChatSection = observer(() => {
     const { chatMessages, parsedContext, selectedContext, selectedScenario, isUserChatOpening } = ChatStore;
     const { userProjects, projectScenarios } = DataStore;
     const { isMapLayersAvailable, facadeScene } = MapStore;
-    const { mapHeight, isMapExpanded, toggleMapExpanded, resizeHandleProps } = useResizableMap();
+    const { mapHeight, isMapExpanded, expandMap, toggleMapExpanded, resizeHandleProps } = useResizableMap();
 
     useEffect(() => {
-        if (facadeScene?.resultId) setIsMapExpanded(true);
-    }, [facadeScene?.resultId]);
+        if (facadeScene?.resultId) {
+            expandMap();
+        }
+    }, [facadeScene?.resultId, expandMap]);
 
     // const hasGeoJsonMessages = chatMessages.some((message) => message.message.type === "geojson");
     const selectedProject = userProjects?.find((project) => project.id === Number(selectedContext));

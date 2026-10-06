@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useCallback, useState, type KeyboardEvent, type PointerEvent } from "react";
 
 const MIN_MAP_HEIGHT_VH = 20;
 const MAX_MAP_HEIGHT_VH = 80;
@@ -6,6 +6,7 @@ const MAX_MAP_HEIGHT_VH = 80;
 export default function useResizableMap() {
   const [mapHeightVh, setMapHeightVh] = useState(25);
   const isMapExpanded = mapHeightVh >= 50;
+  const expandMap = useCallback(() => setMapHeightVh((height) => Math.max(height, 50)), []);
 
   const resizeHandlers = {
     onPointerDown(event: PointerEvent<HTMLDivElement>) {
@@ -53,6 +54,7 @@ export default function useResizableMap() {
   return {
     mapHeight: `${mapHeightVh}vh`,
     isMapExpanded,
+    expandMap,
     toggleMapExpanded: () => setMapHeightVh(isMapExpanded ? 25 : 50),
     resizeHandleProps: {
       ...resizeHandlers,

@@ -5,8 +5,9 @@ import {
   Outlet,
   Scripts,
   ScrollRestoration,
+  useLocation,
 } from "react-router";
-import { useEffect } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { observer } from "mobx-react-lite";
 import type { Route } from "./+types/root";
 import AuthStore from "@lib/AuthStore";
@@ -17,6 +18,8 @@ import UserMenu from "@components/UserMenu";
 import DocumentUploadStatus from "@components/documents/DocumentUploadStatus";
 import { BRAND_THEME } from "@/config";
 import "./app.css";
+
+const MasBfmChatFiles = lazy(() => import("@components/mas-bfm/MasBfmChatFiles"));
 
 export const links: Route.LinksFunction = () => [
   {
@@ -36,6 +39,7 @@ export const links: Route.LinksFunction = () => [
 ];
 
 export function Layout({ children }: { children: React.ReactNode }) {
+  const { pathname } = useLocation();
   return (
     <html lang="ru" data-brand={BRAND_THEME} data-color-scheme="light">
       <head>
@@ -46,6 +50,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
       </head>
       <body>
         <div className="fixed right-4 top-4 z-50 flex items-start gap-2">
+          {pathname === "/chat" && (
+            <Suspense fallback={null}>
+              <MasBfmChatFiles />
+            </Suspense>
+          )}
           <MasBfmToggle />
           <ThemeToggle/>
           <UserMenu />
