@@ -6,6 +6,7 @@ const MAX_MAP_HEIGHT_VH = 80;
 export default function useResizableMap() {
   const [mapHeightVh, setMapHeightVh] = useState(25);
   const isMapExpanded = mapHeightVh >= 50;
+  const expandMap = useCallback(() => setMapHeightVh((height) => Math.max(height, 50)), []);
 
   const toggleMapExpanded = useCallback(() => {
     setMapHeightVh((height) => height >= 50 ? 25 : 50);
@@ -57,6 +58,7 @@ export default function useResizableMap() {
   return {
     mapHeight: `${mapHeightVh}vh`,
     isMapExpanded,
+    expandMap,
     toggleMapExpanded,
     resizeHandleProps: {
       ...resizeHandlers,
