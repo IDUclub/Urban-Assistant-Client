@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useCallback, useState, type KeyboardEvent, type PointerEvent } from "react";
 
 const MIN_MAP_HEIGHT_VH = 20;
 const MAX_MAP_HEIGHT_VH = 80;
@@ -6,6 +6,10 @@ const MAX_MAP_HEIGHT_VH = 80;
 export default function useResizableMap() {
   const [mapHeightVh, setMapHeightVh] = useState(25);
   const isMapExpanded = mapHeightVh >= 50;
+
+  const toggleMapExpanded = useCallback(() => {
+    setMapHeightVh((height) => height >= 50 ? 25 : 50);
+  }, []);
 
   const resizeHandlers = {
     onPointerDown(event: PointerEvent<HTMLDivElement>) {
@@ -53,7 +57,7 @@ export default function useResizableMap() {
   return {
     mapHeight: `${mapHeightVh}vh`,
     isMapExpanded,
-    toggleMapExpanded: () => setMapHeightVh(isMapExpanded ? 25 : 50),
+    toggleMapExpanded,
     resizeHandleProps: {
       ...resizeHandlers,
       role: "slider",
@@ -63,7 +67,7 @@ export default function useResizableMap() {
       "aria-valuemax": MAX_MAP_HEIGHT_VH,
       "aria-valuenow": Math.round(mapHeightVh),
       "aria-orientation": "vertical" as const,
-      className: "absolute inset-x-8 top-0 z-20 flex h-4 touch-none cursor-ns-resize items-center justify-center focus-visible:outline-2 focus-visible:outline-brand-primary",
+      className: "absolute inset-x-8 top-0 z-20 flex h-6 touch-none cursor-ns-resize items-center justify-center focus-visible:outline-2 focus-visible:outline-brand-primary",
       children: <span className="h-1 w-12 rounded-full bg-slate-400" />,
     },
   };

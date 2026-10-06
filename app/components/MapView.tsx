@@ -6,7 +6,8 @@ import {
     MdOutlineVisibilityOff,
     MdDownload
 } from "react-icons/md";
-import Map, { Layer, Source } from "react-map-gl/mapbox";
+import { Layer, Source } from "react-map-gl/mapbox";
+import MapCanvas from "@components/MapCanvas";
 import type { MapRef } from "react-map-gl/mapbox";
 import type { MapMouseEvent } from "react-map-gl/mapbox";
 import type { Feature, Geometry } from "geojson";
@@ -769,7 +770,6 @@ const MapView = observer(({
     const [selectedFeature, setSelectedFeature] = useState<SelectedFeatureState | null>(null);
     const [facadeSceneError, setFacadeSceneError] = useState<string>();
     const mapRef = useRef<MapRef | null>(null);
-    const containerRef = useRef<HTMLDivElement | null>(null);
     const propertyListRef = useRef<HTMLDivElement | null>(null);
     const mapboxToken = import.meta.env.VITE_MAPBOX_TOKEN;
     const geoJsonMessages = ChatStore.chatMessages.flatMap(
@@ -1068,16 +1068,6 @@ const MapView = observer(({
     }, [isMounted, activeLayer?.id, mapLayers.length]);
 
     useEffect(() => {
-        const container = containerRef.current;
-        if (!container || !isMounted) {
-            return;
-        }
-        const resizeObserver = new ResizeObserver(() => mapRef.current?.resize());
-        resizeObserver.observe(container);
-        return () => resizeObserver.disconnect();
-    }, [isMounted]);
-
-    useEffect(() => {
         setSelectedFeature(null);
     }, [mapLayers]);
 
@@ -1088,7 +1078,7 @@ const MapView = observer(({
     }, [selectedFeature]);
 
     return (
-        <div ref={containerRef} className="relative h-full w-full overflow-hidden rounded-3xl border border-gray-200 bg-white shadow-sm customer-dark:border-ui-border customer-dark:bg-surface-panel">
+        <div className="relative h-full w-full overflow-hidden rounded-3xl border border-gray-200 bg-white shadow-sm customer-dark:border-ui-border customer-dark:bg-surface-panel">
             <div className="pointer-events-none absolute left-1/2 top-4 z-10 -translate-x-1/2">
                 <button
                     type="button"
@@ -1104,8 +1094,8 @@ const MapView = observer(({
                     Loading map...
                 </div>
             ) : (
-                <Map
-                    ref={mapRef}
+                <MapCanvas
+                    mapRef={mapRef}
                     interactiveLayerIds={interactiveLayerIds}
                     initialViewState={initialViewState}
                     mapStyle={mapStyle}
@@ -1228,7 +1218,7 @@ const MapView = observer(({
                             />
                         </Source>
                     )}
-                </Map>
+                </MapCanvas>
             )}
             {isMapLayersAvailable && (
                 <div className={`pointer-events-auto absolute left-4 top-4 z-10 w-[min(18rem,calc(100%-2rem))] max-w-72 ${isLayersExpanded ? "h-[40%]" : ""}`}>
