@@ -129,10 +129,12 @@ export default function MasBfmArtifacts({
   artifacts,
   archiveRefs,
   projectId,
+  listOnly = false,
 }: {
   artifacts: SynapseArtifact[];
   archiveRefs: SynapseArchiveRef[];
   projectId?: string;
+  listOnly?: boolean;
 }) {
   const [error, setError] = useState<string>();
   const [archivedContents, setArchivedContents] = useState<
@@ -140,6 +142,10 @@ export default function MasBfmArtifacts({
   >({});
 
   useEffect(() => {
+    if (listOnly) {
+      return;
+    }
+
     const controller = new AbortController();
     const spilledGeoJson = artifacts.filter(
       (artifact) =>
@@ -186,7 +192,7 @@ export default function MasBfmArtifacts({
     });
 
     return () => controller.abort();
-  }, [archiveRefs, artifacts, projectId]);
+  }, [archiveRefs, artifacts, projectId, listOnly]);
 
   const items = useMemo(
     () =>
@@ -215,14 +221,14 @@ export default function MasBfmArtifacts({
           ? (archivedContents[artifact.archive_ref_id] ?? artifact.content)
           : artifact.content;
         const artifactWithContent = { ...artifact, content };
-        const geoJson = parseGeoJson(artifactWithContent);
+        const geoJson = listOnly ? undefined : parseGeoJson(artifactWithContent);
         return {
           artifact,
           geoJson,
           isGeoJson: looksLikeGeoJson(artifact) || !!geoJson,
         };
       }),
-    [archiveRefs, archivedContents, artifacts],
+    [archiveRefs, archivedContents, artifacts, listOnly],
   );
   const mapLayers = useMemo(
     () =>
@@ -233,8 +239,10 @@ export default function MasBfmArtifacts({
   );
 
   useEffect(() => {
-    MapStore.setMapLayers(mapLayers);
-  }, [mapLayers]);
+    if (!listOnly) {
+      MapStore.setMapLayers(mapLayers);
+    }
+  }, [mapLayers, listOnly]);
 
   if (!items.length) {
     return null;
@@ -277,9 +285,11 @@ export default function MasBfmArtifacts({
 
   return (
     <section aria-label="Артефакты МАС БФМ" className="mt-2">
-      <h2 className="mb-2 px-1 text-xs font-semibold uppercase tracking-wider text-content-muted">
-        Артефакты
-      </h2>
+      {!listOnly && (
+        <h2 className="mb-2 px-1 text-xs font-semibold uppercase tracking-wider text-content-muted">
+          Артефакты
+        </h2>
+      )}
       <div className="flex flex-col gap-2">
         {items.map(({ artifact, geoJson, isGeoJson }) => {
           const name = fileName(artifact.path);
@@ -302,7 +312,7 @@ export default function MasBfmArtifacts({
                 </div>
                 <div className="mt-0.5 text-xs text-content-muted">
                   {isGeoJson
-                    ? geoJson
+                    ? geoJson && !listOnly
                       ? "GeoJSON · показан на карте"
                       : "GeoJSON"
                     : "Файл"}
