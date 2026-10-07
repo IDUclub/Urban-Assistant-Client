@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState, type RefObject } from "react"
 import { flushSync } from "react-dom";
 import Map, { type MapProps, type MapRef } from "react-map-gl/mapbox";
 
-const CAMERA_FIELDS = ["longitude", "latitude", "zoom", "bearing", "pitch", "elevation"];
-const PADDING_SIDES = ["top", "bottom", "left", "right"];
+const CAMERA_FIELDS = ["longitude", "latitude", "zoom", "bearing", "pitch"] as const;
+const PADDING_SIDES = ["top", "bottom", "left", "right"] as const;
 
 type MapCanvasProps = Omit<MapProps, "viewState"> & {
     mapRef: RefObject<MapRef | null>;
