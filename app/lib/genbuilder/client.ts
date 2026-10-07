@@ -109,7 +109,7 @@ function normalizeStreamEvent(rawEvent: RawSseEvent): GenBuilderStreamEvent {
         case "file":
             return {
                 type: "file",
-                content: record?.content ?? data,
+                content: data,
             };
         case "result":
             return {

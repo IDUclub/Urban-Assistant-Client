@@ -394,10 +394,10 @@ function getPlannerErrorMessage(value: unknown, fallback: string) {
 
 function isGeoJsonLayerUri(value: unknown) {
     const uri = toString(value);
-    if (!uri) return false;
+    if (!uri || (!uri.includes("/") && !/\.geojson(?:$|[?#])/i.test(uri))) return false;
 
     try {
-        const parsedUrl = new URL(uri);
+        const parsedUrl = new URL(uri, "https://download.invalid");
         return parsedUrl.protocol === "http:" || parsedUrl.protocol === "https:";
     } catch {
         return false;
@@ -406,7 +406,7 @@ function isGeoJsonLayerUri(value: unknown) {
 
 function resolveServiceFileUrl(value: unknown, sourceService: unknown) {
     const uri = toString(value);
-    if (!uri) {
+    if (!uri || !isSafeDownloadUri(uri)) {
         return;
     }
 
@@ -414,7 +414,7 @@ function resolveServiceFileUrl(value: unknown, sourceService: unknown) {
     const serviceBaseUrl = sourceServiceName ? SERVICE_API_BASE_URLS[sourceServiceName] : undefined;
 
     if (!serviceBaseUrl) {
-        return isGeoJsonLayerUri(uri) ? uri : undefined;
+        return uri;
     }
 
     try {
@@ -422,7 +422,17 @@ function resolveServiceFileUrl(value: unknown, sourceService: unknown) {
         const originalUrl = new URL(uri, serviceUrl.origin);
         const layerPath = originalUrl.pathname.match(/\/(?:files|layers)\/.*$/)?.[0];
         if (!layerPath) {
-            return isGeoJsonLayerUri(uri) ? uri : undefined;
+            if (/^https?:\/\//i.test(uri) || uri.startsWith("//")) return uri;
+
+            const basePath = serviceUrl.pathname.replace(/\/+$/, "");
+            const path = originalUrl.pathname;
+            const filePath = path === basePath || path.startsWith(`${basePath}/`)
+                ? path
+                : `${basePath}${path}`;
+            return new URL(
+                `${filePath}${originalUrl.search}${originalUrl.hash}`,
+                serviceUrl.origin,
+            ).toString();
         }
 
         return new URL(
@@ -430,8 +440,24 @@ function resolveServiceFileUrl(value: unknown, sourceService: unknown) {
             serviceUrl.origin,
         ).toString();
     } catch {
-        return isGeoJsonLayerUri(uri) ? uri : undefined;
+        return uri;
     }
+}
+
+function resolvePayloadFileUrl(
+    value: unknown,
+    record?: Record<string, any>,
+    content?: Record<string, any>,
+    fallbackSourceService?: unknown,
+) {
+    const sourceService =
+        content?.source_service ?? content?.sourceService ??
+        content?.service_name ?? content?.serviceName ?? content?.service ??
+        record?.source_service ?? record?.sourceService ??
+        record?.service_name ?? record?.serviceName ?? record?.service ??
+        record?.mcp_source ?? fallbackSourceService;
+
+    return resolveServiceFileUrl(value, sourceService);
 }
 
 function isSafeDownloadUri(value: unknown) {
@@ -685,20 +711,27 @@ function isGeoJsonFilePayload(content: Record<string, any>) {
 function extractGeoJsonFileLayer(
     payload: unknown,
     fallbackName = "GeoJSON layer",
+    fallbackSourceService?: unknown,
 ): UserChatLayer | undefined {
     const parsed = parseJsonValue(payload);
     const record = asRecord(parsed);
     if (!record) return undefined;
 
     const content = asRecord(record.content) ?? record;
-    if (!isGeoJsonFilePayload(content)) return undefined;
+    if (!isGeoJsonFilePayload({ ...record, ...content })) return undefined;
 
-    const url = resolveServiceFileUrl(
+    const url = resolvePayloadFileUrl(
         content.url ??
         content.download_url ??
         content.downloadUrl ??
-        content.uri,
-        content.source_service ?? record.source_service,
+        content.uri ??
+        record.url ??
+        record.download_url ??
+        record.downloadUrl ??
+        record.uri,
+        record,
+        content,
+        fallbackSourceService,
     );
 
     if (!url) return undefined;
@@ -767,20 +800,34 @@ function extractLayersFromUnknown(
     ));
 }
 
-function extractDownloadFileMessage(payload: unknown): DownloadFileMessage | undefined {
+function extractDownloadFileMessage(
+    payload: unknown,
+    fallbackSourceService?: unknown,
+): DownloadFileMessage | undefined {
     const parsed = parseJsonValue(payload);
     const record = asRecord(parsed);
     if (!record) return undefined;
 
     const content = asRecord(record.content) ?? record;
-    const downloadUrl = toString(
-        content.download_url ??
-        content.downloadUrl ??
-        record.download_url ??
-        record.downloadUrl,
+    const explicitDownloadUrl =
+        content.download_url ?? content.downloadUrl ??
+        record.download_url ?? record.downloadUrl;
+    if (!explicitDownloadUrl && isGeoJsonFilePayload({ ...record, ...content })) {
+        return undefined;
+    }
+
+    const downloadUrl = resolvePayloadFileUrl(
+        explicitDownloadUrl ??
+        content.url ??
+        content.uri ??
+        record.url ??
+        record.uri,
+        record,
+        content,
+        fallbackSourceService,
     );
 
-    if (!downloadUrl || !isSafeDownloadUri(downloadUrl)) return undefined;
+    if (!downloadUrl) return undefined;
 
     return {
         type: "file",
@@ -846,9 +893,11 @@ function getGenBuilderInputLayer(payload: unknown, eventName?: string): UserChat
     const record = asRecord(payload);
     const content = asRecord(record?.content) ?? record;
     const displayName = GENBUILDER_INPUT_LAYER_NAMES[toString(content?.name)?.toLowerCase() ?? ""];
-    const url = resolveServiceFileUrl(
-        content?.url,
-        content?.source_service ?? record?.source_service,
+    const url = resolvePayloadFileUrl(
+        content?.url ?? content?.download_url ?? content?.downloadUrl ?? content?.uri ??
+        record?.url ?? record?.download_url ?? record?.downloadUrl ?? record?.uri,
+        record,
+        content,
     );
 
     return displayName && url
@@ -2044,21 +2093,25 @@ class ChatDataStore {
 
             if (chunkKind === "file") {
                 const layer = extractGeoJsonFileLayer(parsed, "Результат проверки ПЗЗ");
+                if (layer) {
+                    this.commitStreamedResponse();
+                    this.chatMessages.push({
+                        type: "response",
+                        message: {
+                            type: "geojson",
+                            name: layer.name,
+                            layer: layer.layer,
+                        },
+                    });
+                    this.addGeoJsonLayerToMap(layer, { showError: true });
+                    return;
+                }
 
-                if (!layer) return;
-
-                this.commitStreamedResponse();
-
-                this.chatMessages.push({
-                    type: "response",
-                    message: {
-                        type: "geojson",
-                        name: layer.name,
-                        layer: layer.layer,
-                    },
-                });
-
-                this.addGeoJsonLayerToMap(layer, { showError: true });
+                const file = extractDownloadFileMessage(parsed);
+                if (file) {
+                    this.commitStreamedResponse();
+                    this.chatMessages.push({ type: "response", message: file });
+                }
 
                 return;
             }
@@ -3225,6 +3278,19 @@ class ChatDataStore {
                 const inputLayer = getGenBuilderInputLayer(streamEvent.content, "file");
                 if (inputLayer) {
                     this.appendGeoJsonLayer(inputLayer, { accessToken: AuthStore.accessToken });
+                    return;
+                }
+
+                const layer = getStreamFileLayer(streamEvent.content, "file");
+                if (layer) {
+                    this.appendGeoJsonLayer(layer, { accessToken: AuthStore.accessToken });
+                    return;
+                }
+
+                const file = extractDownloadFileMessage(streamEvent.content);
+                if (file) {
+                    this.commitStreamedResponse();
+                    this.chatMessages.push({ type: "response", message: file });
                 }
                 return;
             }
@@ -4526,6 +4592,15 @@ class ChatDataStore {
             };
         }
 
+        if (getStreamChunkKind(payload, eventName) === "file") {
+            const file = extractDownloadFileMessage(payload);
+            if (file) {
+                this.commitStreamedResponse();
+                this.chatMessages.push({ type: "response", message: file });
+                return streamState;
+            }
+        }
+
         const reportText = getVriReportText(payload, eventName);
         const nextStreamState = reportText !== undefined
             ? this.appendVriReport(reportText, streamState)
@@ -4971,6 +5046,18 @@ class ChatDataStore {
                 }
                 return;
             case "unknown":
+                if (getStreamChunkKind(streamEvent.data, streamEvent.eventName) === "file") {
+                    const layer = getStreamFileLayer(streamEvent.data, "file");
+                    if (layer) {
+                        this.appendGeoJsonLayer(layer);
+                    } else {
+                        const file = extractDownloadFileMessage(streamEvent.data);
+                        if (file) {
+                            this.commitStreamedResponse();
+                            this.chatMessages.push({ type: "response", message: file });
+                        }
+                    }
+                }
                 return;
         }
     }
@@ -6160,7 +6247,7 @@ class ChatDataStore {
                 }
 
                 const downloadFile = userMessage.role === "assistant" && part.kind === "file"
-                    ? extractDownloadFileMessage(part.payload)
+                    ? extractDownloadFileMessage(part.payload, part.mcp_source)
                     : undefined;
 
                 if (downloadFile) {
@@ -6182,6 +6269,7 @@ class ChatDataStore {
                             ? extractGeoJsonFileLayer(
                                 part.payload,
                                 getLayerName(part.payload) ?? HISTORY_LAYER_FALLBACK_NAME,
+                                part.mcp_source,
                             )
                             : undefined)
                     )
