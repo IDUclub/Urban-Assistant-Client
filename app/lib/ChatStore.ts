@@ -110,6 +110,7 @@ type TableRow = Record<string, unknown>;
 type UserChatPartBase = {
     part_seq: number;
     mcp_source: string | null;
+    source_service?: string | null;
     created_at: string;
 };
 
@@ -452,10 +453,11 @@ function resolvePayloadFileUrl(
 ) {
     const sourceService =
         content?.source_service ?? content?.sourceService ??
-        content?.service_name ?? content?.serviceName ?? content?.service ??
         record?.source_service ?? record?.sourceService ??
+        fallbackSourceService ??
+        content?.service_name ?? content?.serviceName ?? content?.service ??
         record?.service_name ?? record?.serviceName ?? record?.service ??
-        record?.mcp_source ?? fallbackSourceService;
+        record?.mcp_source;
 
     return resolveServiceFileUrl(value, sourceService);
 }
@@ -6216,6 +6218,7 @@ class ChatDataStore {
                 .sort((left, right) => left.part_seq - right.part_seq);
 
             for (const part of sortedParts) {
+                const sourceService = part.source_service ?? part.mcp_source;
                 const genPlannerResultLayers = userMessage.role === "assistant"
                     ? extractGenPlannerResultLayers(part.payload)
                     : [];
@@ -6247,7 +6250,7 @@ class ChatDataStore {
                 }
 
                 const downloadFile = userMessage.role === "assistant" && part.kind === "file"
-                    ? extractDownloadFileMessage(part.payload, part.mcp_source)
+                    ? extractDownloadFileMessage(part.payload, sourceService)
                     : undefined;
 
                 if (downloadFile) {
@@ -6269,7 +6272,7 @@ class ChatDataStore {
                             ? extractGeoJsonFileLayer(
                                 part.payload,
                                 getLayerName(part.payload) ?? HISTORY_LAYER_FALLBACK_NAME,
-                                part.mcp_source,
+                                sourceService,
                             )
                             : undefined)
                     )
