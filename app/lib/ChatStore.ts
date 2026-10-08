@@ -283,7 +283,7 @@ async function fetchAuthenticatedDownload(
     const layerOrigin = new URL(resolvedUri).origin;
     const isAuthenticatedApi = AUTHENTICATED_LAYER_API_URLS.some((apiUrl) => {
         try {
-            return new URL(apiUrl).origin === layerOrigin;
+            return new URL(apiUrl, typeof window === "undefined" ? undefined : window.location.origin).origin === layerOrigin;
         } catch {
             return false;
         }
@@ -419,7 +419,10 @@ function resolveServiceFileUrl(value: unknown, sourceService: unknown) {
     }
 
     try {
-        const serviceUrl = new URL(serviceBaseUrl);
+        const serviceUrl = new URL(
+            serviceBaseUrl,
+            typeof window === "undefined" ? undefined : window.location.origin,
+        );
         const originalUrl = new URL(uri, serviceUrl.origin);
         const layerPath = originalUrl.pathname.match(/\/(?:files|layers)\/.*$/)?.[0];
         if (!layerPath) {
