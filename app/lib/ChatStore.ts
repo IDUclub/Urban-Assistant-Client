@@ -70,7 +70,7 @@ const SERVICE_API_BASE_URLS: Record<string, string | undefined> = {
     genbuilder: GENBUILDER_API_URL,
     buildplanner: BUILDPLANNER_API_URL,
     genplanner: GENPLANNER_API_URL,
-    pzzcompare: import.meta.env.VITE_PZZ_COMPARE_API,
+    "pzz pipeline service": import.meta.env.VITE_PZZ_COMPARE_API,
 };
 
 interface UserChat {
