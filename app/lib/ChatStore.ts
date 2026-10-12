@@ -71,6 +71,7 @@ const SERVICE_API_BASE_URLS: Record<string, string | undefined> = {
     buildplanner: BUILDPLANNER_API_URL,
     genplanner: GENPLANNER_API_URL,
     "pzz pipeline service": import.meta.env.VITE_PZZ_COMPARE_API,
+    pzzcompare: import.meta.env.VITE_PZZ_COMPARE_API,
 };
 
 interface UserChat {
@@ -876,11 +877,13 @@ function extractFeatureCollectionLayer(
     };
 }
 
-function getStreamFileLayer(payload: unknown, eventName?: string): UserChatLayer | undefined {
+function getStreamFileLayer(payload: unknown, eventName?: string, fallbackSourceService?: string): UserChatLayer | undefined {
     const chunkKind = getStreamChunkKind(payload, eventName);
-    if (chunkKind !== "file") return undefined;
+    if (chunkKind !== "file") {
+        return undefined;
+    }
 
-    return extractGeoJsonFileLayer(payload);
+    return extractGeoJsonFileLayer(payload, "GeoJSON layer", fallbackSourceService);
 }
 
 const GENBUILDER_INPUT_LAYER_NAMES: Record<string, string> = {
@@ -1477,6 +1480,11 @@ function getVriResultPayload(payload: unknown, eventName?: string) {
 
     const parsed = parseJsonValue(payload);
     const record = asRecord(parsed);
+    const completionData = asRecord(record?.content) ?? record;
+    if (chunkKind === "done" && completionData
+        && Object.keys(completionData).every((key) => ["type", "status", "chat_id"].includes(key))) {
+        return undefined;
+    }
     const isResultEvent = !!eventName && VRI_RESULT_EVENT_NAMES.has(eventName.toLowerCase());
 
     if (extractLayerFromUnknown(parsed, "Результат проверки ВРИ")) return parsed;
@@ -4448,11 +4456,7 @@ class ChatDataStore {
             return;
         }
 
-        const serializedResult = typeof result === "string"
-            ? result
-            : JSON.stringify(result, null, 2);
-        const text = extractTextFromPayload(result) ??
-            (serializedResult ? `\`\`\`json\n${serializedResult}\n\`\`\`` : undefined);
+        const text = extractTextFromPayload(result);
 
         this.chatMessages.push({
             type: "response",
@@ -4575,7 +4579,7 @@ class ChatDataStore {
         }
 
         const isResultFile = isVriResultFile(payload, eventName);
-        const fileLayer = getStreamFileLayer(payload, eventName);
+        const fileLayer = getStreamFileLayer(payload, eventName, "pzz pipeline service");
         if (fileLayer) {
             this.appendGeoJsonLayer(fileLayer);
 
