@@ -628,22 +628,49 @@ function isGeoJsonFilePayload(content: Record<string, any>) {
 function extractGeoJsonFileLayer(
     payload: unknown,
     fallbackName = "GeoJSON layer",
+    fallbackSourceService?: string,
 ): UserChatLayer | undefined {
     const parsed = parseJsonValue(payload);
     const record = asRecord(parsed);
-    if (!record) return undefined;
+    if (!record) {
+        return undefined;
+    }
 
     const content = asRecord(record.content) ?? record;
-    if (!isGeoJsonFilePayload(content)) return undefined;
+    if (!isGeoJsonFilePayload(content)) {
+        return undefined;
+    }
 
-    const url = toString(
+    let url = toString(
         content.url ??
         content.download_url ??
         content.downloadUrl ??
         content.uri,
     );
 
-    if (!isGeoJsonLayerUri(url)) return undefined;
+    const sourceService = toString(content.source_service ?? record.source_service ?? fallbackSourceService)?.toLowerCase();
+    if (url && ["pzz pipeline service", "pzzcompare"].includes(sourceService ?? "")) {
+        try {
+            const serviceUrl = new URL(
+                import.meta.env.VITE_PZZ_COMPARE_API,
+                typeof window === "undefined" ? undefined : window.location.origin,
+            );
+            const fileUrl = new URL(url, serviceUrl.origin);
+            const filePath = fileUrl.pathname.match(/\/files\/.*$/)?.[0];
+            if (filePath && ["http:", "https:"].includes(fileUrl.protocol)) {
+                url = new URL(
+                    `${serviceUrl.pathname.replace(/\/+$/, "")}${filePath}${fileUrl.search}${fileUrl.hash}`,
+                    serviceUrl.origin,
+                ).toString();
+            }
+        } catch {
+            // Invalid URLs are rejected by the existing validation below.
+        }
+    }
+
+    if (!isGeoJsonLayerUri(url)) {
+        return undefined;
+    }
 
     return {
         name: (
@@ -766,11 +793,13 @@ function extractFeatureCollectionLayer(
     };
 }
 
-function getStreamFileLayer(payload: unknown, eventName?: string): UserChatLayer | undefined {
+function getStreamFileLayer(payload: unknown, eventName?: string, fallbackSourceService?: string): UserChatLayer | undefined {
     const chunkKind = getStreamChunkKind(payload, eventName);
-    if (chunkKind !== "file") return undefined;
+    if (chunkKind !== "file") {
+        return undefined;
+    }
 
-    return extractGeoJsonFileLayer(payload);
+    return extractGeoJsonFileLayer(payload, "GeoJSON layer", fallbackSourceService);
 }
 
 const INPUT_ZONE_LAYER_NAMES: Record<string, string> = {
@@ -1339,6 +1368,11 @@ function getVriResultPayload(payload: unknown, eventName?: string) {
 
     const parsed = parseJsonValue(payload);
     const record = asRecord(parsed);
+    const completionData = asRecord(record?.content) ?? record;
+    if (chunkKind === "done" && completionData
+        && Object.keys(completionData).every((key) => ["type", "status", "chat_id"].includes(key))) {
+        return undefined;
+    }
     const isResultEvent = !!eventName && VRI_RESULT_EVENT_NAMES.has(eventName.toLowerCase());
 
     if (extractLayerFromUnknown(parsed, "Результат проверки ВРИ")) return parsed;
@@ -4147,11 +4181,7 @@ class ChatDataStore {
             return;
         }
 
-        const serializedResult = typeof result === "string"
-            ? result
-            : JSON.stringify(result, null, 2);
-        const text = extractTextFromPayload(result) ??
-            (serializedResult ? `\`\`\`json\n${serializedResult}\n\`\`\`` : undefined);
+        const text = extractTextFromPayload(result);
 
         this.chatMessages.push({
             type: "response",
@@ -4274,7 +4304,7 @@ class ChatDataStore {
         }
 
         const isResultFile = isVriResultFile(payload, eventName);
-        const fileLayer = getStreamFileLayer(payload, eventName);
+        const fileLayer = getStreamFileLayer(payload, eventName, "pzz pipeline service");
         if (fileLayer) {
             this.appendGeoJsonLayer(fileLayer);
 
