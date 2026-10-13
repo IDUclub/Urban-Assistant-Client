@@ -28,6 +28,16 @@ function getRandomColor() {
     return `rgb(${red}, ${green}, ${blue})`;
 }
 
+const PZZ_LAYER_COLORS: Record<string, string> = {
+    "Наложения": "#a855f7",
+    "Исходные здания и сервисы": "#477f31",
+    "Результат — сервисы": "#3b82f6",
+    "Результат — здания": "#94847b",
+    "Зоны ПЗЗ": "#cb5b32",
+    "Исходные участки": "#359b72",
+    "Границы муниципальных образований": "#288c2e",
+};
+
 class MapDataStore {
     _idSeed: number = 0;
     mapLayers: MapLayer[] = [];
@@ -88,7 +98,7 @@ class MapDataStore {
             id: this.getLayerId(),
             isVisible: true,
             style: {
-                color: getRandomColor(),
+                color: PZZ_LAYER_COLORS[layer.name] ?? getRandomColor(),
             },
         });
     }
@@ -115,7 +125,7 @@ class MapDataStore {
             id: this.getLayerId(),
             isVisible: true,
             style: {
-                color: getRandomColor(),
+                color: PZZ_LAYER_COLORS[layer.name] ?? getRandomColor(),
             },
         }));
     }
@@ -136,6 +146,10 @@ class MapDataStore {
         this.mapLayers = [];
         this.facadeScene = undefined;
         this.facadeSceneLoadStatus = undefined;
+    }
+
+    removeLayerByName(name: string) {
+        this.mapLayers = this.mapLayers.filter((layer) => layer.name !== name);
     }
 
     constructor() {
