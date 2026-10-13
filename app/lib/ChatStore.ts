@@ -427,7 +427,9 @@ function resolveServiceFileUrl(value: unknown, sourceService: unknown) {
         const originalUrl = new URL(uri, serviceUrl.origin);
         const layerPath = originalUrl.pathname.match(/\/(?:files|layers)\/.*$/)?.[0];
         if (!layerPath) {
-            if (/^https?:\/\//i.test(uri) || uri.startsWith("//")) return uri;
+            if (/^https?:\/\//i.test(uri) || uri.startsWith("//")) {
+                return uri;
+            }
 
             const basePath = serviceUrl.pathname.replace(/\/+$/, "");
             const path = originalUrl.pathname;
@@ -1049,8 +1051,8 @@ type PzzSetupMessage = {
     pzzDescriptionsFileName?: string;
     cadastralFileName?: string;
     filesStep?: PzzFilesSetupStep;
-    errorText?: string;
     taskExternalId?: string;
+    errorText?: string;
     resultLoaded?: boolean;
 };
 
@@ -1069,6 +1071,8 @@ type GenBuilderSetupFiles = {
 type VriSetupStatus = "ready" | "submitting" | "running" | "finished" | "error";
 
 type VriSetupStep =
+    "ask_mo_check" |
+    "upload_mo_boundaries" |
     "upload_land_plots" |
     "ask_classifier" |
     "upload_classifier" |
@@ -1092,10 +1096,14 @@ type VriSetupMessage = {
     wantsClassifier?: boolean;
     wantsPzzCheck?: boolean;
     wantsPzzZoneDescription?: boolean;
+    isMoBoundaryCheck?: boolean;
+    wantsMoBoundaries?: boolean;
+    moBoundariesFileName?: string;
     errorText?: string;
 };
 
 type VriSetupFiles = {
+    moBoundaries?: File;
     landPlots?: File;
     classifier?: File;
     pzzZones?: File;
@@ -1108,11 +1116,33 @@ type SseStreamEvent = {
 };
 
 type VriStreamState = {
+    taskExternalId?: string;
     hasReceivedResult: boolean;
     hasReceivedReport: boolean;
+    hasReceivedDone: boolean;
     hasStreamError: boolean;
     reportMessageIndex?: number;
 };
+
+function getOverlapAreaGeometry(geometry: unknown): unknown {
+    const record = asRecord(geometry);
+    if (record?.type === "Polygon" || record?.type === "MultiPolygon") {
+        return geometry;
+    }
+
+    if (record?.type === "GeometryCollection" && Array.isArray(record.geometries)) {
+        const geometries = record.geometries.map(getOverlapAreaGeometry).filter(Boolean);
+        if (geometries.length === 1) {
+            return geometries[0];
+        }
+
+        if (geometries.length > 1) {
+            return { type: "GeometryCollection", geometries };
+        }
+    }
+
+    return;
+}
 
 type GenBuilderStreamState = {
     hasReceivedResult: boolean;
@@ -1270,7 +1300,7 @@ const PZZ_FILE_FORM_FIELDS = {
 } as const;
 
 const PZZ_AUTO_CHAT_STREAM_URL =
-    "https://pzzcompare.idulab.ru/tasks/auto/chat/stream";
+    `${(import.meta.env.VITE_PZZ_COMPARE_API || "https://pzzcompare.idulab.ru").replace(/\/+$/, "")}/tasks/auto/chat/stream`;
 
 const VRI_RESULT_EVENT_NAMES = new Set([
     "result",
@@ -1414,6 +1444,8 @@ function getVriErrorText(payload: unknown) {
         toString(record.traceback) ??
         toString(content?.error_text) ??
         toString(content?.errorText) ??
+        toString(content?.detail) ??
+        toString(content?.message) ??
         toString(content?.error) ??
         toString(content?.traceback)
     );
@@ -1614,7 +1646,24 @@ function extractValidationErrorText(data: unknown) {
     return messages.length ? messages.join("\n") : undefined;
 }
 
+async function getPzzHttpErrorText(error: unknown, fallback: string) {
+    if (!axios.isAxiosError(error) || !error.response) {
+        return fallback;
+    }
+
+    if (![400, 413, 415, 422].includes(error.response.status)) {
+        return fallback;
+    }
+
+    try {
+        return extractValidationErrorText(await readErrorResponseData(error.response.data)) ?? fallback;
+    } catch {
+        return fallback;
+    }
+}
+
 class ChatDataStore {
+    private overlapsAbortController?: AbortController;
     messageDraft = "";
 
     setMessageDraft(value: string) {
@@ -1715,6 +1764,10 @@ class ChatDataStore {
     }
 
     setSelectedContext(value: string | number) {
+        if (this.selectedContext === value) {
+            return;
+        }
+        this.resetCheckContext();
         this.selectedContext = value;
         this.parsedContext = null;
         this.activeGenPlannerChatId = undefined;
@@ -1727,6 +1780,10 @@ class ChatDataStore {
     }
 
     setSelectedScenario(scenarioId: number | null) {
+        if (this.selectedScenario === scenarioId) {
+            return;
+        }
+        this.resetCheckContext();
         this.selectedScenario = scenarioId;
         this.parsedContext = null;
         this.activeGenPlannerChatId = undefined;
@@ -1736,6 +1793,20 @@ class ChatDataStore {
         this.genBuilderSetupFiles.clear();
         this.genPlannerResults.clear();
         this.genPlannerTerritoryFiles.clear();
+    }
+
+    private resetCheckContext() {
+        this.abortStream();
+        this.currentStreamRequestId += 1;
+        this.commitStreamedResponse();
+        this.resetStreamingState();
+        this.chatMessages = this.chatMessages.filter((chatMessage) => {
+            if (chatMessage.type === "response"
+                && (isPzzSetupMessage(chatMessage.message) || isVriSetupMessage(chatMessage.message))) {
+                return chatMessage.message.status === "finished";
+            }
+            return true;
+        });
     }
 
     private removeIncompleteToolSetup(tool: ChatTool | null) {
@@ -1767,8 +1838,9 @@ class ChatDataStore {
             }
 
             if (
-                tool === "Проверка ВРИ"
-                && isVriSetupMessage(chatMessage.message)
+                isVriSetupMessage(chatMessage.message)
+                && (tool === "Проверка ВРИ"
+                    || (tool === "Проверка объектов по ПЗЗ" && chatMessage.message.isMoBoundaryCheck))
             ) {
                 const shouldRemove = !chatMessage.message.submitted
                     && (
@@ -1918,6 +1990,7 @@ class ChatDataStore {
 
     abortStream() {
         this.abortController?.abort();
+        this.overlapsAbortController?.abort();
     }
 
     private resetStreamingState = action(() => {
@@ -2035,7 +2108,7 @@ class ChatDataStore {
             return;
         }
 
-        void downloadGeoJsonLayer(layerUri, { accessToken: options.accessToken })
+        return downloadGeoJsonLayer(layerUri, { accessToken: options.accessToken })
             .then(action((downloadedLayer) => {
                 if (requestId !== this.currentStreamRequestId) return;
 
@@ -2235,8 +2308,18 @@ class ChatDataStore {
 
     private restoreMapLayersFromMessages(messages: ChatMessage[]) {
         const lastRequestIndex = messages.findLastIndex(message => message.type === "request");
+        const isPzzFileLayer = (message: ChatMessage) => {
+            if (message.type !== "response" || message.message?.type !== "geojson") {
+                return false;
+            }
+            const layerUri = getLayerUri(parseFeatureCollection(message.message.layer));
+            return !!layerUri && /\/files\/(?:cadastral|zones|functional_zones|mo_boundaries|result|result_buildings|result_services)\//.test(layerUri);
+        };
+        const hasPzzResult = messages.some((message, index) =>
+            index > lastRequestIndex && isPzzFileLayer(message),
+        );
         const lastResponseLayers = messages.flatMap((message, ind) =>
-            ind > lastRequestIndex && message.type === "response" && message.message?.type === "geojson" ?
+            (ind > lastRequestIndex || (hasPzzResult && isPzzFileLayer(message))) && message.type === "response" && message.message?.type === "geojson" ?
                 {
                     name: message.message?.name,
                     layer: parseFeatureCollection(message.message.layer),
@@ -2245,14 +2328,8 @@ class ChatDataStore {
         );
 
         MapStore.clearMapLayers();
-        lastResponseLayers.forEach((layer) => {
-            layer.message.unavailable = undefined;
-            this.addGeoJsonLayerToMap(layer, {
-                onNotFound: () => {
-                    layer.message.unavailable = true;
-                },
-            });
-        });
+        const requestId = this.currentStreamRequestId;
+        void this.restoreHistoryMapLayers(lastResponseLayers, requestId);
 
         const lastFacadeScene = messages.findLast((message, index) =>
             index > lastRequestIndex &&
@@ -2273,6 +2350,32 @@ class ChatDataStore {
             !lastResponseLayers.some((layer) => layer.name === PROJECT_BOUNDARY_LAYER_NAME)
         ) {
             this.requestProjectBoundary(this.selectedContext);
+        }
+    }
+
+    private async restoreHistoryMapLayers(
+        layers: (UserChatLayer & { message: GeoJSONMessage })[],
+        requestId: number,
+    ) {
+        for (const layer of layers) {
+            if (requestId !== this.currentStreamRequestId) {
+                return;
+            }
+            layer.message.unavailable = undefined;
+            await this.addGeoJsonLayerToMap(layer, {
+                requestId,
+                onNotFound: () => {
+                    layer.message.unavailable = true;
+                },
+            });
+        }
+        const result = layers.findLast((layer) =>
+            layer.name === "Результат проверки ПЗЗ" &&
+            /\/files\/result\//.test(getLayerUri(layer.layer) ?? ""),
+        );
+        const externalId = result && getLayerUri(result.layer)?.match(/\/files\/result\/([^/?#]+)/)?.[1];
+        if (externalId && requestId === this.currentStreamRequestId) {
+            await this.loadPzzOverlaps(externalId, requestId);
         }
     }
 
@@ -3929,6 +4032,19 @@ class ChatDataStore {
         });
     }
 
+    private handlePzzStreamEvent(event: SseStreamEvent, setupId?: string) {
+        const payload = parseJsonValue(event.data);
+        if (getStreamChunkKind(payload, event.eventName) === "error") {
+            const text = getVriErrorText(payload) ?? "Не удалось выполнить проверку объектов по ПЗЗ.";
+            this.commitStreamedResponse();
+            this.setPzzSetupError(setupId, text);
+            this.addChatNotice("error", text);
+            return false;
+        }
+        this.appendStreamChunk(event.data, event.eventName);
+        return true;
+    }
+
     private sendPzzCheckRequest(
         message: string,
         zoneSource: FunctionalZoneSource,
@@ -3999,20 +4115,48 @@ class ChatDataStore {
                 throw new Error("PZZ check stream response is not readable");
             }
 
+            if (this.currentStreamRequestId !== requestId) {
+                return;
+            }
+
             this.currentStatus = "Проверка объектов по ПЗЗ выполняется";
+
+            let hasStreamError = false;
+            let hasReceivedDone = false;
+            let hasReceivedResult = false;
 
             await readSseStream(stream, (streamEvent) => {
                 runInAction(() => {
-                    if (this.currentStreamRequestId !== requestId) return;
+                    if (this.currentStreamRequestId !== requestId) {
+                        return;
+                    }
 
-                    this.appendStreamChunk(streamEvent.data, streamEvent.eventName);
+                    hasReceivedDone ||= streamEvent.data.trim() === "[DONE]"
+                        || getStreamChunkKind(parseJsonValue(streamEvent.data), streamEvent.eventName) === "done";
+                    const payload = parseJsonValue(streamEvent.data);
+                    hasReceivedResult ||= isVriResultFile(payload, streamEvent.eventName)
+                        || !!extractLayerFromUnknown(payload, "Результат проверки ПЗЗ");
+                    if (!this.handlePzzStreamEvent(streamEvent, setupId)) {
+                        hasStreamError = true;
+                    }
                 });
             });
 
             runInAction(() => {
-                if (this.currentStreamRequestId !== requestId) return;
+                if (this.currentStreamRequestId !== requestId) {
+                    return;
+                }
 
                 this.commitStreamedResponse();
+
+                if (hasStreamError) {
+                    return;
+                }
+
+                if (!hasReceivedDone || !hasReceivedResult) {
+                    this.setPzzSetupError(setupId, "Поток проверки завершился без подтверждения результата.");
+                    return;
+                }
 
                 const setupMessage = setupId ? this.getPzzSetupMessage(setupId) : undefined;
                 if (setupMessage) {
@@ -4020,28 +4164,34 @@ class ChatDataStore {
                     setupMessage.resultLoaded = true;
                     setupMessage.errorText = undefined;
                 }
+                this.offerMoBoundaryCheck(setupId);
             });
         })
-        .catch(action((error) => {
+        .catch(async (error) => {
             if (axios.isCancel(error) || error?.name === "AbortError" || error?.name === "CanceledError") {
-                this.commitStreamedResponse();
+                runInAction(() => {
+                    if (this.currentStreamRequestId === requestId) {
+                        this.commitStreamedResponse();
+                        this.setPzzSetupError(setupId, "Проверка отменена.");
+                    }
+                });
                 return;
             }
 
             console.error("Error streaming PZZ check:", error);
-
-            this.setPzzSetupError(setupId, "Не удалось выполнить потоковую проверку объектов по ПЗЗ.");
-
-            this.chatMessages.push({
-                type: "response",
-                message: {
-                    type: "error",
-                    text: "Не удалось выполнить потоковую проверку объектов по ПЗЗ.",
-                },
+            const text = await getPzzHttpErrorText(error, "Не удалось выполнить потоковую проверку объектов по ПЗЗ.");
+            runInAction(() => {
+                if (this.currentStreamRequestId !== requestId) {
+                    return;
+                }
+                this.setPzzSetupError(setupId, text);
+                this.addChatNotice("error", text);
             });
-        }))
+        })
         .finally(action(() => {
-            if (this.currentStreamRequestId !== requestId) return;
+            if (this.currentStreamRequestId !== requestId) {
+                return;
+            }
 
             this.isStreaming = false;
             this.currentStatus = undefined;
@@ -4080,6 +4230,25 @@ class ChatDataStore {
         return files;
     }
 
+    restartPzzSetup(setupId: string) {
+        const setup = this.getPzzSetupMessage(setupId);
+        if (!setup || setup.status !== "error" || this.isStreaming) {
+            return;
+        }
+
+        setup.status = "ready";
+        setup.submitted = false;
+        setup.errorText = undefined;
+
+        if (setup.mode === "files") {
+            this.pzzSetupFiles.set(setupId, {});
+            setup.pzzZonesFileName = undefined;
+            setup.pzzDescriptionsFileName = undefined;
+            setup.cadastralFileName = undefined;
+            setup.filesStep = "upload_pzz_zones";
+        }
+    }
+
     private canUpdatePzzSetupFiles(setupId: string) {
         const setupMessage = this.getPzzSetupMessage(setupId);
         if (
@@ -4087,7 +4256,9 @@ class ChatDataStore {
             || setupMessage.mode !== "files"
             || setupMessage.status !== "ready"
             || setupMessage.submitted
-        ) return undefined;
+        ) {
+            return undefined;
+        }
 
         return setupMessage;
     }
@@ -4146,7 +4317,9 @@ class ChatDataStore {
             !setupMessage
             || setupMessage.mode !== "files"
             || setupMessage.submitted
-        ) return;
+        ) {
+            return;
+        }
 
         if (!files.pzzZones || !files.cadastral) {
             setupMessage.status = "error";
@@ -4213,50 +4386,87 @@ class ChatDataStore {
                 throw new Error("PZZ file check stream response is not readable");
             }
 
+            if (this.currentStreamRequestId !== requestId) {
+                return;
+            }
+
             setupMessage.status = "running";
             this.currentStatus = "Проверка объектов по ПЗЗ выполняется";
 
+            let hasStreamError = false;
+            let hasReceivedDone = false;
+            let hasReceivedResult = false;
+
             await readSseStream(stream, (streamEvent) => {
                 runInAction(() => {
-                    if (this.currentStreamRequestId !== requestId) return;
-                    this.appendStreamChunk(streamEvent.data, streamEvent.eventName);
+                    if (this.currentStreamRequestId !== requestId) {
+                        return;
+                    }
+
+                    hasReceivedDone ||= streamEvent.data.trim() === "[DONE]"
+                        || getStreamChunkKind(parseJsonValue(streamEvent.data), streamEvent.eventName) === "done";
+                    const payload = parseJsonValue(streamEvent.data);
+
+                    hasReceivedResult ||= isVriResultFile(payload, streamEvent.eventName)
+                        || !!extractLayerFromUnknown(payload, "Результат проверки ПЗЗ");
+
+                    if (!this.handlePzzStreamEvent(streamEvent, setupId)) {
+                        hasStreamError = true;
+                    }
                 });
             });
 
             runInAction(() => {
-                if (this.currentStreamRequestId !== requestId) return;
+                if (this.currentStreamRequestId !== requestId) {
+                    return;
+                }
 
                 this.commitStreamedResponse();
+                if (hasStreamError) {
+                    return;
+                }
+
+                if (!hasReceivedDone || !hasReceivedResult) {
+                    this.setPzzSetupError(setupId, "Поток проверки завершился без подтверждения результата.");
+                    return;
+                }
+
                 setupMessage.status = "finished";
                 setupMessage.resultLoaded = true;
                 setupMessage.errorText = undefined;
+                this.offerMoBoundaryCheck(setupId);
             });
         })
-        .catch(action((error) => {
+        .catch(async (error) => {
             if (
                 axios.isCancel(error)
                 || error?.name === "AbortError"
                 || error?.name === "CanceledError"
             ) {
-                this.commitStreamedResponse();
+                runInAction(() => {
+                    if (this.currentStreamRequestId === requestId) {
+                        this.commitStreamedResponse();
+                        this.setPzzSetupError(setupId, "Проверка отменена.");
+                    }
+                });
                 return;
             }
 
             console.error("Error streaming PZZ file check:", error);
-            this.setPzzSetupError(
-                setupId,
-                "Не удалось выполнить проверку объектов по ПЗЗ.",
-            );
-            this.chatMessages.push({
-                type: "response",
-                message: {
-                    type: "error",
-                    text: "Не удалось выполнить проверку объектов по ПЗЗ.",
-                },
+            const text = await getPzzHttpErrorText(error, "Не удалось выполнить проверку объектов по ПЗЗ.");
+            runInAction(() => {
+                if (this.currentStreamRequestId !== requestId) {
+                    return;
+                }
+
+                this.setPzzSetupError(setupId, text);
+                this.addChatNotice("error", text);
             });
-        }))
+        })
         .finally(action(() => {
-            if (this.currentStreamRequestId !== requestId) return;
+            if (this.currentStreamRequestId !== requestId) {
+                return;
+            }
 
             this.isStreaming = false;
             this.currentStatus = undefined;
@@ -4329,8 +4539,93 @@ class ChatDataStore {
         return files;
     }
 
+    private offerMoBoundaryCheck(pzzSetupId?: string) {
+        if (this.hasActiveVriSetup()) {
+            return;
+        }
+
+        const previousFiles = pzzSetupId ? this.pzzSetupFiles.get(pzzSetupId) : undefined;
+        const setupId = this.getNextVriSetupId();
+        this.vriSetupFiles.set(setupId, {
+            pzzZones: previousFiles?.pzzZones,
+            pzzZoneDescription: previousFiles?.pzzDescriptions,
+        });
+        this.chatMessages.push({
+            type: "response",
+            message: {
+                type: "vri_setup",
+                id: setupId,
+                request: "Проверьте земельные участки по ПЗЗ и их пересечения с границами муниципальных образований.",
+                status: "ready",
+                step: "ask_mo_check",
+                isMoBoundaryCheck: true,
+                wantsPzzCheck: true,
+                pzzZonesFileName: previousFiles?.pzzZones?.name,
+                pzzZoneDescriptionFileName: previousFiles?.pzzDescriptions?.name,
+            },
+        });
+    }
+
+    answerMoBoundaryCheck(setupId: string, wantsMoBoundaries: boolean) {
+        const setup = this.getVriSetupMessage(setupId);
+        if (!setup || setup.status !== "ready" || setup.step !== "ask_mo_check") {
+            return;
+        }
+
+        setup.wantsMoBoundaries = wantsMoBoundaries;
+        setup.step = wantsMoBoundaries ? "upload_land_plots" : "finished";
+        if (!wantsMoBoundaries) {
+            setup.status = "finished";
+            this.vriSetupFiles.delete(setupId);
+        }
+    }
+
+    submitMoBoundariesFile(setupId: string, file: File) {
+        const setup = this.getVriSetupMessage(setupId);
+        if (!setup || setup.status !== "ready" || setup.step !== "upload_mo_boundaries") {
+            return;
+        }
+
+        this.getVriSetupFiles(setupId).moBoundaries = file;
+        setup.moBoundariesFileName = file.name;
+        return this.sendVriCheckRequest(setupId, true);
+    }
+
+    private continueVriPzzCheck(setupId: string) {
+        const setup = this.getVriSetupMessage(setupId);
+        if (!setup) {
+            return;
+        }
+
+        if (setup.isMoBoundaryCheck) {
+            setup.step = "upload_mo_boundaries";
+            return;
+        }
+        return this.sendVriCheckRequest(setupId, true);
+    }
+
+    restartVriSetup(setupId: string) {
+        const setup = this.getVriSetupMessage(setupId);
+        if (!setup || setup.status !== "error" || this.isStreaming) {
+            return;
+        }
+
+        setup.status = "ready";
+        setup.submitted = false;
+        setup.errorText = undefined;
+        setup.step = "upload_land_plots";
+        this.vriSetupFiles.set(setupId, {});
+        setup.landPlotsFileName = undefined;
+        setup.classifierFileName = undefined;
+        setup.pzzZonesFileName = undefined;
+        setup.pzzZoneDescriptionFileName = undefined;
+        setup.moBoundariesFileName = undefined;
+    }
+
     private setVriSetupError(setupId: string | undefined, errorText: string) {
-        if (!setupId) return;
+        if (!setupId) {
+            return;
+        }
 
         const setupMessage = this.getVriSetupMessage(setupId);
         if (!setupMessage) return;
@@ -4346,7 +4641,13 @@ class ChatDataStore {
         const files = this.getVriSetupFiles(setupId);
         files.landPlots = file;
         setupMessage.landPlotsFileName = file.name;
-        setupMessage.step = "ask_classifier";
+        if (setupMessage.isMoBoundaryCheck) {
+            setupMessage.step = !files.pzzZones
+                ? "upload_pzz_zones"
+                : files.pzzZoneDescription ? "upload_mo_boundaries" : "ask_pzz_zone_description";
+        } else {
+            setupMessage.step = "ask_classifier";
+        }
         setupMessage.errorText = undefined;
     }
 
@@ -4417,7 +4718,10 @@ class ChatDataStore {
             return;
         }
 
-        return this.sendVriCheckRequest(setupId, true);
+        const files = this.getVriSetupFiles(setupId);
+        files.pzzZoneDescription = undefined;
+        setupMessage.pzzZoneDescriptionFileName = undefined;
+        return this.continueVriPzzCheck(setupId);
     }
 
     submitVriPzzZoneDescription(setupId: string, file: File) {
@@ -4429,7 +4733,7 @@ class ChatDataStore {
         setupMessage.pzzZoneDescriptionFileName = file.name;
         setupMessage.errorText = undefined;
 
-        return this.sendVriCheckRequest(setupId, true);
+        return this.continueVriPzzCheck(setupId);
     }
 
     private appendGeoJsonLayer(
@@ -4446,6 +4750,86 @@ class ChatDataStore {
         });
 
         this.addGeoJsonLayerToMap(layer, { ...options, showError: true });
+    }
+
+    private async loadPzzOverlaps(externalId: string, requestId: number) {
+        const base = PZZ_AUTO_CHAT_STREAM_URL.replace(/\/tasks\/auto\/chat\/stream$/, "");
+        this.overlapsAbortController?.abort();
+        const controller = new AbortController();
+        this.overlapsAbortController = controller;
+        MapStore.removeLayerByName("Наложения");
+
+        try {
+            const { data } = await axios.get(`${base}/tasks/${encodeURIComponent(externalId)}/overlaps`, {
+                headers: { Authorization: `Bearer ${AuthStore.accessToken}` },
+                signal: controller.signal,
+            });
+
+            if (requestId !== this.currentStreamRequestId) {
+                return;
+            }
+
+            if (data?.overlaps?.type !== "FeatureCollection" || !Array.isArray(data.overlaps.features)) {
+                throw new Error("Invalid overlaps report");
+            }
+
+            if (data.task_external_id && data.task_external_id !== externalId) {
+                throw new Error("Unexpected overlaps task");
+            }
+
+            const labels: Record<string, string> = {
+                parcel_overlaps: "Наложения участков",
+                parcels_with_overlaps: "Затронуто участков",
+                parcels_in_multiple_zones: "Участки в нескольких зонах",
+                zone_overlaps: "Наложения зон",
+                mo_overlaps: "Наложения границ МО",
+                parcels_in_multiple_mo: "Участки в нескольких МО",
+                parcels_outside_mo: "Участки вне границ МО",
+                zones_in_multiple_mo: "Зоны в нескольких МО",
+                zones_outside_mo: "Зоны вне границ МО",
+            };
+
+            const summary = Object.entries(labels).flatMap(([key, label]) =>
+                typeof data.summary?.[key] === "number" ? [`${label}: ${data.summary[key]}.`] : [],
+            ).join("\n");
+
+            const areaFeatures = data.overlaps.features.flatMap((feature: unknown) => {
+                const record = asRecord(feature);
+                const geometry = getOverlapAreaGeometry(record?.geometry);
+                return geometry ? [{ ...record, geometry }] : [];
+            });
+
+            runInAction(() => {
+                const emptyNotice = data.overlaps.features.length === 0 ? "\nНаложений по проверенным слоям не найдено." : "";
+                const text = `Проверка наложений\n\n${summary || data.chat_message || "Отчёт получен."}${emptyNotice}${data.summary?.mo_overlaps === undefined ? "\nГраницы МО не проверялись." : ""}`;
+                if (!this.chatMessages.some((message) => message.message.type === "text" && message.message.text === text)) {
+                    this.chatMessages.push({ type: "response", message: { type: "text", text } });
+                }
+
+                if (areaFeatures.length > 0) {
+                    MapStore.addOrUpdateLayerToMap({ name: "Наложения", layer: { ...data.overlaps, features: areaFeatures } });
+                }
+            });
+        } catch (error) {
+            if (requestId !== this.currentStreamRequestId || axios.isCancel(error)) {
+                return;
+            }
+
+            const status = axios.isAxiosError(error) ? error.response?.status : undefined;
+            const text = status === 404
+                ? "Отчёт о наложениях недоступен для этой задачи. Это не означает, что наложений нет."
+                : status === 409
+                    ? "Отчёт о наложениях ещё не готов. Откройте чат позже, чтобы повторить загрузку."
+                    : "Не удалось загрузить отчёт о наложениях. Результат проверки ПЗЗ сохранён; загрузку можно повторить, открыв чат из истории.";
+
+            runInAction(() => {
+                this.chatMessages.push({ type: "response", message: { type: "text", text } });
+            });
+        } finally {
+            if (this.overlapsAbortController === controller) {
+                this.overlapsAbortController = undefined;
+            }
+        }
     }
 
     private appendVriResult(result: unknown) {
@@ -4524,14 +4908,37 @@ class ChatDataStore {
         streamState: VriStreamState,
     ) {
         const trimmedData = streamEvent.data.trim();
-        if (!trimmedData || trimmedData === "[DONE]") return streamState;
+        if (!trimmedData) {
+            return streamState;
+        }
+
+        if (trimmedData === "[DONE]") {
+            return { ...streamState, hasReceivedDone: true };
+        }
 
         const eventName = streamEvent.eventName?.toLowerCase();
         const payload = parseJsonValue(trimmedData);
         const chunkKind = getStreamChunkKind(payload, eventName);
         const setupMessage = this.getVriSetupMessage(setupId);
 
-        if (this.handleServiceEvent(payload)) return streamState;
+        const record = asRecord(payload);
+        const content = asRecord(record?.content) ?? record;
+        const externalId = content?.external_id ?? content?.task_external_id;
+        if ((chunkKind === "task" || chunkKind === "status") && typeof externalId === "string") {
+            streamState = { ...streamState, taskExternalId: externalId };
+        }
+
+        if (chunkKind === "done") {
+            streamState = { ...streamState, hasReceivedDone: true };
+        }
+
+        if (streamState.hasStreamError) {
+            return streamState;
+        }
+
+        if (this.handleServiceEvent(payload)) {
+            return streamState;
+        }
 
         if (chunkKind === "error") {
             const errorText = getVriErrorText(payload) ?? "Проверка ВРИ завершилась с ошибкой.";
@@ -4581,6 +4988,12 @@ class ChatDataStore {
         const isResultFile = isVriResultFile(payload, eventName);
         const fileLayer = getStreamFileLayer(payload, eventName, "pzz pipeline service");
         if (fileLayer) {
+            if (isResultFile) {
+                const fileTaskId = getLayerUri(fileLayer.layer)?.match(/\/files\/result\/([^/?#]+)/)?.[1];
+                if (fileTaskId) {
+                    streamState = { ...streamState, taskExternalId: fileTaskId };
+                }
+            }
             this.appendGeoJsonLayer(fileLayer);
 
             if (!isResultFile) {
@@ -4588,12 +5001,9 @@ class ChatDataStore {
             }
 
             if (setupMessage) {
-                setupMessage.status = "finished";
-                setupMessage.step = "finished";
+                setupMessage.status = "running";
                 setupMessage.errorText = undefined;
             }
-
-            this.currentStatus = "Проверка ВРИ завершена";
 
             return {
                 ...streamState,
@@ -4616,15 +5026,15 @@ class ChatDataStore {
             : streamState;
 
         const resultPayload = getVriResultPayload(payload, eventName);
-        if (resultPayload === undefined || nextStreamState.hasReceivedResult) return nextStreamState;
+        if (resultPayload === undefined || nextStreamState.hasReceivedResult) {
+            return nextStreamState;
+        }
 
         if (setupMessage) {
-            setupMessage.status = "finished";
-            setupMessage.step = "finished";
+            setupMessage.status = "running";
             setupMessage.errorText = undefined;
         }
 
-        this.currentStatus = "Проверка ВРИ завершена";
         this.appendVriResult(resultPayload);
 
         return {
@@ -4637,7 +5047,9 @@ class ChatDataStore {
         const setupMessage = this.getVriSetupMessage(setupId);
         const files = this.getVriSetupFiles(setupId);
 
-        if (!setupMessage) return;
+        if (!setupMessage) {
+            return;
+        }
 
         if (!files.landPlots) {
             this.setVriSetupError(setupId, "Загрузите земельные участки.");
@@ -4649,11 +5061,20 @@ class ChatDataStore {
             return;
         }
 
+        if (setupMessage.isMoBoundaryCheck && !files.moBoundaries) {
+            this.setVriSetupError(setupId, "Загрузите границы муниципальных образований.");
+            return;
+        }
+
         setupMessage.submitted = true;
 
         const formData = new FormData();
         formData.append(VRI_FORM_FIELDS.landPlots, files.landPlots, files.landPlots.name);
         formData.set("user_query", setupMessage.request);
+
+        if (setupMessage.isMoBoundaryCheck && files.moBoundaries) {
+            formData.append("mo_boundaries_feature_collection_file", files.moBoundaries, files.moBoundaries.name);
+        }
 
         if (typeof this.activeChatId === "string") {
             formData.set("chat_id", this.activeChatId);
@@ -4691,7 +5112,7 @@ class ChatDataStore {
             this.requestProjectBoundary(this.selectedContext, requestId);
         }
         this.isStreaming = true;
-        this.currentStatus = "Запуск проверки ВРИ";
+        this.currentStatus = setupMessage.isMoBoundaryCheck ? "Запуск проверки участков и границ МО" : "Запуск проверки ВРИ";
         setupMessage.status = "submitting";
         setupMessage.errorText = undefined;
 
@@ -4699,7 +5120,7 @@ class ChatDataStore {
         formData.set("mode", endPoint);
 
         return axios.post(
-            `${import.meta.env.VITE_PZZ_COMPARE_API}/tasks/auto/chat/stream`,
+            PZZ_AUTO_CHAT_STREAM_URL,
             formData,
             {
                 headers: {
@@ -4717,28 +5138,42 @@ class ChatDataStore {
                 throw new Error("VRI check stream response is not readable");
             }
 
+            if (this.currentStreamRequestId !== requestId) {
+                return;
+            }
+
             setupMessage.status = "running";
 
             let streamState: VriStreamState = {
                 hasReceivedResult: false,
                 hasReceivedReport: false,
+                hasReceivedDone: false,
                 hasStreamError: false,
             };
 
             await readSseStream(stream, (streamEvent) => {
                 runInAction(() => {
-                    if (this.currentStreamRequestId !== requestId) return;
+                    if (this.currentStreamRequestId !== requestId) {
+                        return;
+                    }
 
                     streamState = this.handleVriStreamEvent(streamEvent, setupId, streamState);
                 });
             });
 
             runInAction(() => {
-                if (this.currentStreamRequestId !== requestId) return;
-                if (streamState.hasStreamError) return;
+                if (this.currentStreamRequestId !== requestId) {
+                    return;
+                }
 
-                if (!streamState.hasReceivedResult && !streamState.hasReceivedReport) {
-                    const errorText = "Поток проверки ВРИ завершился без результата.";
+                if (streamState.hasStreamError) {
+                    return;
+                }
+
+                if (!streamState.hasReceivedDone || !streamState.hasReceivedResult) {
+                    const errorText = !streamState.hasReceivedDone
+                        ? "Поток проверки завершился без подтверждения результата."
+                        : "Проверка завершилась без файла или данных результата.";
 
                     this.setVriSetupError(setupId, errorText);
                     this.chatMessages.push({
@@ -4758,28 +5193,40 @@ class ChatDataStore {
                     currentSetupMessage.errorText = undefined;
                 }
             });
+            if (withPzzCheck && streamState.hasReceivedDone && streamState.hasReceivedResult && !streamState.hasStreamError && requestId === this.currentStreamRequestId) {
+                if (streamState.taskExternalId) {
+                    await this.loadPzzOverlaps(streamState.taskExternalId, requestId);
+                } else {
+                    runInAction(() => {
+                        this.chatMessages.push({ type: "response", message: { type: "text", text: "Не удалось определить ID проверки участков для загрузки наложений." } });
+                    });
+                }
+            }
         })
-        .catch(action((error) => {
-            if (this.currentStreamRequestId !== requestId) return;
+        .catch(async (error) => {
+            if (this.currentStreamRequestId !== requestId) {
+                return;
+            }
 
             if (axios.isCancel(error) || error?.name === "AbortError" || error?.name === "CanceledError") {
-                this.setVriSetupError(setupId, "Проверка ВРИ отменена.");
+                runInAction(() => this.setVriSetupError(setupId, "Проверка отменена."));
                 return;
             }
 
             console.error("Error streaming VRI check:", error);
-
-            this.setVriSetupError(setupId, "Не удалось выполнить потоковую проверку ВРИ.");
-            this.chatMessages.push({
-                type: "response",
-                message: {
-                    type: "error",
-                    text: "Не удалось выполнить потоковую проверку ВРИ.",
-                },
+            const text = await getPzzHttpErrorText(error, "Не удалось выполнить проверку.");
+            runInAction(() => {
+                if (this.currentStreamRequestId !== requestId) {
+                    return;
+                }
+                this.setVriSetupError(setupId, text);
+                this.addChatNotice("error", text);
             });
-        }))
+        })
         .finally(action(() => {
-            if (this.currentStreamRequestId !== requestId) return;
+            if (this.currentStreamRequestId !== requestId) {
+                return;
+            }
 
             this.isStreaming = false;
             this.currentStatus = undefined;
@@ -5947,7 +6394,7 @@ class ChatDataStore {
 
         if (
             this.selectedChatTool === "Проверка объектов по ПЗЗ"
-            && this.hasActivePzzSetup()
+            && (this.hasActivePzzSetup() || this.hasActiveVriSetup())
         ) {
             return;
         }
