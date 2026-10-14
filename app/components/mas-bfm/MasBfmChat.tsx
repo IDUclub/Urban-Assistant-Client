@@ -17,7 +17,7 @@ import {
   MdStopCircle,
 } from "react-icons/md";
 import MasBfmProjectStatus from "@components/mas-bfm/MasBfmProjectStatus";
-import MasBfmStore from "@lib/MasBfmStore";
+import MasBfmStore, { IS_WORKFLOW_SELECTOR_ENABLED } from "@lib/MasBfmStore";
 import MapStore from "@lib/MapStore";
 import DataStore, { type ProjectScenario } from "@lib/DataStore";
 import AuthStore from "@lib/AuthStore";
@@ -210,13 +210,15 @@ const MasBfmChat = observer(() => {
     !!MasBfmStore.draft.trim() &&
     !MasBfmStore.isSending &&
     !MasBfmStore.isStopping &&
-    !MasBfmStore.isHistoryLoading;
+    !MasBfmStore.isHistoryLoading &&
+    (!!MasBfmStore.synapseProjectId || MasBfmStore.isWorkflowReady);
   const visibleMapOffset = MapStore.isMapLayersAvailable
     ? mapHeight
     : "4px";
 
   useEffect(() => {
     MasBfmStore.connect();
+    MasBfmStore.loadWorkflows();
     if (!hasConversation) {
       MapStore.clearMapLayers();
     }
@@ -411,10 +413,23 @@ const MasBfmChat = observer(() => {
               }}
               className="w-full resize-none overflow-y-auto bg-transparent leading-6 placeholder:text-gray-500 focus:outline-none disabled:cursor-wait disabled:text-content-muted customer-dark:placeholder:text-content-muted"
             />
+            {IS_WORKFLOW_SELECTOR_ENABLED && !MasBfmStore.synapseProjectId && MasBfmStore.workflowsError && (
+              <div role="alert" className="mt-3 text-sm text-red-700 customer-dark:text-red-300">
+                {MasBfmStore.workflowsError}
+                <button
+                  type="button"
+                  disabled={MasBfmStore.isWorkflowsLoading}
+                  onClick={() => MasBfmStore.loadWorkflows()}
+                  className="ml-2 cursor-pointer underline focus-visible:outline-2 focus-visible:outline-brand-primary disabled:cursor-wait"
+                >
+                  Повторить
+                </button>
+              </div>
+            )}
             <div className="mt-5 flex items-end justify-between gap-3">
               <div
                 ref={menuRef}
-                className="flex min-w-0 flex-1 items-center gap-3"
+                className={`flex min-w-0 flex-1 items-center gap-3 ${IS_WORKFLOW_SELECTOR_ENABLED ? "flex-wrap" : ""}`}
               >
                 <button
                   type="button"
@@ -450,6 +465,30 @@ const MasBfmChat = observer(() => {
                   <LuLayers3 size={16} className="shrink-0" />
                   <span className="truncate">{selectedContextLabel}</span>
                 </button>
+                {IS_WORKFLOW_SELECTOR_ENABLED && !MasBfmStore.synapseProjectId && (
+                  <label className="flex min-w-0 max-w-full items-center gap-2 rounded-2xl bg-slate-100 px-3 py-2 text-sm font-medium text-slate-600 customer-dark:bg-surface-muted customer-dark:text-content-secondary">
+                    <span className="shrink-0">Workflow</span>
+                    <select
+                      aria-label="Выберите workflow МАС БФМ"
+                      value={MasBfmStore.selectedWorkflowId ?? ""}
+                      disabled={MasBfmStore.isWorkflowsLoading || !MasBfmStore.canSelectWorkflow || !MasBfmStore.workflows.length}
+                      onChange={(event) => MasBfmStore.selectWorkflow(event.target.value)}
+                      className="min-w-0 max-w-56 cursor-pointer truncate bg-transparent focus-visible:outline-2 focus-visible:outline-brand-primary disabled:cursor-default"
+                    >
+                      <option value="" disabled>
+                        {MasBfmStore.isWorkflowsLoading ? "Загрузка…" : "Выберите процесс"}
+                      </option>
+                      {MasBfmStore.workflows.map((workflow) => {
+                        const workflowId = workflow.id ?? workflow._id;
+                        return (
+                          <option key={workflowId} value={workflowId} className="bg-surface-panel text-content-primary">
+                            {workflow.name}
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </label>
+                )}
                 {projectMenuOpen && (
                   <div
                     id="mas-bfm-project-menu"

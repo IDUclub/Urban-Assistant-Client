@@ -6,7 +6,11 @@ import SynapseClient, {
   type SynapseArtifact,
   type SynapseMessage,
   type SynapseProjectSummary,
+  type SynapseWorkflow,
 } from "@lib/synapse/client";
+
+export const IS_WORKFLOW_SELECTOR_ENABLED =
+  import.meta.env.VITE_MAS_BFM_WORKFLOW_SELECTOR === "true";
 
 const PROJECT_POLL_INTERVAL_MS = 3_000;
 const TERMINAL_PROJECT_STATUSES = new Set(["completed", "failed", "cancelled"]);
@@ -80,6 +84,11 @@ function sameArchiveRefs(
 class MasBfmStore {
   isEnabled = false;
   draft = "";
+  workflows: SynapseWorkflow[] = [];
+  selectedWorkflowId?: string = undefined;
+  defaultWorkflowId?: string = undefined;
+  isWorkflowsLoading = false;
+  workflowsError?: string = undefined;
   selectedProjectId: number | null = null;
   selectedScenarioId: number | null = null;
   synapseProjectId?: string = undefined;
@@ -129,6 +138,63 @@ class MasBfmStore {
 
   setDraft(value: string) {
     this.draft = value;
+  }
+
+  get canSelectWorkflow() {
+    return !this.synapseProjectId && !this.isSending;
+  }
+
+  get isWorkflowReady() {
+    return !IS_WORKFLOW_SELECTOR_ENABLED || Boolean(this.selectedWorkflowId);
+  }
+
+  selectWorkflow(workflowId: string) {
+    if (!this.canSelectWorkflow) {
+      return;
+    }
+
+    if (this.workflows.some((workflow) => (workflow.id ?? workflow._id) === workflowId)) {
+      this.selectedWorkflowId = workflowId;
+      this.workflowsError = undefined;
+    }
+  }
+
+  async loadWorkflows() {
+    if (!IS_WORKFLOW_SELECTOR_ENABLED || this.isWorkflowsLoading || this.selectedWorkflowId) {
+      return;
+    }
+
+    this.isWorkflowsLoading = true;
+    this.workflowsError = undefined;
+
+    try {
+      const workflows = (await SynapseClient.listWorkflows()).filter(
+        (workflow) => Boolean(workflow.id ?? workflow._id),
+      );
+
+      if (!workflows.length) {
+        throw new Error("Нет доступных процессов МАС БФМ.");
+      }
+
+      runInAction(() => {
+        this.workflows = workflows;
+      });
+
+      const defaultWorkflowId = await SynapseClient.getWorkflowId(workflows);
+
+      runInAction(() => {
+        this.defaultWorkflowId = defaultWorkflowId;
+        this.selectedWorkflowId ??= defaultWorkflowId;
+      });
+    } catch (error) {
+      runInAction(() => {
+        this.workflowsError = errorText(error);
+      });
+    } finally {
+      runInAction(() => {
+        this.isWorkflowsLoading = false;
+      });
+    }
   }
 
   selectProject(projectId: number | null) {
@@ -398,7 +464,10 @@ class MasBfmStore {
 
   async sendDraft() {
     const content = this.draft.trim();
-    if (!content || this.isSending || this.isStopping || this.isHistoryLoading) {
+    if (
+      !content || this.isSending || this.isStopping || this.isHistoryLoading
+      || (!this.synapseProjectId && !this.isWorkflowReady)
+    ) {
       return;
     }
     const prompt = this.addProjectContext(content);
@@ -420,7 +489,10 @@ class MasBfmStore {
 
     try {
       if (!this.synapseProjectId) {
-        const project = await SynapseClient.createProject(prompt);
+        const project = await SynapseClient.createProject(
+          prompt,
+          IS_WORKFLOW_SELECTOR_ENABLED ? this.selectedWorkflowId : undefined,
+        );
         if (conversationVersion !== this.conversationVersion) {
           return;
         }
@@ -463,6 +535,7 @@ class MasBfmStore {
     this.conversationVersion += 1;
     this.stopMonitoring();
     this.draft = "";
+    this.selectedWorkflowId = this.defaultWorkflowId;
     this.selectedProjectId = null;
     this.selectedScenarioId = null;
     this.synapseProjectId = undefined;
