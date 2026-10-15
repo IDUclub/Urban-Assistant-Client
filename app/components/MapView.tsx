@@ -487,30 +487,12 @@ const PROVISION_LAYER_TYPE_LABELS = {
     links: "связи",
 } as const;
 
-const PROVISION_SERVICE_INSTRUMENTAL_NAMES: Record<string, string> = {
-    "школа": "школами",
-    "школы": "школами",
-    "детский сад": "детскими садами",
-    "детские сады": "детскими садами",
-    "поликлиника": "поликлиниками",
-    "поликлиники": "поликлиниками",
-    "больница": "больницами",
-    "больницы": "больницами",
-    "аптека": "аптеками",
-    "аптеки": "аптеками",
-};
-
 function getProvisionServiceDisplayName(serviceName: string) {
-    const readableName = serviceName
+    return serviceName
         .trim()
         .replace(/_/g, " ")
-        .replace(/\s+/g, " ");
-    const normalizedName = readableName.toLocaleLowerCase("ru-RU").replace(/ё/g, "е");
-
-    return {
-        readableName,
-        instrumentalName: PROVISION_SERVICE_INSTRUMENTAL_NAMES[normalizedName],
-    };
+        .replace(/\s+/g, " ")
+        .toLocaleLowerCase("ru-RU");
 }
 
 function getProvisionLayerParts(name?: string) {
@@ -530,12 +512,9 @@ function getLayerDisplayName(name?: string) {
 
     if (!provisionLayer) return name || "Без названия";
 
-    const { readableName, instrumentalName } = getProvisionServiceDisplayName(provisionLayer.serviceName);
-    const provisionName = instrumentalName
-        ? `Обеспеченность ${instrumentalName}`
-        : `Обеспеченность сервисом «${readableName}»`;
+    const serviceName = getProvisionServiceDisplayName(provisionLayer.serviceName);
 
-    return `${provisionName} (${PROVISION_LAYER_TYPE_LABELS[provisionLayer.layerType]})`;
+    return `Обеспеченность сервисом «${serviceName}» (${PROVISION_LAYER_TYPE_LABELS[provisionLayer.layerType]})`;
 }
 
 function isSchoolProvisionLinksLayer(name?: string) {
