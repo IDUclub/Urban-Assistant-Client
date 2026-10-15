@@ -5962,15 +5962,7 @@ class ChatDataStore {
         //     this.addChat();
         // }
         MapStore.clearMapLayers();
-        if (
-            typeof this.selectedContext === "number" &&
-            this.selectedChatTool !== "Проверка объектов по ПЗЗ" &&
-            this.selectedChatTool !== "Проверка ВРИ" &&
-            (
-                this.selectedChatTool === "Нормативная документация" ||
-                this.selectedScenario !== null
-            )
-        ) {
+        if (typeof this.selectedContext === "number") {
             this.requestProjectBoundary(this.selectedContext);
         }
         this.chatMessages.push({type: "request", message: { type: "text", text: message}})

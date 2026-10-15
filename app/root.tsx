@@ -20,6 +20,17 @@ import "./app.css";
 
 export const links: Route.LinksFunction = () => [
   {
+    rel: "icon",
+    href: "/favicon.ico",
+    media: "(prefers-color-scheme: light)",
+  },
+  {
+    rel: "icon",
+    href: "/favicon-dark.svg",
+    type: "image/svg+xml",
+    media: "(prefers-color-scheme: dark)",
+  },
+  {
     rel: "preload",
     href: "/fonts/inter/Inter-Regular.ttf",
     as: "font",
