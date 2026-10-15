@@ -1,12 +1,19 @@
 import { makeAutoObservable, observable } from "mobx";
 
+export type MapColorMode = "category" | "scale";
+
 type MapLayer = {
     id: string;
     name: string;
     layer: any;
     isVisible: boolean;
     style: {
-        color: string;  
+        color: string;
+        colorByProperty?: string;
+        colorMode?: MapColorMode;
+        colorPalette?: string;
+        colorPaletteSelection?: "auto" | "user";
+        colorPaletteAutoVersion?: number;
     };
 };
 
@@ -26,6 +33,17 @@ function getRandomColor() {
     const blue = 40 + Math.floor(Math.random() * 180);
 
     return `rgb(${red}, ${green}, ${blue})`;
+}
+
+function getDefaultLayerOrder(name: string) {
+    const normalizedName = name.trim().toLowerCase();
+
+    if (normalizedName.includes("граница территории")) return 0;
+    if (normalizedName.includes("результат") && normalizedName.includes("сервис")) return 1;
+    if (normalizedName.includes("функциональн") && normalizedName.includes("зон")) return 2;
+    if (normalizedName.includes("результат") && normalizedName.includes("здани")) return 3;
+
+    return Number.POSITIVE_INFINITY;
 }
 
 class MapDataStore {
@@ -83,14 +101,24 @@ class MapDataStore {
 
         if (hasSameLayer) return;
 
-        this.mapLayers.push({
+        const mapLayer: MapLayer = {
             ...layer,
             id: this.getLayerId(),
             isVisible: true,
             style: {
                 color: getRandomColor(),
             },
-        });
+        };
+        const layerOrder = getDefaultLayerOrder(mapLayer.name);
+        const insertIndex = this.mapLayers.findIndex(
+            (currentLayer) => getDefaultLayerOrder(currentLayer.name) > layerOrder,
+        );
+
+        if (insertIndex < 0) {
+            this.mapLayers.push(mapLayer);
+        } else {
+            this.mapLayers.splice(insertIndex, 0, mapLayer);
+        }
     }
 
     addOrUpdateLayerToMap(layer: {name: string; layer: any}) {
@@ -128,6 +156,46 @@ class MapDataStore {
         this.mapLayers = this.mapLayers.map((layer) =>
             layer.id === id
                 ? { ...layer, isVisible: !layer.isVisible }
+                : layer
+        );
+    }
+
+    setLayerOrder(layerIds: string[]) {
+        if (layerIds.length !== this.mapLayers.length) return;
+
+        const layersById = new Map(this.mapLayers.map((layer) => [layer.id, layer]));
+        const orderedLayers = layerIds
+            .map((layerId) => layersById.get(layerId))
+            .filter((layer): layer is MapLayer => Boolean(layer));
+
+        if (orderedLayers.length !== this.mapLayers.length) return;
+
+        this.mapLayers = orderedLayers;
+    }
+
+    setLayerColorSettings(
+        id: string,
+        settings: {
+            propertyName?: string;
+            mode?: MapColorMode;
+            palette?: string;
+            paletteSelection?: "auto" | "user";
+            paletteAutoVersion?: number;
+        },
+    ) {
+        this.mapLayers = this.mapLayers.map((layer) =>
+            layer.id === id
+                ? {
+                    ...layer,
+                    style: {
+                        ...layer.style,
+                        colorByProperty: settings.propertyName ?? layer.style.colorByProperty,
+                        colorMode: settings.mode ?? layer.style.colorMode,
+                        colorPalette: settings.palette ?? layer.style.colorPalette,
+                        colorPaletteSelection: settings.paletteSelection ?? layer.style.colorPaletteSelection,
+                        colorPaletteAutoVersion: settings.paletteAutoVersion ?? layer.style.colorPaletteAutoVersion,
+                    },
+                }
                 : layer
         );
     }
