@@ -350,6 +350,43 @@ body::-webkit-scrollbar,
   scrollbar-width: none;
 }
 
+.tools-menu-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #94a3b8 #f1f5f9;
+  scrollbar-gutter: stable;
+}
+
+.tools-menu-scroll::-webkit-scrollbar {
+  display: block;
+  width: 8px;
+}
+
+.tools-menu-scroll::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 9999px;
+}
+
+.tools-menu-scroll::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+  border-radius: 9999px;
+}
+
+.tools-menu-scroll::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+
+html[data-color-scheme="dark"] .tools-menu-scroll {
+  scrollbar-color: #64748b #1e293b;
+}
+
+html[data-color-scheme="dark"] .tools-menu-scroll::-webkit-scrollbar-track {
+  background: #1e293b;
+}
+
+html[data-color-scheme="dark"] .tools-menu-scroll::-webkit-scrollbar-thumb {
+  background: #64748b;
+}
+
 .map-legend-scroll {
   scrollbar-color: rgb(148 163 184 / 0.8) transparent;
   scrollbar-width: thin;

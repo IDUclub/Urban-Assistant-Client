@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { observer } from "mobx-react-lite";
 import {
     MdAdd,
@@ -8,9 +8,11 @@ import {
     MdOutlineDescription,
     MdOutlineFolder,
     MdUploadFile,
+    MdCheck,
+    MdSearch,
 } from "react-icons/md";
 import { LuLayers3 } from "react-icons/lu";
-import DataStore from "@lib/DataStore";
+import DataStore, { type CreatedProject } from "@lib/DataStore";
 import DocumentsStore, { type UserDocument } from "@lib/DocumentsStore";
 import ChatStore from "@lib/ChatStore";
 import MapStore from "@lib/MapStore";
@@ -34,12 +36,26 @@ const CHAT_SERVICES = [
   "Справка по проекту",
 ] as const;
 
-type PanelView = "menu" | "context";
+type PanelView = "menu" | "context" | null;
 type PanelPlacement = "top" | "bottom";
 
-const ChatContextSelection = observer(() => {
-    const [isOpen, setIsOpen] = useState(false);
-    const [panelView, setPanelView] = useState<PanelView>("menu");
+const ChatContextSelection = observer(({ inputRef, onSearchOpenChange }: {
+    inputRef: RefObject<HTMLTextAreaElement | null>;
+    onSearchOpenChange: (isOpen: boolean) => void;
+}) => {
+    const [panelView, setPanelView] = useState<PanelView>(null);
+    const [search, setSearch] = useState("");
+    const [activeIndex, setActiveIndex] = useState(0);
+    const [dismissedDraft, setDismissedDraft] = useState<string | null>(null);
+    const draft = ChatStore.messageDraft;
+    const conversationVersion = ChatStore.currentStreamRequestId;
+    const slashMatch = /^\/([^\n]*)$/.exec(draft);
+    const isSlashOpen = !!slashMatch && dismissedDraft !== draft && !ChatStore.isStreaming;
+    const isPanelOpen = panelView !== null || isSlashOpen;
+    const query = isSlashOpen ? slashMatch?.[1] ?? "" : search;
+    const isContextView = panelView === "context" && !isSlashOpen;
+    const panelWidthClass = isContextView ? "w-[calc(100%+2px)]" : "w-[min(100%,30rem)]";
+    const [panelMaxHeight, setPanelMaxHeight] = useState<number>();
     const [panelPlacement, setPanelPlacement] = useState<PanelPlacement>("bottom");
     const [isCreateProjectModalOpen, setIsCreateProjectModalOpen] = useState(false);
     const [isCreateScenarioModalOpen, setIsCreateScenarioModalOpen] = useState(false);
@@ -52,6 +68,7 @@ const ChatContextSelection = observer(() => {
         projectName: string;
     } | null>(null);
     const [documentNotice, setDocumentNotice] = useState<string | null>(null);
+    const menuButtonRef = useRef<HTMLButtonElement | null>(null);
     const containerRef = useRef<HTMLDivElement | null>(null);
     const panelRef = useRef<HTMLDivElement | null>(null);
     const { userProjects, projectScenarios } = DataStore;
@@ -66,102 +83,78 @@ const ChatContextSelection = observer(() => {
     const isChatVisible = chatMessages.length > 0;
 
     useEffect(() => {
-        if (!isOpen) return;
-
-        const handlePointerDown = (event: MouseEvent) => {
-            const eventTarget = event.target;
-            if (
-                eventTarget instanceof Element
-                && eventTarget.closest("[data-custom-select-menu]")
-            ) {
-                return;
-            }
-
-            if (!containerRef.current?.contains(event.target as Node)) {
-                setIsOpen(false);
-                setPanelView("menu");
-            }
-        };
-
-        const handleEscape = (event: KeyboardEvent) => {
-            if (event.key !== "Escape") return;
-
-            if (panelView === "context") {
-                setPanelView("menu");
-                return;
-            }
-
-            setIsOpen(false);
-        };
-
-        document.addEventListener("mousedown", handlePointerDown);
-        document.addEventListener("keydown", handleEscape);
-
-        return () => {
-            document.removeEventListener("mousedown", handlePointerDown);
-            document.removeEventListener("keydown", handleEscape);
-        };
-    }, [isOpen, panelView]);
-
-    useEffect(() => {
         if (isStreaming) {
-            setIsOpen(false);
-            setPanelView("menu");
+            setPanelView(null);
         }
     }, [isStreaming]);
 
-    useEffect(() => {
-        if (!isOpen) return;
+    useLayoutEffect(() => {
+        if (!isPanelOpen) {
+            return;
+        }
 
         const updatePanelPlacement = () => {
-            if (isMapLayersAvailable) {
-                setPanelPlacement("top");
+            const container = containerRef.current;
+            const panel = panelRef.current;
+            if (!container || !panel) {
                 return;
             }
 
-            const container = containerRef.current;
-            const panel = panelRef.current;
-            if (!container || !panel) return;
-
             const anchor = container.closest<HTMLElement>(".chat-input-shell") ?? container;
             const anchorRect = anchor.getBoundingClientRect();
-            const panelHeight = panel.getBoundingClientRect().height;
-            const viewportPadding = 16;
-            const panelGap = 4;
-            const availableAbove = anchorRect.top - viewportPadding;
-            const availableBelow = window.innerHeight - anchorRect.bottom - viewportPadding;
-            const requiredSpace = panelHeight + panelGap;
 
-            setPanelPlacement(
-                availableBelow < requiredSpace && availableAbove > availableBelow
-                    ? "top"
-                    : "bottom",
-            );
+            let visibleTop = 0;
+            let visibleBottom = window.innerHeight;
+            for (let parent = anchor.parentElement; parent; parent = parent.parentElement) {
+                if (/(hidden|clip|auto|scroll)/.test(getComputedStyle(parent).overflowY)) {
+                    const bounds = parent.getBoundingClientRect();
+                    visibleTop = Math.max(visibleTop, bounds.top);
+                    visibleBottom = Math.min(visibleBottom, bounds.bottom);
+                }
+            }
+            const viewportPadding = 16;
+            const availableAbove = Math.max(0, anchorRect.top - visibleTop - viewportPadding - 12);
+            const availableBelow = Math.max(0, visibleBottom - anchorRect.bottom - viewportPadding - 4);
+            const list = panel.querySelector<HTMLElement>('[role="list"]');
+            const desiredHeight = list
+                ? Math.min(432, list.scrollHeight + 80)
+                : panel.scrollHeight;
+            const placement = isMapLayersAvailable || (availableBelow < desiredHeight && availableAbove > availableBelow)
+                ? "top" : "bottom";
+            setPanelPlacement(placement);
+            setPanelMaxHeight(placement === "top" ? availableAbove : availableBelow);
         };
 
-        const animationFrame = window.requestAnimationFrame(updatePanelPlacement);
+        updatePanelPlacement();
         const resizeObserver = new ResizeObserver(updatePanelPlacement);
 
         if (panelRef.current) {
             resizeObserver.observe(panelRef.current);
+        }
+        const anchor = containerRef.current?.closest(".chat-input-shell");
+        if (anchor) {
+            resizeObserver.observe(anchor);
         }
 
         window.addEventListener("resize", updatePanelPlacement);
         window.addEventListener("scroll", updatePanelPlacement, true);
 
         return () => {
-            window.cancelAnimationFrame(animationFrame);
             resizeObserver.disconnect();
             window.removeEventListener("resize", updatePanelPlacement);
             window.removeEventListener("scroll", updatePanelPlacement, true);
         };
-    }, [isOpen, panelView, isMapLayersAvailable]);
+    }, [isPanelOpen, isContextView, isMapLayersAvailable, query]);
 
     useEffect(() => {
-        if (selectedContext === "nonproject") return;
+        if (selectedContext === "nonproject") {
+            return;
+        }
 
         const projectId = Number(selectedContext);
-        if (Number.isNaN(projectId) || projectScenarios.has(projectId)) return;
+        if (Number.isNaN(projectId) || projectScenarios.has(projectId)) {
+            return;
+        }
 
         DataStore.getProjectScenarios(projectId);
     }, [selectedContext, projectScenarios]);
@@ -223,7 +216,9 @@ const ChatContextSelection = observer(() => {
         && Number.isFinite(selectedProjectId);
 
     useEffect(() => {
-        if (selectedProjectId === null || !Number.isFinite(selectedProjectId)) return;
+        if (selectedProjectId === null || !Number.isFinite(selectedProjectId)) {
+            return;
+        }
 
         void DocumentsStore.getProjectDocuments(selectedProjectId, true).catch((error) => {
             console.error("Error fetching project document count:", error);
@@ -238,7 +233,9 @@ const ChatContextSelection = observer(() => {
             return;
         }
 
-        if (!scenarioOptions.length) return;
+        if (!scenarioOptions.length) {
+            return;
+        }
 
         const hasSelectedScenario = selectedScenario !== null
             && scenarioOptions.some((option) => Number(option.value) === selectedScenario);
@@ -257,18 +254,33 @@ const ChatContextSelection = observer(() => {
         }
     }, [selectedChatTool, selectedContext, hasScenarioSelection]);
 
+    useEffect(() => {
+        if (dismissedDraft !== null && dismissedDraft !== draft) {
+            setDismissedDraft(null);
+        }
+    }, [draft, dismissedDraft]);
+
+    useEffect(() => {
+        setPanelView(null);
+        setSearch("");
+        setDismissedDraft(null);
+        setIsCreateProjectModalOpen(false);
+        setIsCreateScenarioModalOpen(false);
+        setIsLibraryModalOpen(false);
+        setIsDocumentsModalOpen(false);
+        setIsUploadDocumentModalOpen(false);
+        setDocumentToUpdate(null);
+        setDocumentNotice(null);
+    }, [ChatStore.activeChatId, conversationVersion]);
+
     const togglePanel = () => {
-        setIsOpen((current) => {
-            if (!current) {
-                setPanelView("menu");
-            }
-            return !current;
-        });
+        setPanelView(isPanelOpen ? null : "menu");
+        setSearch("");
+        setDismissedDraft(draft);
     };
 
     const handleOpenDocuments = () => {
-        setIsOpen(false);
-        setPanelView("menu");
+        setPanelView(null);
 
         if (selectedContext === "nonproject") {
             setIsLibraryModalOpen(true);
@@ -279,9 +291,217 @@ const ChatContextSelection = observer(() => {
     };
 
     const handleOpenUploadDocument = () => {
-        setIsOpen(false);
-        setPanelView("menu");
+        setPanelView(null);
         setIsUploadDocumentModalOpen(true);
+    };
+
+    const actions = [
+        {
+            id: "project-create", group: "Проект", label: "Создать проект",
+            icon: <MdOutlineFolder size={19} />,
+            run: () => setIsCreateProjectModalOpen(true),
+        },
+        {
+            id: "documents", group: "Библиотека документов", label: "Просмотр документов",
+            icon: <MdOutlineDescription size={19} />,
+            run: handleOpenDocuments,
+        },
+    ];
+
+    if (!isChatVisible) {
+        actions.unshift({
+            id: "project-select", group: "Проект", label: "Выбрать проект и сценарий",
+            icon: <LuLayers3 size={19} />,
+            run: () => {
+                setPanelView("context");
+            },
+        });
+    }
+
+    if (isProjectSelected) {
+        actions.push({
+            id: "document-upload", group: "Библиотека документов", label: "Загрузить документ",
+            icon: <MdUploadFile size={19} />,
+            run: handleOpenUploadDocument,
+        });
+    }
+
+    actions.push(...availableServices.map((service) => ({
+        id: service, group: "Модули", label: service,
+        icon: <LuLayers3 size={19} />,
+        run: () => ChatStore.setSelectedChatTool(service),
+    })));
+
+    const normalizedQuery = query.trim().toLocaleLowerCase("ru").replaceAll("ё", "е");
+    const filteredActions = actions.filter((action) => `${action.group} ${action.label}`.toLocaleLowerCase("ru").replaceAll("ё", "е").includes(normalizedQuery));
+    const executeAction = (action: typeof actions[number]) => {
+        if (isStreaming) {
+            return;
+        }
+        setPanelView(null);
+        setSearch("");
+        if (isSlashOpen) {
+            ChatStore.setMessageDraft("");
+        }
+        action.run();
+    };
+
+    useEffect(() => {
+        onSearchOpenChange(isSlashOpen);
+        return () => onSearchOpenChange(false);
+    }, [isSlashOpen, onSearchOpenChange]);
+
+    useEffect(() => {
+        setActiveIndex(0);
+    }, [query, isPanelOpen, selectedContext, hasScenarioSelection, isChatVisible]);
+
+    useEffect(() => {
+        panelRef.current?.querySelector('[data-active="true"]')?.scrollIntoView({ block: "nearest" });
+    }, [activeIndex]);
+
+    useEffect(() => {
+        if (!isPanelOpen) {
+            return;
+        }
+
+        const input = inputRef.current;
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (!isSlashOpen || event.isComposing) {
+                return;
+            }
+
+            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                event.preventDefault();
+                const direction = event.key === "ArrowDown" ? 1 : -1;
+                setActiveIndex((index) => filteredActions.length
+                    ? (index + direction + filteredActions.length) % filteredActions.length
+                    : 0);
+            } else if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                const action = filteredActions[activeIndex];
+                if (action) {
+                    executeAction(action);
+                }
+            } else if (event.key === "Escape") {
+                event.preventDefault();
+                setDismissedDraft(draft);
+                setPanelView(null);
+            }
+        };
+
+        const handlePointerDown = (event: MouseEvent) => {
+            const eventTarget = event.target;
+            if (
+                eventTarget instanceof Element
+                && eventTarget.closest("[data-custom-select-menu]")
+            ) {
+                return;
+            }
+
+            if (isSlashOpen && containerRef.current?.closest(".chat-input-shell")?.contains(event.target as Node)) {
+                return;
+            }
+
+            if (!containerRef.current?.contains(event.target as Node)) {
+                setPanelView(null);
+                setDismissedDraft(draft);
+            }
+        };
+
+        const handleEscape = (event: KeyboardEvent) => {
+            if (event.key !== "Escape" || event.defaultPrevented) {
+                return;
+            }
+
+            if (panelView === "context") {
+                setPanelView("menu");
+                return;
+            }
+
+            setPanelView(null);
+            setDismissedDraft(draft);
+            menuButtonRef.current?.focus();
+        };
+
+        input?.addEventListener("keydown", onKeyDown);
+        document.addEventListener("mousedown", handlePointerDown);
+        document.addEventListener("keydown", handleEscape);
+
+        return () => {
+            input?.removeEventListener("keydown", onKeyDown);
+            document.removeEventListener("mousedown", handlePointerDown);
+            document.removeEventListener("keydown", handleEscape);
+        };
+    });
+
+    const createScenarioAction = {
+        icon: <MdAdd aria-hidden="true" size={20} />,
+        label: "Создать сценарий для выбранного проекта",
+        title: baseScenario
+            ? "Новый сценарий"
+            : "Базовый сценарий проекта не найден",
+        disabled: !baseScenario || selectedProjectId === null,
+        onClick: () => {
+            setPanelView(null);
+            setIsCreateScenarioModalOpen(true);
+        },
+    };
+
+    const handleProjectCreated = async (
+        project: CreatedProject,
+    ) => {
+        if (conversationVersion !== ChatStore.currentStreamRequestId) {
+            return;
+        }
+
+        const responseProject = project.project;
+        const projectName = responseProject?.name ?? project.name;
+        const refreshedProject = DataStore.userProjects?.find(
+            (item) => item.name === projectName,
+        );
+        const projectId = Number(
+            responseProject?.project_id
+            ?? responseProject?.id
+            ?? project.project_id
+            ?? project.id
+            ?? refreshedProject?.id,
+        );
+        const responseScenario = responseProject?.base_scenario
+            ?? project.base_scenario;
+        const scenarioId = Number(
+            responseScenario?.id
+            ?? responseScenario?.scenario_id
+            ?? responseProject?.base_scenario_id
+            ?? responseProject?.scenario_id
+            ?? project.base_scenario_id
+            ?? project.scenario_id,
+        );
+
+        if (!Number.isFinite(projectId)) {
+            return;
+        }
+
+        ChatStore.setSelectedContext(projectId);
+        ChatStore.setSelectedScenario(
+            Number.isFinite(scenarioId) ? scenarioId : null,
+        );
+
+        if (Number.isFinite(scenarioId)) {
+            return;
+        }
+
+        await DataStore.getProjectScenarios(projectId);
+
+        const firstScenario = DataStore.projectScenarios.get(projectId)?.[0];
+        const firstScenarioId = Number(firstScenario?.id);
+
+        if (
+            conversationVersion === ChatStore.currentStreamRequestId
+            && ChatStore.selectedContext === projectId
+            && Number.isFinite(firstScenarioId)
+        ) {
+            ChatStore.setSelectedScenario(firstScenarioId);
+        }
     };
 
     return (
@@ -297,11 +517,12 @@ const ChatContextSelection = observer(() => {
                         focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0788CE]/40
                         customer:focus-visible:ring-brand-primary/40 disabled:cursor-not-allowed
                     "
+                    ref={menuButtonRef}
                     disabled={isStreaming}
                     onClick={togglePanel}
-                    aria-expanded={isOpen}
+                    aria-expanded={isPanelOpen}
                     aria-haspopup="dialog"
-                    aria-label={isOpen
+                    aria-label={isPanelOpen
                         ? "Закрыть меню контекста и сервисов"
                         : "Открыть меню контекста и сервисов"}
                 >
@@ -312,7 +533,7 @@ const ChatContextSelection = observer(() => {
                                 : "text-gray-950 transition-colors group-hover:text-[#0788CE] customer:group-hover:text-brand-primary customer-dark:text-content-primary"
                         }
                     >
-                        {isOpen
+                        {isPanelOpen
                             ? <MdClose size="1.75rem" />
                             : <MdAdd size="1.75rem" />}
                     </span>
@@ -332,8 +553,8 @@ const ChatContextSelection = observer(() => {
                             customer-dark:hover:bg-surface-hover customer-dark:hover:text-content-primary
                         "
                         onClick={() => {
+                            setDismissedDraft(draft);
                             setPanelView("context");
-                            setIsOpen(true);
                         }}
                         disabled={isStreaming}
                         title={activeContextLabel}
@@ -368,12 +589,13 @@ const ChatContextSelection = observer(() => {
                     </div>
                 )}
 
-                {isOpen && (
+                {isPanelOpen && (
                     <div
                         ref={panelRef}
                         className={`
-                            chat-context-panel chat-context-panel-enter absolute -left-px z-50 w-[calc(100%+2px)]
-                            overflow-visible border-[0.5px] border-slate-300/80 bg-white/80 p-3 backdrop-blur-xl backdrop-saturate-150
+                            chat-context-panel chat-context-panel-enter absolute -left-px z-50
+                            ${panelWidthClass}
+                            flex min-h-0 flex-col overflow-hidden border-[0.5px] border-slate-300/80 bg-white/80 p-3 backdrop-blur-xl backdrop-saturate-150
                             text-sm text-slate-700 shadow-[0_24px_48px_-18px_var(--shadow-popover)]
                             customer-dark:border-white/15 customer-dark:bg-surface-raised/80 customer-dark:text-content-secondary
                             rounded-3xl
@@ -381,136 +603,64 @@ const ChatContextSelection = observer(() => {
                                 ? "bottom-full mb-3 origin-bottom-left"
                                 : "top-full mt-1 origin-top-left"}
                         `}
+                        style={{ maxHeight: panelMaxHeight }}
                         data-placement={panelPlacement}
                         role="dialog"
                         aria-label={
                             isChatVisible
                                 ? "Создание проекта и сервисы"
-                                : panelView === "menu"
-                                    ? "Выбор проекта и сервисы"
-                                    : "Выбор проекта"
+                                : isContextView
+                                    ? "Выбор проекта"
+                                    : "Выбор проекта и сервисы"
                         }
                     >
-                        {panelView === "menu" ? (
+                        {!isContextView ? (
                             <>
-                                <div className={`grid gap-2 ${isChatVisible ? "grid-cols-1" : "sm:grid-cols-2"}`}>
-                                    <button
-                                        type="button"
-                                        className="
-                                            flex min-w-0 items-center gap-3 rounded-2xl border border-slate-200 px-4 py-3
-                                            text-left font-medium text-slate-800 transition-colors hover:border-[#0788CE]/40 hover:bg-[#EAF5FF]
-                                            focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0788CE]/40
-                                            customer:hover:border-brand-primary/40 customer:hover:bg-brand-soft
-                                            customer:focus-visible:ring-brand-primary/40
-                                            customer-dark:border-ui-border customer-dark:text-content-primary customer-dark:hover:bg-surface-hover
-                                        "
-                                        onClick={() => {
-                                            setIsOpen(false);
-                                            setPanelView("menu");
-                                            setIsCreateProjectModalOpen(true);
-                                        }}
-                                    >
-                                        <MdOutlineFolder size={21} className="shrink-0" />
-                                        <span>Создать проект</span>
-                                    </button>
-                                    {!isChatVisible && (
-                                        <button
-                                            type="button"
-                                            className="
-                                                flex min-w-0 items-center gap-3 rounded-2xl border border-slate-200 px-4 py-3
-                                                text-left text-slate-800 transition-colors hover:border-[#0788CE]/40 hover:bg-[#d9e88d]
-                                                focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0788CE]/40
-                                                customer:hover:border-brand-primary/40 customer:hover:bg-brand-soft
-                                                customer:focus-visible:ring-brand-primary/40
-                                                customer-dark:border-ui-border customer-dark:text-content-primary customer-dark:hover:bg-surface-hover
-                                            "
-                                            onClick={() => setPanelView("context")}
-                                        >
-                                            <LuLayers3 size={20} className="shrink-0" />
-                                            <span className="font-medium">Выбрать проект</span>
-                                        </button>
-                                    )}
-                                </div>
-                                <section className="mt-3 border-t border-slate-100 pt-3 customer-dark:border-ui-border">
-                                    <h3 className="px-1 pb-2 text-xs font-semibold uppercase tracking-wider text-slate-400 customer-dark:text-content-muted">
-                                        Документы
-                                    </h3>
-                                    <div className={`grid gap-1 ${isProjectSelected ? "sm:grid-cols-2" : "grid-cols-1"}`}>
-                                        <button
-                                            type="button"
-                                            className="
-                                                flex w-full items-center justify-between gap-3 rounded-2xl px-3 py-2.5 text-left leading-5
-                                                transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0788CE]/40
-                                                customer:focus-visible:ring-brand-primary/40
-                                                hover:bg-slate-100 customer-dark:hover:bg-surface-hover
-                                            "
-                                            onClick={handleOpenDocuments}
-                                        >
-                                            <span className="flex min-w-0 items-center gap-2.5">
-                                                <MdOutlineDescription size={19} className="shrink-0" />
-                                                <span className="truncate">Просмотр документов</span>
-                                            </span>
-                                            {isProjectSelected && (
-                                                <span
-                                                    className="min-w-6 shrink-0 rounded-full bg-[#EAF5FF] px-2 py-0.5 text-center text-xs font-semibold text-[#0B5E8E] customer:bg-brand-soft customer:text-brand-contrast"
-                                                    aria-label={`Документов: ${documentCount ?? 0}`}
-                                                >
-                                                    {documentCount ?? 0}
-                                                </span>
-                                            )}
-                                        </button>
-                                        {isProjectSelected && (
-                                            <button
-                                                type="button"
-                                                className="
-                                                    flex w-full items-center gap-2.5 rounded-2xl px-3 py-2.5 text-left leading-5
-                                                    transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0788CE]/40
-                                                    customer:focus-visible:ring-brand-primary/40
-                                                    hover:bg-slate-100 customer-dark:hover:bg-surface-hover
-                                                "
-                                                onClick={handleOpenUploadDocument}
-                                            >
-                                                <MdUploadFile size={19} className="shrink-0" />
-                                                <span className="truncate">Загрузить документ</span>
-                                            </button>
-                                        )}
+                                {isSlashOpen ? (
+                                    <div className="shrink-0 px-3 pb-2 text-xs text-slate-400 customer-dark:text-content-muted">Инструменты</div>
+                                ) : (
+                                    <div className="mb-2 flex shrink-0 items-center gap-2 border-b border-slate-100 px-3 pb-3 customer-dark:border-ui-border">
+                                        <MdSearch size={19} aria-hidden="true" />
+                                        <input autoFocus value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Найти инструмент…" aria-label="Поиск инструментов" className="min-w-0 flex-1 bg-transparent outline-none" />
+                                        <span className="text-xs text-slate-400">/</span>
                                     </div>
-                                </section>
-                                <section className="mt-3 border-t border-slate-100 pt-3 customer-dark:border-ui-border">
-                                    <h3 className="px-1 pb-2 text-xs font-semibold uppercase tracking-wider text-slate-400 customer-dark:text-content-muted">
-                                        Сервисы
-                                    </h3>
-                                    <div className={`grid gap-1 ${availableServices.length > 1 ? "sm:grid-cols-2" : "grid-cols-1"}`}>
-                                        {availableServices.map((service) => {
-                                            const isSelected = selectedChatTool === service;
+                                )}
+                                <div className="tools-menu-scroll min-h-0 max-h-88 flex-1 overflow-y-auto overscroll-contain" role="list" aria-label="Инструменты">
+                                    {filteredActions.map((action, index) => {
+                                        const showGroup = index === 0 || filteredActions[index - 1].group !== action.group;
+                                        const isActive = isSlashOpen && index === activeIndex;
+                                        const isSelected = selectedChatTool === action.id;
+                                        const showDocumentCount = action.id === "documents" && isProjectSelected;
+                                        const rowClass = `flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary/40 customer-dark:hover:bg-surface-hover ${isActive ? "bg-slate-100 customer-dark:bg-surface-hover" : ""} ${isSelected ? "text-brand-primary" : ""}`;
 
-                                            return (
+                                        return (
+                                            <div key={action.id} role="listitem">
+                                                {showGroup && (
+                                                    <h3 className="px-3 pb-1 pt-3 text-xs font-medium text-slate-400 customer-dark:text-content-muted">{action.group}</h3>
+                                                )}
                                                 <button
-                                                    key={service}
                                                     type="button"
-                                                    className={`
-                                                        flex w-full items-center rounded-2xl px-3 py-2.5 text-left leading-5
-                                                        transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0788CE]/40
-                                                        customer:focus-visible:ring-brand-primary/40
-                                                        ${isSelected
-                                                            ? "bg-[#EAF5FF] text-[#0B5E8E] customer:bg-brand-soft customer:text-brand-contrast"
-                                                            : "hover:bg-slate-100 customer-dark:hover:bg-surface-hover"}
-                                                    `}
-                                                    onClick={() => {
-                                                        ChatStore.setSelectedChatTool(service);
-                                                        setIsOpen(false);
-                                                        setPanelView("menu");
-                                                    }}
+                                                    data-active={isActive}
+                                                    aria-pressed={action.group === "Модули" ? isSelected : undefined}
+                                                    className={rowClass}
+                                                    onClick={() => executeAction(action)}
                                                 >
-                                                    {service}
+                                                    <span className="shrink-0" aria-hidden="true">{action.icon}</span>
+                                                    <span className="min-w-0 flex-1">{action.label}</span>
+                                                    {showDocumentCount && <span className="rounded-full bg-brand-soft px-2 text-xs text-brand-contrast">{documentCount ?? 0}</span>}
+                                                    {isSelected && <MdCheck size={18} aria-label="Выбран" />}
                                                 </button>
-                                            );
-                                        })}
-                                    </div>
-                                </section>
+                                            </div>
+                                        );
+                                    })}
+                                    {!filteredActions.length && <p className="px-3 py-6 text-center text-slate-400" role="status">Инструменты не найдены</p>}
+                                </div>
+                                {isSlashOpen && filteredActions[activeIndex] && (
+                                    <span className="sr-only" role="status">{filteredActions[activeIndex].label}</span>
+                                )}
                             </>
                         ) : (
-                            <div>
+                            <div className="-m-2 min-h-0 overflow-y-auto p-2">
                                 <div className="flex items-center gap-3 border-b border-slate-100 px-1 pb-3 customer-dark:border-ui-border">
                                     <button
                                         type="button"
@@ -559,19 +709,7 @@ const ChatContextSelection = observer(() => {
                                             placeholder="Выберите сценарий"
                                             block
                                             compactGlow
-                                            trailingAction={{
-                                                icon: <MdAdd aria-hidden="true" size={20} />,
-                                                label: "Создать сценарий для выбранного проекта",
-                                                title: baseScenario
-                                                    ? "Новый сценарий"
-                                                    : "Базовый сценарий проекта не найден",
-                                                disabled: !baseScenario || selectedProjectId === null,
-                                                onClick: () => {
-                                                    setIsOpen(false);
-                                                    setPanelView("menu");
-                                                    setIsCreateScenarioModalOpen(true);
-                                                },
-                                            }}
+                                            trailingAction={createScenarioAction}
                                         />
                                     )}
                                 </div>
@@ -584,51 +722,7 @@ const ChatContextSelection = observer(() => {
             {isCreateProjectModalOpen && (
                 <CreateProjectModal
                     onClose={() => setIsCreateProjectModalOpen(false)}
-                    onCreated={async (project) => {
-                        const responseProject = project.project;
-                        const projectName = responseProject?.name ?? project.name;
-                        const refreshedProject = DataStore.userProjects?.find(
-                            (item) => item.name === projectName,
-                        );
-                        const projectId = Number(
-                            responseProject?.project_id
-                            ?? responseProject?.id
-                            ?? project.project_id
-                            ?? project.id
-                            ?? refreshedProject?.id,
-                        );
-                        const responseScenario = responseProject?.base_scenario
-                            ?? project.base_scenario;
-                        const scenarioId = Number(
-                            responseScenario?.id
-                            ?? responseScenario?.scenario_id
-                            ?? responseProject?.base_scenario_id
-                            ?? responseProject?.scenario_id
-                            ?? project.base_scenario_id
-                            ?? project.scenario_id,
-                        );
-
-                        if (!Number.isFinite(projectId)) return;
-
-                        ChatStore.setSelectedContext(projectId);
-                        ChatStore.setSelectedScenario(
-                            Number.isFinite(scenarioId) ? scenarioId : null,
-                        );
-
-                        if (Number.isFinite(scenarioId)) return;
-
-                        await DataStore.getProjectScenarios(projectId);
-
-                        const firstScenario = DataStore.projectScenarios.get(projectId)?.[0];
-                        const firstScenarioId = Number(firstScenario?.id);
-
-                        if (
-                            ChatStore.selectedContext === projectId
-                            && Number.isFinite(firstScenarioId)
-                        ) {
-                            ChatStore.setSelectedScenario(firstScenarioId);
-                        }
-                    }}
+                    onCreated={handleProjectCreated}
                 />
             )}
 
@@ -639,6 +733,9 @@ const ChatContextSelection = observer(() => {
                     baseScenarioId={baseScenario.id}
                     onClose={() => setIsCreateScenarioModalOpen(false)}
                     onCreated={(scenario) => {
+                        if (conversationVersion !== ChatStore.currentStreamRequestId) {
+                            return;
+                        }
                         ChatStore.setSelectedContext(selectedProjectId);
                         ChatStore.setSelectedScenario(scenario.id);
                     }}
