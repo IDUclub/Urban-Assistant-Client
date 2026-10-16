@@ -869,10 +869,17 @@ const ChatTools = observer(() => {
 const ChatInput = observer((
     { onSubmit }: { onSubmit: ChatComponentProps["onSubmit"]}
 ) => {
-    const { isStreaming } = ChatStore;
+    const { isStreaming, selectedChatTool } = ChatStore;
+    const [isToolSearchOpen, setIsToolSearchOpen] = useState(false);
     const currentInput = ChatStore.messageDraft;
     const setCurrentInput = (value: string) => ChatStore.setMessageDraft(value);
     const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+    useEffect(() => {
+        if (selectedChatTool) {
+            textareaRef.current?.focus();
+        }
+    }, [selectedChatTool]);
 
     useEffect(() => {
         const textarea = textareaRef.current;
@@ -900,6 +907,7 @@ const ChatInput = observer((
                     `}>
                         <textarea
                             ref={textareaRef}
+                            aria-label="Сообщение помощнику"
                             rows={1}
                             className={`
                                 min-w-0 flex-1 resize-none overflow-y-auto bg-transparent leading-6 focus:outline-none transition-colors duration-200
@@ -911,7 +919,8 @@ const ChatInput = observer((
                             value={currentInput}
                             onChange={(e) => setCurrentInput(e.target.value)}
                             onKeyDown={(event) => {
-                                if (event.key === "Enter" && currentInput) {
+                                if (!event.defaultPrevented && !event.nativeEvent.isComposing && event.key === "Enter" && !event.shiftKey && currentInput) {
+                                    event.preventDefault();
                                     onSubmit?.(currentInput);
                                     setCurrentInput("");
                                 }
@@ -921,11 +930,13 @@ const ChatInput = observer((
                     </div>
                     <div className="mt-5 flex w-full items-end justify-between gap-3">
                         <div className="min-w-0 flex-1">
-                            <ChatContextSelection />
+                            <ChatContextSelection inputRef={textareaRef} onSearchOpenChange={setIsToolSearchOpen} />
                         </div>
                         <div className="flex shrink-0 items-center">
                             <button
-                                className={`group ${isStreaming ? "cursor-pointer" : ""}`}
+                                disabled={!isStreaming && isToolSearchOpen}
+                                aria-label={isStreaming ? "Остановить ответ" : "Отправить сообщение"}
+                                className={`group disabled:cursor-default disabled:opacity-40 ${isStreaming ? "cursor-pointer" : ""}`}
                                 onClick={() => {
                                     if (isStreaming) {
                                         ChatStore.abortStream();
