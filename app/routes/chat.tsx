@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { MdMenuOpen, MdMenu } from "react-icons/md";
 import type { Route } from "./+types/chat";
 import { redirect } from "react-router";
 import { observer } from "mobx-react-lite";
@@ -42,10 +44,23 @@ export async function clientLoader({
 }
 
 const ChatPage = observer(() => {
+    const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+    const sidebarToggle = (
+        <button
+            type="button"
+            onClick={() => setIsSidebarOpen((current) => !current)}
+            aria-label={isSidebarOpen ? "Скрыть панель истории" : "Показать панель истории"}
+            aria-expanded={isSidebarOpen}
+            className={`flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-2xl border border-ui-border bg-surface-raised/95 text-brand-primary shadow-lg backdrop-blur transition-colors hover:border-brand-primary hover:bg-brand-soft focus:border-brand-primary focus:outline-none focus:ring-2 focus:ring-brand-primary/20 ${isSidebarOpen ? "ml-auto" : "fixed left-4 top-4 z-50"}`}
+        >
+            {isSidebarOpen ? <MdMenuOpen size={20} /> : <MdMenu size={20} />}
+        </button>
+    );
     return (
         <main className="flex h-dvh w-screen items-center justify-center overflow-hidden">
-            <div className="grid h-dvh w-screen grid-cols-[1fr_2fr] lg:grid-cols-[1fr_3fr] 2xl:grid-cols-[1fr_4fr] overflow-hidden">
-                <aside className="z-20 flex h-dvh min-w-0 flex-col items-center overflow-hidden bg-white p-4 font-cabin text-gray-900 shadow-[20px_0_60px_-25px_var(--shadow-sidebar)] customer:bg-surface-panel customer:text-content-primary">
+            <div className={`grid h-dvh w-screen overflow-hidden ${isSidebarOpen ? "grid-cols-[1fr_2fr] lg:grid-cols-[1fr_3fr] 2xl:grid-cols-[1fr_4fr]" : "grid-cols-1"}`}>
+                {!isSidebarOpen && sidebarToggle}
+                <aside className={`${isSidebarOpen ? "flex" : "hidden"} z-20 h-dvh min-w-0 flex-col items-center overflow-hidden bg-white p-4 font-cabin text-gray-900 shadow-[20px_0_60px_-25px_var(--shadow-sidebar)] customer:bg-surface-panel customer:text-content-primary`}>
                     <div className="flex w-full min-w-0 items-center gap-3 px-2 py-2">
                         <span
                             aria-hidden="true"
@@ -64,6 +79,7 @@ const ChatPage = observer(() => {
                             <span className="block">Помощник</span>
                             <span className="block text-brand-primary">проектировщика</span>
                         </h1>
+                        {isSidebarOpen && sidebarToggle}
                     </div>
                     <ChatStory />
                     <div className="mt-auto w-full border-t border-(--sidebar-divider-color) pt-4">

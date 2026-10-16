@@ -187,11 +187,14 @@ function CreateScenarioModal({
             aliases: [zoneType.name, zoneType.description, zoneType.zoneNickname]
                 .flatMap((value) => typeof value === "string" && value.trim() ? [value] : []),
         }));
-    const hasImportedObjects = functionalZoneGeometries.length > 0 && roadGeometries.length > 0;
+    const hasImportedObjects = functionalZoneGeometries.length > 0
+        || roadGeometries.length > 0
+        || infrastructureItems.length > 0;
     const isInfrastructureMapped = infrastructureItems.every(isInfrastructureItemMapped);
     const canSubmit = !isSubmitting
         && (!shouldAddObjects || hasImportedObjects)
         && (!shouldAddObjects || isInfrastructureMapped)
+        && loadingFileKind === null
         && (
             createdScenario !== null || (
                 !!name.trim()
@@ -390,7 +393,7 @@ function CreateScenarioModal({
             }
 
             if (shouldAddObjects) {
-                if (!areFunctionalZonesUploaded) {
+                if (functionalZoneGeometries.length > 0 && !areFunctionalZonesUploaded) {
                     if (functionalZoneTypeId === null) {
                         throw new Error("Не выбран тип профиля для функциональных зон.");
                     }
@@ -552,7 +555,7 @@ function CreateScenarioModal({
                             <div>
                                 <h3 className="text-sm font-semibold">Объекты сценария</h3>
                                 <p className="mt-1 text-xs text-slate-500 customer-dark:text-content-muted">
-                                    Загрузите GeoJSON-файлы функциональных зон и дорожно-транспортной сети. Объекты застройки можно добавить без сервисов.
+                                    Загрузите один или несколько GeoJSON-файлов: функциональные зоны, дорожную сеть или объекты застройки. Объекты застройки можно добавить без сервисов.
                                 </p>
                             </div>
 

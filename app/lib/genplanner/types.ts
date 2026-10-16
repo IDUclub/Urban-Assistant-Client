@@ -19,6 +19,19 @@ export type GenPlannerCustomSetupMessage = {
     errorText?: string;
 };
 
+export type GenPlannerAdjacencyPromptStatus =
+    | "pending"
+    | "submitting"
+    | "submitted"
+    | "error";
+
+export type GenPlannerAdjacencyPromptMessage = {
+    type: "genplanner_adjacency_prompt";
+    id: string;
+    status: GenPlannerAdjacencyPromptStatus;
+    errorText?: string;
+};
+
 export type GenPlannerSaveStatus = "pending" | "saving" | "saved" | "declined" | "error";
 
 export type SaveGeneratedPlanResult = {

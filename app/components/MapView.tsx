@@ -6,13 +6,17 @@ import {
     MdOutlineVisibilityOff,
     MdDownload
 } from "react-icons/md";
-import Map, { Layer, Source } from "react-map-gl/mapbox";
+import { Layer, Source } from "react-map-gl/mapbox";
+import MapCanvas from "@components/MapCanvas";
 import type { MapRef } from "react-map-gl/mapbox";
 import type { MapMouseEvent } from "react-map-gl/mapbox";
 import type { Feature, Geometry } from "geojson";
 import "mapbox-gl/dist/mapbox-gl.css";
 import ChatStore from "@lib/ChatStore";
+import AuthStore from "@lib/AuthStore";
 import MapStore from "@lib/MapStore";
+import { getFacadeSceneGlb } from "@lib/genbuilder/client";
+import { createFacadeSceneLayer } from "@lib/genbuilder/facadeSceneLayer";
 import {
     FUNCTIONAL_ZONE_FALLBACK_COLOR,
     FUNCTIONAL_ZONE_ID_PROPERTY,
@@ -533,10 +537,15 @@ function getMapLegendItems(
         return [{ color: layer.style.color, label: layer.name || "Без названия" }];
     }
 
-    return categoricalStyle.valueColors.map(([value, color]) => ({
-        color,
-        label: getLegendValueLabel(layer.name, categoricalStyle.propertyName, value),
-    }));
+    const legendItems: MapLegendItem[] = [];
+    for (const [value, color] of categoricalStyle.valueColors) {
+        const label = getLegendValueLabel(layer.name, categoricalStyle.propertyName, value);
+        if (!legendItems.some((item) => item.label === label && item.color === color)) {
+            legendItems.push({ color, label });
+        }
+    }
+
+    return legendItems;
 }
 
 function getCategoricalLayerStyle(name: string | undefined, layer: unknown): CategoricalLayerStyle | undefined {
@@ -752,12 +761,14 @@ const MapView = observer(({
     onToggleExpanded,
     fitAllLayers = false,
 }: MapViewProps) => {
-    const { mapLayers, isMapLayersAvailable } = MapStore;
+    const { mapLayers, facadeScene, isMapLayersAvailable } = MapStore;
     const [isMounted, setIsMounted] = useState(false);
     const [mapStyle, setMapStyle] = useState(LIGHT_MAP_STYLE);
+    const [isLayersExpanded, setIsLayersExpanded] = useState(true);
     const [isLegendExpanded, setIsLegendExpanded] = useState(true);
     const [activeLayerId, setActiveLayerId] = useState<string>();
     const [selectedFeature, setSelectedFeature] = useState<SelectedFeatureState | null>(null);
+    const [facadeSceneError, setFacadeSceneError] = useState<string>();
     const mapRef = useRef<MapRef | null>(null);
     const propertyListRef = useRef<HTMLDivElement | null>(null);
     const mapboxToken = import.meta.env.VITE_MAPBOX_TOKEN;
@@ -812,11 +823,18 @@ const MapView = observer(({
                 : displayedLayersBounds[0][1],
             zoom: 11,
         }
-        : {
-            longitude: 37.6173,
-            latitude: 55.7558,
-            zoom: 11,
-        };
+        : facadeScene
+            ? {
+                longitude: facadeScene.origin.lon,
+                latitude: facadeScene.origin.lat,
+                zoom: 16.5,
+                pitch: 60,
+            }
+            : {
+                longitude: 37.6173,
+                latitude: 55.7558,
+                zoom: 11,
+            };
 
     const downloadLayer = (name: string, layer: unknown) => {
         const fileName = `${(name || "layer")
@@ -946,7 +964,7 @@ const MapView = observer(({
     }, []);
 
     useEffect(() => {
-        if (!isMounted || !displayedLayersBounds) {
+        if (!isMounted || !displayedLayersBounds || facadeScene?.isVisible) {
             return;
         }
 
@@ -955,7 +973,91 @@ const MapView = observer(({
         }, 300);
 
         return () => window.clearTimeout(timeout);
-    }, [isMounted, displayedLayersBounds]);
+    }, [isMounted, displayedLayersBounds, facadeScene?.isVisible]);
+
+    useEffect(() => {
+        if (!isMounted || !facadeScene?.isVisible || !mapRef.current) return;
+
+        mapRef.current.flyTo({
+            center: [facadeScene.origin.lon, facadeScene.origin.lat],
+            zoom: 16.5,
+            pitch: 60,
+            duration: 1600,
+            essential: true,
+        });
+    }, [isMounted, facadeScene?.resultId, facadeScene?.isVisible]);
+
+    useEffect(() => {
+        setFacadeSceneError(undefined);
+        if (!isMounted || !facadeScene?.isVisible || !mapRef.current) return;
+
+        const baseUrl = import.meta.env.VITE_GENBUILDER_API;
+        const accessToken = AuthStore.accessToken;
+        if (!baseUrl || !accessToken) {
+            setFacadeSceneError("Не удалось загрузить 3D-модель: сервис недоступен.");
+            MapStore.setFacadeSceneLoadStatus(facadeScene.resultId, "error");
+            return;
+        }
+
+        const map = mapRef.current.getMap();
+        const controller = new AbortController();
+        let modelUrl: string | undefined;
+        let layer: ReturnType<typeof createFacadeSceneLayer> | undefined;
+        let disposed = false;
+        let hasFitModel = false;
+        const addLayer = () => {
+            if (disposed || !layer || !map.isStyleLoaded() || map.getLayer(layer.id)) return;
+            try {
+                map.addLayer(layer);
+            } catch (error) {
+                console.error("Error adding facade scene to map:", error);
+                setFacadeSceneError("Не удалось отобразить 3D-модель на карте.");
+                MapStore.setFacadeSceneLoadStatus(facadeScene.resultId, "error");
+            }
+        };
+
+        map.on("style.load", addLayer);
+        void getFacadeSceneGlb(baseUrl, accessToken, facadeScene.glbUrl, controller.signal)
+            .then((blob) => {
+                if (disposed) return;
+                modelUrl = URL.createObjectURL(blob);
+                layer = createFacadeSceneLayer(facadeScene, modelUrl, () => {
+                    setFacadeSceneError("Не удалось открыть GLB-файл 3D-модели.");
+                    MapStore.setFacadeSceneLoadStatus(facadeScene.resultId, "error");
+                }, (bounds) => {
+                    if (disposed || hasFitModel) return;
+                    hasFitModel = true;
+                    map.fitBounds(bounds, {
+                        padding: 80,
+                        maxZoom: 16.5,
+                        pitch: 60,
+                        duration: 1600,
+                        essential: true,
+                    });
+                }, () => {
+                    if (!disposed) MapStore.setFacadeSceneLoadStatus(facadeScene.resultId, "ready");
+                });
+                addLayer();
+            })
+            .catch((error) => {
+                if (disposed || controller.signal.aborted) return;
+                console.error("Error downloading facade scene:", error);
+                setFacadeSceneError("Не удалось загрузить GLB-файл 3D-модели.");
+                MapStore.setFacadeSceneLoadStatus(facadeScene.resultId, "error");
+            });
+
+        return () => {
+            disposed = true;
+            controller.abort();
+            map.off("style.load", addLayer);
+            try {
+                if (layer && map.getLayer(layer.id)) map.removeLayer(layer.id);
+            } catch {
+                // The map may already have removed its style while unmounting.
+            }
+            if (modelUrl) URL.revokeObjectURL(modelUrl);
+        };
+    }, [isMounted, facadeScene?.resultId, facadeScene?.glbUrl, facadeScene?.isVisible]);
 
     useEffect(() => {
         if (!isMounted || !activeLayer) return;
@@ -992,8 +1094,8 @@ const MapView = observer(({
                     Loading map...
                 </div>
             ) : (
-                <Map
-                    ref={mapRef}
+                <MapCanvas
+                    mapRef={mapRef}
                     interactiveLayerIds={interactiveLayerIds}
                     initialViewState={initialViewState}
                     mapStyle={mapStyle}
@@ -1116,15 +1218,23 @@ const MapView = observer(({
                             />
                         </Source>
                     )}
-                </Map>
+                </MapCanvas>
             )}
             {isMapLayersAvailable && (
-                <div className="pointer-events-auto absolute left-4 top-4 z-10 h-[40%] w-[min(18rem,calc(100%-2rem))] max-w-72">
+                <div className={`pointer-events-auto absolute left-4 top-4 z-10 w-[min(18rem,calc(100%-2rem))] max-w-72 ${isLayersExpanded ? "h-[40%]" : ""}`}>
                     <div className="flex h-full flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white/30 px-4 py-3 shadow-sm backdrop-blur-lg customer-dark:border-ui-border customer-dark:bg-surface-panel/30">
-                        <div className="mb-3 shrink-0 text-xs font-semibold uppercase tracking-[0.14em] text-gray-500 customer-dark:text-content-muted">
-                            Отображаемые слои
-                        </div>
-                        <div className="min-h-0 flex flex-1 flex-col gap-1.5 overflow-y-auto">
+                        <button
+                            type="button"
+                            onClick={() => setIsLayersExpanded((current) => !current)}
+                            aria-expanded={isLayersExpanded}
+                            className={`flex shrink-0 cursor-pointer items-center justify-between gap-2 text-left text-gray-500 customer-dark:text-content-muted ${isLayersExpanded ? "mb-3" : ""}`}
+                        >
+                            <span className="text-xs font-semibold uppercase tracking-[0.14em]">
+                                Отображаемые слои
+                            </span>
+                            {isLayersExpanded ? <IoChevronDown size={16} /> : <IoChevronUp size={16} />}
+                        </button>
+                        <div className={`min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto ${isLayersExpanded ? "flex" : "hidden"}`}>
                             {mapLayers.map((layer) => {
                                 const categoricalStyle = getCategoricalLayerStyle(layer.name, layer.layer);
                                 const legendGradient = categoricalStyle?.legendGradient;
@@ -1193,6 +1303,35 @@ const MapView = observer(({
                                     </div>
                                 );
                             })}
+                            {facadeScene && (
+                                <div className={`flex items-center gap-2 rounded-2xl text-[13px] ${facadeScene.isVisible ? "text-gray-700 customer-dark:text-content-secondary" : "text-gray-400 customer-dark:text-content-muted"}`}>
+                                    <button
+                                        type="button"
+                                        className="cursor-pointer text-lg text-gray-500 customer-dark:text-content-muted"
+                                        onClick={() => MapStore.toggleFacadeSceneVisibility()}
+                                        aria-label={facadeScene.isVisible ? "Скрыть 3D-модель" : "Показать 3D-модель"}
+                                    >
+                                        {facadeScene.isVisible ? <MdOutlineVisibility /> : <MdOutlineVisibilityOff />}
+                                    </button>
+                                    <span className="h-4 w-1.5 shrink-0 bg-blue-500 shadow-sm" />
+                                    <button
+                                        type="button"
+                                        className="min-w-0 flex-1 cursor-pointer truncate text-left hover:text-[#0788CE] customer:hover:text-brand-primary"
+                                        onClick={() => mapRef.current?.flyTo({ center: [facadeScene.origin.lon, facadeScene.origin.lat], zoom: 16.5, pitch: 60, essential: true })}
+                                        title={facadeScene.facadeStyle ? `3D-застройка: ${facadeScene.facadeStyle}` : "3D-застройка"}
+                                    >
+                                        3D-застройка{facadeScene.facadeStyle ? ` · ${facadeScene.facadeStyle}` : ""}
+                                    </button>
+                                </div>
+                            )}
+                            {facadeScene?.isVisible && MapStore.facadeSceneLoadStatus === "loading" && (
+                                <div className="pl-7 text-xs text-gray-500 customer-dark:text-content-muted" role="status">
+                                    Загружаем 3D-модель...
+                                </div>
+                            )}
+                            {facadeSceneError && (
+                                <div className="text-xs text-red-700 customer:text-danger-content">{facadeSceneError}</div>
+                            )}
                         </div>
                     </div>
                 </div>

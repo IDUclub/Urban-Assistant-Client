@@ -1,3 +1,5 @@
+import useResizableMap from "@/hooks/useResizableMap";
+import CollapsibleChatInput from "@components/CollapsibleChatInput";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { observer } from "mobx-react-lite";
 import { IoIosSend } from "react-icons/io";
@@ -12,7 +14,9 @@ import {
   MdArrowBack,
   MdClose,
   MdOutlineDescription,
+  MdStopCircle,
 } from "react-icons/md";
+import MasBfmProjectStatus from "@components/mas-bfm/MasBfmProjectStatus";
 import MasBfmStore from "@lib/MasBfmStore";
 import MapStore from "@lib/MapStore";
 import DataStore, { type ProjectScenario } from "@lib/DataStore";
@@ -46,6 +50,20 @@ function asText(value: unknown) {
   } catch {
     return String(value);
   }
+}
+
+function assistantText(content: unknown) {
+  let parsedContent = content;
+  if (typeof content === "string") {
+    try {
+      parsedContent = JSON.parse(content);
+    } catch {
+      return content;
+    }
+  }
+
+  const data = asRecord(parsedContent);
+  return typeof data?.markdown === "string" ? data.markdown : asText(content);
 }
 
 function messageTime(message: SynapseMessage) {
@@ -135,7 +153,7 @@ function MessageCard({ message }: { message: SynapseMessage }) {
               {time && <time>{time}</time>}
             </div>
           )}
-          <MarkdownMessage>{text}</MarkdownMessage>
+          <MarkdownMessage>{assistantText(message.content)}</MarkdownMessage>
         </div>
       </div>
     );
@@ -144,61 +162,11 @@ function MessageCard({ message }: { message: SynapseMessage }) {
   return <StatusMessage message={message} />;
 }
 
-function ProjectStatus({ status }: { status?: string }) {
-  if (!status) {
-    return null;
-  }
-
-  const normalized = status.toLowerCase();
-  const isCompleted = normalized === "completed";
-  const isFailed = normalized === "failed";
-  const isCancelled = normalized === "cancelled";
-  const isWaiting = normalized === "waiting_approval_timeout";
-  const label = isCompleted
-    ? "Завершено"
-    : isFailed
-      ? "Ошибка выполнения"
-      : isCancelled
-        ? "Остановлено"
-        : isWaiting
-          ? "Ожидает подтверждения"
-          : "Выполняется";
-  const Icon = isCompleted
-    ? IoCheckmarkCircleOutline
-    : isFailed
-      ? IoAlertCircleOutline
-      : IoTimeOutline;
-
-  return (
-    <div
-      role="status"
-      className={`flex items-center gap-1.5 text-xs font-medium ${
-        isFailed
-          ? "text-red-600 customer-dark:text-red-300"
-          : isCompleted
-            ? "text-emerald-600 customer-dark:text-emerald-300"
-            : "text-content-muted"
-      }`}
-    >
-      <Icon
-        size={15}
-        aria-hidden="true"
-        className={
-          !isCompleted && !isFailed && !isCancelled && !isWaiting
-            ? "animate-pulse"
-            : undefined
-        }
-      />
-      <span>{label}</span>
-    </div>
-  );
-}
-
 const MasBfmChat = observer(() => {
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [projectSelectionOpen, setProjectSelectionOpen] = useState(false);
   const [documentLibraryOpen, setDocumentLibraryOpen] = useState(false);
-  const [isMapExpanded, setIsMapExpanded] = useState(false);
+  const { mapHeight, isMapExpanded, toggleMapExpanded, resizeHandleProps } = useResizableMap();
   const menuRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -232,17 +200,19 @@ const MasBfmChat = observer(() => {
   const selectedContextLabel = selectedScenarioLabel
     ? `${selectedProjectLabel} / ${selectedScenarioLabel}`
     : selectedProjectLabel;
+  const error = MasBfmStore.error ?? MasBfmStore.monitorError;
   const hasConversation =
     MasBfmStore.messages.length > 0 ||
     MasBfmStore.isSending ||
     !!MasBfmStore.synapseProjectId ||
-    !!MasBfmStore.error;
-  const canSend = !!MasBfmStore.draft.trim() && !MasBfmStore.isSending;
-  const mapHeight = "50vh";
+    !!error;
+  const canSend =
+    !!MasBfmStore.draft.trim() &&
+    !MasBfmStore.isSending &&
+    !MasBfmStore.isStopping &&
+    !MasBfmStore.isHistoryLoading;
   const visibleMapOffset = MapStore.isMapLayersAvailable
-    ? isMapExpanded
-      ? mapHeight
-      : "25vh"
+    ? mapHeight
     : "4px";
 
   useEffect(() => {
@@ -256,6 +226,12 @@ const MasBfmChat = observer(() => {
       MapStore.restoreMapLayers(previousMapLayersRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    if (!MasBfmStore.synapseProjectId) {
+      MapStore.clearMapLayers();
+    }
+  }, [MasBfmStore.synapseProjectId]);
 
   useEffect(() => {
     const projectId = MasBfmStore.selectedProjectId;
@@ -293,7 +269,7 @@ const MasBfmChat = observer(() => {
     }
 
     textarea.style.height = "0px";
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 120)}px`;
+    textarea.style.height = `${Math.max(24, Math.min(textarea.scrollHeight, 120))}px`;
   }, [MasBfmStore.draft]);
 
   useEffect(() => {
@@ -301,7 +277,7 @@ const MasBfmChat = observer(() => {
       behavior: "smooth",
       block: "end",
     });
-  }, [MasBfmStore.messages.length, MasBfmStore.isSending, MasBfmStore.error]);
+  }, [MasBfmStore.messages.length, MasBfmStore.isSending, error]);
 
   useEffect(() => {
     if (!projectMenuOpen) {
@@ -343,7 +319,7 @@ const MasBfmChat = observer(() => {
     <>
       <section
         aria-label="Чат МАС БФМ"
-        className="relative flex h-dvh min-w-0 flex-col overflow-hidden bg-white px-8 pt-20 transition-[padding-bottom] duration-300 ease-out customer:bg-surface-page"
+        className="relative flex h-dvh min-w-0 flex-col overflow-hidden bg-white px-8 pt-20 customer:bg-surface-page"
         style={{ paddingBottom: `calc(1.5rem + ${visibleMapOffset})` }}
       >
         <div
@@ -361,7 +337,7 @@ const MasBfmChat = observer(() => {
                   <span className="rounded-full bg-brand-soft px-3 py-1 text-xs font-semibold tracking-wider text-brand-primary">
                     МАС БФМ
                   </span>
-                  <ProjectStatus status={MasBfmStore.projectStatus} />
+                  <MasBfmProjectStatus status={MasBfmStore.projectStatus} />
                 </div>
                 {MasBfmStore.messages.map((message) => (
                   <MessageCard key={message.id} message={message} />
@@ -371,19 +347,24 @@ const MasBfmChat = observer(() => {
                   archiveRefs={MasBfmStore.archiveRefs}
                   projectId={MasBfmStore.synapseProjectId}
                 />
+                {MasBfmStore.isHistoryLoading && (
+                  <div role="status" className="px-3 py-2 text-sm text-content-muted">
+                    Загружаем историю проекта…
+                  </div>
+                )}
                 {MasBfmStore.isSending && (
                   <div className="flex items-center gap-2 px-3 py-2 text-sm text-content-muted">
                     <span className="h-2 w-2 animate-pulse rounded-full bg-brand-primary" />
                     Отправляем запрос в МАС БФМ…
                   </div>
                 )}
-                {MasBfmStore.error && (
+                {error && (
                   <div className="flex items-start gap-2 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 customer-dark:border-red-900/50 customer-dark:bg-red-950/30 customer-dark:text-red-300">
                     <IoAlertCircleOutline
                       size={19}
                       className="mt-0.5 shrink-0"
                     />
-                    <span>{MasBfmStore.error}</span>
+                    <span>{error}</span>
                   </div>
                 )}
                 <div ref={messagesEndRef} />
@@ -403,6 +384,7 @@ const MasBfmChat = observer(() => {
               </h1>
             </div>
           )}
+          <CollapsibleChatInput canCollapse={hasConversation}>
           <div className="chat-input-shell relative mb-1.5 flex w-full shrink-0 flex-col rounded-3xl border border-gray-300 bg-white px-6 py-4 text-gray-950 shadow-gray-300 drop-shadow-lg customer-dark:border-ui-border-strong customer-dark:bg-surface-panel customer-dark:text-content-primary">
             <textarea
               ref={textareaRef}
@@ -576,6 +558,18 @@ const MasBfmChat = observer(() => {
                   </div>
                 )}
               </div>
+              {MasBfmStore.canStop && (
+                <button
+                  type="button"
+                  onClick={() => void MasBfmStore.stopProject()}
+                  disabled={MasBfmStore.isStopping || MasBfmStore.isSending}
+                  aria-label="Остановить процесс МАС БФМ"
+                  title="Остановить процесс"
+                  className="shrink-0 cursor-pointer text-red-600 hover:text-red-700 disabled:cursor-wait disabled:opacity-40"
+                >
+                  <MdStopCircle size={30} />
+                </button>
+              )}
               <button
                 type="button"
                 disabled={!canSend}
@@ -591,19 +585,20 @@ const MasBfmChat = observer(() => {
               </button>
             </div>
           </div>
+          </CollapsibleChatInput>
         </div>
         {MapStore.isMapLayersAvailable && (
           <div
-            className="absolute inset-x-0 bottom-0 px-8 pb-6 pt-4 transition-transform duration-300 ease-out"
+            className="absolute inset-x-0 bottom-0 px-8 pb-6 pt-4"
             style={{
               height: mapHeight,
-              transform: isMapExpanded ? "translateY(0)" : "translateY(50%)",
             }}
           >
+            <div {...resizeHandleProps} />
             <div className="mx-auto h-full w-full max-w-7xl">
               <MapView
                 isExpanded={isMapExpanded}
-                onToggleExpanded={() => setIsMapExpanded((current) => !current)}
+                onToggleExpanded={toggleMapExpanded}
                 fitAllLayers
               />
             </div>

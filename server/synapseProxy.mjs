@@ -5,7 +5,8 @@ const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
 const ALLOWED_ROUTES = [
   /^GET \/configurations\/run-configurations\/$/,
   /^GET \/configurations\/workflows\/$/,
-  /^POST \/projects$/,
+  /^(GET|POST) \/projects$/,
+  /^POST \/projects\/[^/]+\/stop$/,
   /^GET \/projects\/[^/]+$/,
   /^(GET|POST) \/projects\/[^/]+\/messages$/,
   /^GET \/projects\/[^/]+\/archive$/,

@@ -1,10 +1,16 @@
 import { readSseStream, type RawSseEvent } from "@lib/sse";
+import type {
+    DefaultZoneAdjacencyMatrixResponse,
+    ZonePair,
+} from "@lib/genplanner/zoneAdjacencyMatrix";
 
 export type GenPlannerScenarioChatRequest = {
     scenarioId: number;
     userQuery: string;
     chatId?: string;
     test?: boolean;
+    neighbourPairs?: [number, number][];
+    forbiddenPairs?: [number, number][];
 };
 
 export type GenPlannerCustomChatRequest = {
@@ -19,7 +25,7 @@ export type GenPlannerStreamEvent =
     | { type: "token"; content: string }
     | { type: "result"; zones?: unknown; roads?: unknown; territory?: unknown }
     | { type: "error"; stage?: string; detail?: unknown }
-    | { type: "done"; chatId?: string; assistantMessageId?: string }
+    | { type: "done"; chatId?: string; assistantMessageId?: string; territory?: unknown }
     | { type: "unknown"; eventName?: string; data: unknown };
 
 type StreamGenPlannerScenarioChatOptions = {
@@ -113,6 +119,7 @@ function normalizeStreamEvent(rawEvent: RawSseEvent): GenPlannerStreamEvent {
                 type: "done",
                 chatId: asString(record?.chat_id),
                 assistantMessageId: asString(record?.assistant_message_id),
+                territory: record?.territory ?? asRecord(record?.content)?.territory,
             };
         default:
             return { type: "unknown", eventName, data };
@@ -135,6 +142,62 @@ async function parseErrorResponse(response: Response) {
     return text ? parseJsonValue(text) : undefined;
 }
 
+function isZonePair(value: unknown): value is ZonePair {
+    return Array.isArray(value) &&
+        value.length === 2 &&
+        value.every(
+            (zoneId) =>
+                typeof zoneId === "number" &&
+                Number.isFinite(zoneId),
+        );
+}
+
+export async function getDefaultZoneAdjacencyMatrix({
+    baseUrl,
+    accessToken,
+    signal,
+}: {
+    baseUrl: string;
+    accessToken: string;
+    signal?: AbortSignal;
+}): Promise<DefaultZoneAdjacencyMatrixResponse> {
+    const response = await fetch(
+        `${getGenPlannerBaseUrl(baseUrl)}/default_matrix`,
+        {
+            method: "GET",
+            headers: {
+                Accept: "application/json",
+                Authorization: `Bearer ${accessToken}`,
+            },
+            signal,
+        },
+    );
+
+    if (!response.ok) {
+        throw new GenPlannerHttpError(
+            response.status,
+            await parseErrorResponse(response),
+        );
+    }
+
+    const data: unknown = await response.json();
+    const record = asRecord(data);
+    const forbiddenPairs = record?.forbidden_pairs;
+
+    if (
+        !Array.isArray(forbiddenPairs) ||
+        !forbiddenPairs.every(isZonePair)
+    ) {
+        throw new Error(
+            "GenPlanner returned an invalid default adjacency matrix",
+        );
+    }
+
+    return {
+        forbidden_pairs: forbiddenPairs,
+    };
+}
+
 export async function streamGenPlannerScenarioChat({
     baseUrl,
     accessToken,
@@ -154,6 +217,8 @@ export async function streamGenPlannerScenarioChat({
             user_query: request.userQuery,
             chat_id: request.chatId ?? null,
             test: request.test ?? false,
+            neighbour_pairs: request.neighbourPairs,
+            forbidden_pairs: request.forbiddenPairs,
         }),
         signal,
     });

@@ -3,6 +3,7 @@ import { action, makeAutoObservable, reaction, runInAction } from "mobx";
 import AuthStore from "@lib/AuthStore";
 import DataStore from "@lib/DataStore";
 import {
+    parseFacadeScene,
     streamGenBuilderChat,
     type GenBuilderChatRequest,
     type GenBuilderStreamEvent,
@@ -12,6 +13,8 @@ import {
 } from "@lib/genbuilder/saveGeneratedBuildings";
 import {
     type FunctionalZoneSource,
+    type GenBuilder3DPromptMessage,
+    type GenBuilderFacadeSceneMessage,
     type GenBuilderClarificationMessage,
     type GenBuilderSavePromptMessage,
     type GenBuilderSetupMessage,
@@ -24,6 +27,7 @@ import {
 } from "@lib/buildplanner/client";
 import {
     GenPlannerHttpError,
+    getDefaultZoneAdjacencyMatrix,
     streamGenPlannerCustomChat,
     streamGenPlannerScenarioChat,
     type GenPlannerStreamEvent,
@@ -36,8 +40,16 @@ import {
 import {
     type GenPlannerResult,
     type GenPlannerCustomSetupMessage,
+    type GenPlannerAdjacencyPromptMessage,
     type GenPlannerSavePromptMessage,
 } from "@lib/genplanner/types";
+import {
+    applyForbiddenPairsToMatrix,
+} from "@lib/genplanner/zoneAdjacencyMatrix";
+import type {
+    ZoneAdjacencyMatrixState,
+    ZonePair,
+} from "@lib/genplanner/zoneAdjacencyMatrix";
 import MapStore from "@lib/MapStore";
 
 const URBAN_API_URL = import.meta.env.VITE_URBAN_API;
@@ -54,6 +66,13 @@ const AUTHENTICATED_LAYER_API_URLS = [
     import.meta.env.VITE_LLM_RESTRICTIONS_API,
     import.meta.env.VITE_PZZ_COMPARE_API,
 ].filter((url): url is string => typeof url === "string" && !!url.trim());
+const SERVICE_API_BASE_URLS: Record<string, string | undefined> = {
+    genbuilder: GENBUILDER_API_URL,
+    buildplanner: BUILDPLANNER_API_URL,
+    genplanner: GENPLANNER_API_URL,
+    "pzz pipeline service": import.meta.env.VITE_PZZ_COMPARE_API,
+    pzzcompare: import.meta.env.VITE_PZZ_COMPARE_API,
+};
 
 interface UserChat {
     chat_id: string;
@@ -92,6 +111,7 @@ type TableRow = Record<string, unknown>;
 type UserChatPartBase = {
     part_seq: number;
     mcp_source: string | null;
+    source_service?: string | null;
     created_at: string;
 };
 
@@ -264,7 +284,7 @@ async function fetchAuthenticatedDownload(
     const layerOrigin = new URL(resolvedUri).origin;
     const isAuthenticatedApi = AUTHENTICATED_LAYER_API_URLS.some((apiUrl) => {
         try {
-            return new URL(apiUrl).origin === layerOrigin;
+            return new URL(apiUrl, typeof window === "undefined" ? undefined : window.location.origin).origin === layerOrigin;
         } catch {
             return false;
         }
@@ -285,7 +305,10 @@ export async function downloadGeoJsonLayer(
     const response = await fetchAuthenticatedDownload(uri, options);
 
     if (!response.ok) {
-        throw new Error(`GeoJSON layer request failed with ${response.status}`);
+        throw Object.assign(
+            new Error("GeoJSON layer request failed with " + response.status),
+            { status: response.status },
+        );
     }
 
     const text = await response.text();
@@ -373,14 +396,74 @@ function getPlannerErrorMessage(value: unknown, fallback: string) {
 
 function isGeoJsonLayerUri(value: unknown) {
     const uri = toString(value);
-    if (!uri) return false;
+    if (!uri || (!uri.includes("/") && !/\.geojson(?:$|[?#])/i.test(uri))) return false;
 
     try {
-        const parsedUrl = new URL(uri);
+        const parsedUrl = new URL(uri, "https://download.invalid");
         return parsedUrl.protocol === "http:" || parsedUrl.protocol === "https:";
     } catch {
         return false;
     }
+}
+
+function resolveServiceFileUrl(value: unknown, sourceService: unknown) {
+    const uri = toString(value);
+    if (!uri || !isSafeDownloadUri(uri)) {
+        return;
+    }
+
+    const sourceServiceName = toString(sourceService)?.toLowerCase();
+    const serviceBaseUrl = sourceServiceName ? SERVICE_API_BASE_URLS[sourceServiceName] : undefined;
+
+    if (!serviceBaseUrl) {
+        return uri;
+    }
+
+    try {
+        const serviceUrl = new URL(
+            serviceBaseUrl,
+            typeof window === "undefined" ? undefined : window.location.origin,
+        );
+        const originalUrl = new URL(uri, serviceUrl.origin);
+        const layerPath = originalUrl.pathname.match(/\/(?:files|layers)\/.*$/)?.[0];
+        if (!layerPath) {
+            if (/^https?:\/\//i.test(uri) || uri.startsWith("//")) return uri;
+
+            const basePath = serviceUrl.pathname.replace(/\/+$/, "");
+            const path = originalUrl.pathname;
+            const filePath = path === basePath || path.startsWith(`${basePath}/`)
+                ? path
+                : `${basePath}${path}`;
+            return new URL(
+                `${filePath}${originalUrl.search}${originalUrl.hash}`,
+                serviceUrl.origin,
+            ).toString();
+        }
+
+        return new URL(
+            `${serviceUrl.pathname.replace(/\/$/, "")}${layerPath}${originalUrl.search}${originalUrl.hash}`,
+            serviceUrl.origin,
+        ).toString();
+    } catch {
+        return uri;
+    }
+}
+
+function resolvePayloadFileUrl(
+    value: unknown,
+    record?: Record<string, any>,
+    content?: Record<string, any>,
+    fallbackSourceService?: unknown,
+) {
+    const sourceService =
+        content?.source_service ?? content?.sourceService ??
+        record?.source_service ?? record?.sourceService ??
+        fallbackSourceService ??
+        content?.service_name ?? content?.serviceName ?? content?.service ??
+        record?.service_name ?? record?.serviceName ?? record?.service ??
+        record?.mcp_source;
+
+    return resolveServiceFileUrl(value, sourceService);
 }
 
 function isSafeDownloadUri(value: unknown) {
@@ -513,7 +596,11 @@ function extractGenPlannerResultLayers(value: unknown): UserChatLayer[] {
         asRecord(content?.result),
         asRecord(response.data),
     ].find((resultWithLayers) => (
-        resultWithLayers && ("zones" in resultWithLayers || "roads" in resultWithLayers)
+        resultWithLayers && (
+            "zones" in resultWithLayers ||
+            "roads" in resultWithLayers ||
+            "territory" in resultWithLayers
+        )
     ));
 
     if (!result) {
@@ -610,6 +697,7 @@ function extractTableMessage(payload: unknown): TableMessage | undefined {
 function isGeoJsonFilePayload(content: Record<string, any>) {
     const mimeType = toString(content.mime_type ?? content.mimeType)?.toLowerCase();
     const filename = toString(content.filename)?.toLowerCase();
+    const name = toString(content.name)?.toLowerCase();
     const url = toString(
         content.url ??
         content.download_url ??
@@ -618,6 +706,7 @@ function isGeoJsonFilePayload(content: Record<string, any>) {
     )?.toLowerCase();
 
     return (
+        name === "functional_zones" ||
         !!mimeType?.includes("geo+json") ||
         !!mimeType?.includes("geojson") ||
         !!filename?.endsWith(".geojson") ||
@@ -628,22 +717,30 @@ function isGeoJsonFilePayload(content: Record<string, any>) {
 function extractGeoJsonFileLayer(
     payload: unknown,
     fallbackName = "GeoJSON layer",
+    fallbackSourceService?: unknown,
 ): UserChatLayer | undefined {
     const parsed = parseJsonValue(payload);
     const record = asRecord(parsed);
     if (!record) return undefined;
 
     const content = asRecord(record.content) ?? record;
-    if (!isGeoJsonFilePayload(content)) return undefined;
+    if (!isGeoJsonFilePayload({ ...record, ...content })) return undefined;
 
-    const url = toString(
+    const url = resolvePayloadFileUrl(
         content.url ??
         content.download_url ??
         content.downloadUrl ??
-        content.uri,
+        content.uri ??
+        record.url ??
+        record.download_url ??
+        record.downloadUrl ??
+        record.uri,
+        record,
+        content,
+        fallbackSourceService,
     );
 
-    if (!isGeoJsonLayerUri(url)) return undefined;
+    if (!url) return undefined;
 
     return {
         name: (
@@ -709,20 +806,34 @@ function extractLayersFromUnknown(
     ));
 }
 
-function extractDownloadFileMessage(payload: unknown): DownloadFileMessage | undefined {
+function extractDownloadFileMessage(
+    payload: unknown,
+    fallbackSourceService?: unknown,
+): DownloadFileMessage | undefined {
     const parsed = parseJsonValue(payload);
     const record = asRecord(parsed);
     if (!record) return undefined;
 
     const content = asRecord(record.content) ?? record;
-    const downloadUrl = toString(
-        content.download_url ??
-        content.downloadUrl ??
-        record.download_url ??
-        record.downloadUrl,
+    const explicitDownloadUrl =
+        content.download_url ?? content.downloadUrl ??
+        record.download_url ?? record.downloadUrl;
+    if (!explicitDownloadUrl && isGeoJsonFilePayload({ ...record, ...content })) {
+        return undefined;
+    }
+
+    const downloadUrl = resolvePayloadFileUrl(
+        explicitDownloadUrl ??
+        content.url ??
+        content.uri ??
+        record.url ??
+        record.uri,
+        record,
+        content,
+        fallbackSourceService,
     );
 
-    if (!downloadUrl || !isSafeDownloadUri(downloadUrl)) return undefined;
+    if (!downloadUrl) return undefined;
 
     return {
         type: "file",
@@ -766,29 +877,38 @@ function extractFeatureCollectionLayer(
     };
 }
 
-function getStreamFileLayer(payload: unknown, eventName?: string): UserChatLayer | undefined {
+function getStreamFileLayer(payload: unknown, eventName?: string, fallbackSourceService?: string): UserChatLayer | undefined {
     const chunkKind = getStreamChunkKind(payload, eventName);
-    if (chunkKind !== "file") return undefined;
+    if (chunkKind !== "file") {
+        return undefined;
+    }
 
-    return extractGeoJsonFileLayer(payload);
+    return extractGeoJsonFileLayer(payload, "GeoJSON layer", fallbackSourceService);
 }
 
-const INPUT_ZONE_LAYER_NAMES: Record<string, string> = {
+const GENBUILDER_INPUT_LAYER_NAMES: Record<string, string> = {
     input_zones: "Зоны ПЗЗ",
     functional_zones: "Функциональные зоны",
+    blocks_input: "Загруженные кварталы",
+    existing_buildings: "Существующие здания",
 };
 
-function getInputZonesLayer(payload: unknown, eventName?: string): UserChatLayer | undefined {
+function getGenBuilderInputLayer(payload: unknown, eventName?: string): UserChatLayer | undefined {
     if (getStreamChunkKind(payload, eventName) !== "file") {
         return;
     }
 
     const record = asRecord(payload);
     const content = asRecord(record?.content) ?? record;
-    const displayName = INPUT_ZONE_LAYER_NAMES[toString(content?.name)?.toLowerCase() ?? ""];
-    const url = toString(content?.url);
+    const displayName = GENBUILDER_INPUT_LAYER_NAMES[toString(content?.name)?.toLowerCase() ?? ""];
+    const url = resolvePayloadFileUrl(
+        content?.url ?? content?.download_url ?? content?.downloadUrl ?? content?.uri ??
+        record?.url ?? record?.download_url ?? record?.downloadUrl ?? record?.uri,
+        record,
+        content,
+    );
 
-    return displayName && isGeoJsonLayerUri(url)
+    return displayName && url
         ? { name: displayName, layer: url }
         : undefined;
 }
@@ -873,6 +993,7 @@ type GeoJSONMessage = {
     type: "geojson";
     name: string;
     layer: any;
+    unavailable?: boolean;
 };
 
 type DownloadFileMessage = {
@@ -995,6 +1116,7 @@ type VriStreamState = {
 
 type GenBuilderStreamState = {
     hasReceivedResult: boolean;
+    hasReceivedFacadeScene: boolean;
     hasReceivedClarification: boolean;
     hasStreamError: boolean;
 };
@@ -1003,6 +1125,7 @@ type GenPlannerStreamState = {
     hasReceivedResult: boolean;
     hasReceivedDone: boolean;
     hasStreamError: boolean;
+    needsAdjacencyClarification: boolean;
     mode: "scenario" | "custom";
     projectId?: number;
     scenarioId?: number;
@@ -1019,6 +1142,7 @@ type AddGeoJsonLayerOptions = {
     requestId?: number;
     showError?: boolean;
     accessToken?: string;
+    onNotFound?: () => void;
 };
 
 type ChatMessagePayload =
@@ -1032,9 +1156,12 @@ type ChatMessagePayload =
     | PzzSetupMessage
     | VriSetupMessage
     | GenBuilderSetupMessage
+    | GenBuilder3DPromptMessage
+    | GenBuilderFacadeSceneMessage
     | GenBuilderClarificationMessage
     | GenBuilderSavePromptMessage
     | GenPlannerCustomSetupMessage
+    | GenPlannerAdjacencyPromptMessage
     | GenPlannerSavePromptMessage;
 
 type ChatMessage = {
@@ -1072,6 +1199,14 @@ function isGenBuilderSetupMessage(message: ChatMessage["message"]): message is G
     return message.type === "genbuilder_setup";
 }
 
+function isGenBuilder3DPromptMessage(message: ChatMessage["message"]): message is GenBuilder3DPromptMessage {
+    return message.type === "genbuilder_3d_prompt";
+}
+
+function isGenBuilderFacadeSceneMessage(message: ChatMessage["message"]): message is GenBuilderFacadeSceneMessage {
+    return message.type === "genbuilder_facade_scene";
+}
+
 function isGenBuilderSavePromptMessage(
     message: ChatMessage["message"],
 ): message is GenBuilderSavePromptMessage {
@@ -1103,6 +1238,12 @@ function isGenPlannerCustomSetupMessage(
     message: ChatMessage["message"],
 ): message is GenPlannerCustomSetupMessage {
     return message.type === "genplanner_custom_setup";
+}
+
+function isGenPlannerAdjacencyPromptMessage(
+    message: ChatMessage["message"],
+): message is GenPlannerAdjacencyPromptMessage {
+    return message.type === "genplanner_adjacency_prompt";
 }
 
 function normalizePzzTaskStatus(value: unknown): PzzTaskStatus | undefined {
@@ -1339,6 +1480,11 @@ function getVriResultPayload(payload: unknown, eventName?: string) {
 
     const parsed = parseJsonValue(payload);
     const record = asRecord(parsed);
+    const completionData = asRecord(record?.content) ?? record;
+    if (chunkKind === "done" && completionData
+        && Object.keys(completionData).every((key) => ["type", "status", "chat_id"].includes(key))) {
+        return undefined;
+    }
     const isResultEvent = !!eventName && VRI_RESULT_EVENT_NAMES.has(eventName.toLowerCase());
 
     if (extractLayerFromUnknown(parsed, "Результат проверки ВРИ")) return parsed;
@@ -1494,6 +1640,7 @@ class ChatDataStore {
     nextGenPlannerResultId: number = 0;
     nextGenPlannerSavePromptId: number = 0;
     nextGenPlannerCustomSetupId: number = 0;
+    nextGenPlannerAdjacencyPromptId: number = 0;
     userChats: UserChat[] = [];
     isUserChatsLoading = false;
     isUserChatOpening = false;
@@ -1646,7 +1793,9 @@ class ChatDataStore {
                         setup.status === "loading" ||
                         setup.status === "validating_file" ||
                         setup.status === "ready" ||
-                        setup.status === "awaiting_parameters"
+                        setup.status === "awaiting_parameters" ||
+                        setup.status === "awaiting_3d_choice" ||
+                        setup.status === "awaiting_facade_style"
                     );
 
                 if (shouldRemove) {
@@ -1674,6 +1823,11 @@ class ChatDataStore {
             this.chatMessages = this.chatMessages.filter((chatMessage) =>
                 chatMessage.type !== "response"
                 || !isGenBuilderClarificationMessage(chatMessage.message)
+                || !removedSetupIds.has(chatMessage.message.setupId)
+            );
+            this.chatMessages = this.chatMessages.filter((chatMessage) =>
+                chatMessage.type !== "response"
+                || !isGenBuilder3DPromptMessage(chatMessage.message)
                 || !removedSetupIds.has(chatMessage.message.setupId)
             );
         }
@@ -1894,6 +2048,9 @@ class ChatDataStore {
                 if (requestId !== this.currentStreamRequestId) return;
 
                 console.error("Error downloading GeoJSON layer:", error);
+                if (asRecord(error)?.status === 404) {
+                    options.onNotFound?.();
+                }
 
                 if (options.showError) {
                     this.appendGeoJsonLayerLoadError(layer.name);
@@ -1949,21 +2106,25 @@ class ChatDataStore {
 
             if (chunkKind === "file") {
                 const layer = extractGeoJsonFileLayer(parsed, "Результат проверки ПЗЗ");
+                if (layer) {
+                    this.commitStreamedResponse();
+                    this.chatMessages.push({
+                        type: "response",
+                        message: {
+                            type: "geojson",
+                            name: layer.name,
+                            layer: layer.layer,
+                        },
+                    });
+                    this.addGeoJsonLayerToMap(layer, { showError: true });
+                    return;
+                }
 
-                if (!layer) return;
-
-                this.commitStreamedResponse();
-
-                this.chatMessages.push({
-                    type: "response",
-                    message: {
-                        type: "geojson",
-                        name: layer.name,
-                        layer: layer.layer,
-                    },
-                });
-
-                this.addGeoJsonLayerToMap(layer, { showError: true });
+                const file = extractDownloadFileMessage(parsed);
+                if (file) {
+                    this.commitStreamedResponse();
+                    this.chatMessages.push({ type: "response", message: file });
+                }
 
                 return;
             }
@@ -2079,13 +2240,33 @@ class ChatDataStore {
                 {
                     name: message.message?.name,
                     layer: parseFeatureCollection(message.message.layer),
+                    message: message.message,
                 } : []
         );
 
         MapStore.clearMapLayers();
         lastResponseLayers.forEach((layer) => {
-            this.addGeoJsonLayerToMap(layer);
+            layer.message.unavailable = undefined;
+            this.addGeoJsonLayerToMap(layer, {
+                onNotFound: () => {
+                    layer.message.unavailable = true;
+                },
+            });
         });
+
+        const lastFacadeScene = messages.findLast((message, index) =>
+            index > lastRequestIndex &&
+            message.type === "response" &&
+            isGenBuilderFacadeSceneMessage(message.message)
+        );
+        if (lastFacadeScene?.type === "response" && isGenBuilderFacadeSceneMessage(lastFacadeScene.message)) {
+            MapStore.setFacadeScene({
+                resultId: lastFacadeScene.message.resultId,
+                glbUrl: lastFacadeScene.message.glbUrl,
+                origin: lastFacadeScene.message.origin,
+                facadeStyle: lastFacadeScene.message.facadeStyle,
+            });
+        }
 
         if (
             typeof this.selectedContext === "number" &&
@@ -2185,26 +2366,7 @@ class ChatDataStore {
         this.genPlannerResults.clear();
         this.genPlannerTerritoryFiles.clear();
 
-        const lastRequestIndex = chat.messages.findLastIndex(message => message.type === "request");
-        const lastResponseLayers = chat.messages.flatMap((message, ind) =>
-            ind > lastRequestIndex && message.type === "response" && message.message?.type === "geojson" ?
-                {
-                    name: message.message?.name,
-                    layer: parseFeatureCollection(message.message.layer),
-                } : []
-        );
-
-        MapStore.clearMapLayers();
-        lastResponseLayers.forEach((layer) => {
-            this.addGeoJsonLayerToMap(layer);
-        });
-
-        if (
-            typeof chat.selectedContext === "number" &&
-            !lastResponseLayers.some((layer) => layer.name === PROJECT_BOUNDARY_LAYER_NAME)
-        ) {
-            this.requestProjectBoundary(chat.selectedContext);
-        }
+        this.restoreMapLayersFromMessages(this.chatMessages);
     };
 
     sendNormativeDocumentMessage(message: string, scenarioId?: number) {
@@ -2725,6 +2887,89 @@ class ChatDataStore {
             : undefined;
     }
 
+    private getGenBuilder3DPromptMessage(setupId: string) {
+        const chatMessage = this.chatMessages.find((message) =>
+            message.type === "response" &&
+            isGenBuilder3DPromptMessage(message.message) &&
+            message.message.setupId === setupId
+        );
+        return chatMessage && isGenBuilder3DPromptMessage(chatMessage.message)
+            ? chatMessage.message : undefined;
+    }
+
+    requestGenBuilder3DChoice(message: string, setupId: string) {
+        const setup = this.getGenBuilderSetupMessage(setupId);
+        const userQuery = message.trim();
+        if (!setup || setup.status !== "awaiting_parameters" || !userQuery) return;
+
+        if (setup.mode === "files" && !this.genBuilderSetupFiles.get(setupId)?.blocks) {
+            setup.status = "ready";
+            setup.errorText = "Загрузите GeoJSON-файл функциональных зон.";
+            return;
+        }
+
+        setup.status = "awaiting_3d_choice";
+        setup.errorText = undefined;
+        this.chatMessages.push({
+            type: "request",
+            message: { type: "text", text: userQuery },
+        });
+        this.chatMessages.push({
+            type: "response",
+            message: {
+                type: "genbuilder_3d_prompt",
+                setupId,
+                userQuery,
+                status: "choice",
+            },
+        });
+    }
+
+    chooseGenBuilder3D(setupId: string, enabled: boolean) {
+        const setup = this.getGenBuilderSetupMessage(setupId);
+        const prompt = this.getGenBuilder3DPromptMessage(setupId);
+        if (!setup || !prompt || setup.status !== "awaiting_3d_choice" || prompt.status !== "choice") return;
+
+        if (enabled) {
+            prompt.status = "styles";
+            setup.status = "awaiting_facade_style";
+            return;
+        }
+
+        const userQuery = prompt.userQuery;
+        this.chatMessages = this.chatMessages.filter((message) =>
+            message.type !== "response" ||
+            !isGenBuilder3DPromptMessage(message.message) ||
+            message.message.setupId !== setupId
+        );
+        setup.generate3d = false;
+        setup.facadeStyleId = undefined;
+        setup.status = "awaiting_parameters";
+        void this.sendGenBuilderChatRequest(userQuery, setupId, false);
+    }
+
+    returnToGenBuilder3DChoice(setupId: string) {
+        const setup = this.getGenBuilderSetupMessage(setupId);
+        const prompt = this.getGenBuilder3DPromptMessage(setupId);
+        if (!setup || !prompt || setup.status !== "awaiting_facade_style" || prompt.status !== "styles") return;
+
+        prompt.status = "choice";
+        setup.status = "awaiting_3d_choice";
+    }
+
+    confirmGenBuilderFacadeStyle(setupId: string, styleId: string, styleName: string) {
+        const setup = this.getGenBuilderSetupMessage(setupId);
+        const prompt = this.getGenBuilder3DPromptMessage(setupId);
+        if (!setup || !prompt || setup.status !== "awaiting_facade_style" || prompt.status !== "styles" || !styleId) return;
+
+        prompt.status = "submitted";
+        prompt.selectedStyleName = styleName;
+        setup.generate3d = true;
+        setup.facadeStyleId = styleId;
+        setup.status = "awaiting_parameters";
+        void this.sendGenBuilderChatRequest(prompt.userQuery, setupId, false);
+    }
+
     private getActiveGenBuilderSetupMessage() {
         for (let index = this.chatMessages.length - 1; index >= 0; index -= 1) {
             const chatMessage = this.chatMessages[index];
@@ -2772,6 +3017,18 @@ class ChatDataStore {
         }
 
         return;
+    }
+
+    private getGenPlannerAdjacencyPromptMessage(promptId: string) {
+        const chatMessage = this.chatMessages.find(
+            (message) =>
+                message.type === "response" &&
+                isGenPlannerAdjacencyPromptMessage(message.message) &&
+                message.message.id === promptId,
+        );
+        return chatMessage && isGenPlannerAdjacencyPromptMessage(chatMessage.message)
+            ? chatMessage.message
+            : undefined;
     }
 
     private getGenPlannerSavePromptMessage(promptId: string) {
@@ -3031,9 +3288,22 @@ class ChatDataStore {
                 this.currentStatus = streamEvent.content ?? "Генерация застройки выполняется";
                 return;
             case "file": {
-                const inputZonesLayer = getInputZonesLayer(streamEvent.content, "file");
-                if (inputZonesLayer) {
-                    this.appendGeoJsonLayer(inputZonesLayer, { accessToken: AuthStore.accessToken });
+                const inputLayer = getGenBuilderInputLayer(streamEvent.content, "file");
+                if (inputLayer) {
+                    this.appendGeoJsonLayer(inputLayer, { accessToken: AuthStore.accessToken });
+                    return;
+                }
+
+                const layer = getStreamFileLayer(streamEvent.content, "file");
+                if (layer) {
+                    this.appendGeoJsonLayer(layer, { accessToken: AuthStore.accessToken });
+                    return;
+                }
+
+                const file = extractDownloadFileMessage(streamEvent.content);
+                if (file) {
+                    this.commitStreamedResponse();
+                    this.chatMessages.push({ type: "response", message: file });
                 }
                 return;
             }
@@ -3076,6 +3346,37 @@ class ChatDataStore {
                         showError: true,
                     },
                 );
+                return;
+            }
+            case "facade_scene": {
+                const scene = parseFacadeScene(streamEvent.content);
+                if (!scene) {
+                    this.chatMessages.push({
+                        type: "response",
+                        message: { type: "warning", text: "GenBuilder вернул некорректные данные 3D-модели." },
+                    });
+                    return;
+                }
+
+                streamState.hasReceivedFacadeScene = true;
+                MapStore.setFacadeScene({
+                    resultId: scene.resultId,
+                    glbUrl: scene.glbUrl,
+                    origin: scene.origin,
+                    facadeStyle: scene.facadeStyle,
+                });
+                this.chatMessages.push({
+                    type: "response",
+                    message: {
+                        type: "genbuilder_facade_scene",
+                        resultId: scene.resultId,
+                        glbUrl: scene.glbUrl,
+                        origin: scene.origin,
+                        facadeStyle: scene.facadeStyle,
+                        buildings: scene.buildings,
+                    },
+                });
+                this.currentStatus = "3D-модель застройки получена";
                 return;
             }
             case "token":
@@ -3134,10 +3435,10 @@ class ChatDataStore {
             return;
         }
 
-        if (streamState.hasReceivedResult) {
+        if (streamState.hasReceivedResult || streamState.hasReceivedFacadeScene) {
             setupMessage.status = "finished";
 
-            if (setupMessage.mode === "scenario" && !setupMessage.savePromptId) {
+            if (streamState.hasReceivedResult && setupMessage.mode === "scenario" && !setupMessage.savePromptId) {
                 const promptId = `genbuilder-save-${this.currentGenBuilderSavePromptId}`;
                 this.currentGenBuilderSavePromptId += 1;
                 setupMessage.savePromptId = promptId;
@@ -3172,6 +3473,11 @@ class ChatDataStore {
             setupMessage.status !== "awaiting_parameters" ||
             !userQuery
         ) return;
+
+        if (setupMessage.generate3d && !setupMessage.facadeStyleId) {
+            setupMessage.errorText = "Выберите стиль фасада для 3D-генерации.";
+            return;
+        }
 
         let request: GenBuilderChatRequest;
         const backendChatId = setupMessage.backendChatId ?? this.getActiveBackendChatId();
@@ -3218,6 +3524,7 @@ class ChatDataStore {
                 userQuery,
                 blocksFile,
                 chatId: backendChatId,
+                facadeStyleId: setupMessage.facadeStyleId,
                 ...(existingBuildingsClarification?.existingBuildingsChoice === "file" && files?.existingBuildings
                     ? { buildingsFile: files.existingBuildings }
                     : {}),
@@ -3257,6 +3564,7 @@ class ChatDataStore {
                 source: setupMessage.selectedSource,
                 projectId: setupMessage.projectId,
                 chatId: backendChatId,
+                facadeStyleId: setupMessage.facadeStyleId,
             };
         }
 
@@ -3309,6 +3617,7 @@ class ChatDataStore {
 
         const streamState: GenBuilderStreamState = {
             hasReceivedResult: false,
+            hasReceivedFacadeScene: false,
             hasReceivedClarification: false,
             hasStreamError: false,
         };
@@ -4147,11 +4456,7 @@ class ChatDataStore {
             return;
         }
 
-        const serializedResult = typeof result === "string"
-            ? result
-            : JSON.stringify(result, null, 2);
-        const text = extractTextFromPayload(result) ??
-            (serializedResult ? `\`\`\`json\n${serializedResult}\n\`\`\`` : undefined);
+        const text = extractTextFromPayload(result);
 
         this.chatMessages.push({
             type: "response",
@@ -4274,7 +4579,7 @@ class ChatDataStore {
         }
 
         const isResultFile = isVriResultFile(payload, eventName);
-        const fileLayer = getStreamFileLayer(payload, eventName);
+        const fileLayer = getStreamFileLayer(payload, eventName, "pzz pipeline service");
         if (fileLayer) {
             this.appendGeoJsonLayer(fileLayer);
 
@@ -4294,6 +4599,15 @@ class ChatDataStore {
                 ...streamState,
                 hasReceivedResult: true,
             };
+        }
+
+        if (getStreamChunkKind(payload, eventName) === "file") {
+            const file = extractDownloadFileMessage(payload);
+            if (file) {
+                this.commitStreamedResponse();
+                this.chatMessages.push({ type: "response", message: file });
+                return streamState;
+            }
         }
 
         const reportText = getVriReportText(payload, eventName);
@@ -4474,6 +4788,31 @@ class ChatDataStore {
         }));
     }
 
+    loadDefaultGenPlannerAdjacencyMatrix = async (): Promise<ZoneAdjacencyMatrixState> => {
+        const accessToken = AuthStore.accessToken;
+
+        if (!GENPLANNER_API_URL) {
+            throw new Error(
+                "Не задан адрес сервиса GenPlanner (VITE_GENPLANNER_API).",
+            );
+        }
+
+        if (!accessToken) {
+            throw new Error(
+                "Не удалось получить токен пользователя. Авторизуйтесь заново.",
+            );
+        }
+
+        const response = await getDefaultZoneAdjacencyMatrix({
+            baseUrl: GENPLANNER_API_URL,
+            accessToken,
+        });
+
+        return applyForbiddenPairsToMatrix(
+            response.forbidden_pairs,
+        );
+    };
+
     private startGenPlannerCustomSetup() {
         const setupId = `genplanner-custom-${this.nextGenPlannerCustomSetupId}`;
         this.nextGenPlannerCustomSetupId += 1;
@@ -4531,11 +4870,33 @@ class ChatDataStore {
                     }
                 }
                 this.streamedResponse += streamEvent.content;
+                if (
+                    streamState.mode === "scenario" &&
+                    this.streamedResponse
+                        .toLowerCase()
+                        .replace(/\s+/g, " ")
+                        .includes("запустить генерацию")
+                ) {
+                    streamState.needsAdjacencyClarification = true;
+                }
                 this.currentStatus = "GenPlanner формирует ответ";
                 return;
             case "warning":
                 if (streamEvent.stage === "run_generation") {
+                    if (streamState.mode === "scenario") {
+                        streamState.needsAdjacencyClarification = true;
+                    }
+
                     this.currentStatus = "Параметры генерации требуют уточнения";
+                    return;
+                }
+
+                if (streamEvent.stage === "store_layer") {
+                    this.addChatNotice(
+                        "warning",
+                        streamEvent.message ??
+                            "Не удалось сохранить слой — он не появится в истории чата. Генерация продолжается.",
+                    );
                     return;
                 }
 
@@ -4640,6 +5001,45 @@ class ChatDataStore {
             }
             case "done":
                 streamState.hasReceivedDone = true;
+                if (streamState.mode === "custom" && streamEvent.territory !== undefined) {
+                    const territory = normalizeBoundaryLayer(streamEvent.territory);
+                    if (territory) {
+                        this.commitStreamedResponse();
+                        const lastRequestIndex = this.chatMessages.findLastIndex(
+                            (message) => message.type === "request",
+                        );
+                        const existingTerritoryMessage = this.chatMessages.findLast(
+                            (message, index) => (
+                                index > lastRequestIndex &&
+                                message.type === "response" &&
+                                message.message.type === "geojson" &&
+                                message.message.name === PROJECT_BOUNDARY_LAYER_NAME
+                            ),
+                        );
+
+                        if (
+                            existingTerritoryMessage?.type === "response" &&
+                            existingTerritoryMessage.message.type === "geojson"
+                        ) {
+                            existingTerritoryMessage.message.layer = territory;
+                            existingTerritoryMessage.message.unavailable = undefined;
+                        } else {
+                            this.chatMessages.push({
+                                type: "response",
+                                message: {
+                                    type: "geojson",
+                                    name: PROJECT_BOUNDARY_LAYER_NAME,
+                                    layer: territory,
+                                },
+                            });
+                        }
+
+                        MapStore.addOrUpdateLayerToMap({
+                            name: PROJECT_BOUNDARY_LAYER_NAME,
+                            layer: territory,
+                        });
+                    }
+                }
                 if (streamState.setupId) {
                     const setup = this.getGenPlannerCustomSetup(streamState.setupId);
                     if (setup && setup.status !== "error") {
@@ -4655,8 +5055,60 @@ class ChatDataStore {
                 }
                 return;
             case "unknown":
+                if (getStreamChunkKind(streamEvent.data, streamEvent.eventName) === "file") {
+                    const layer = getStreamFileLayer(streamEvent.data, "file");
+                    if (layer) {
+                        this.appendGeoJsonLayer(layer);
+                    } else {
+                        const file = extractDownloadFileMessage(streamEvent.data);
+                        if (file) {
+                            this.commitStreamedResponse();
+                            this.chatMessages.push({ type: "response", message: file });
+                        }
+                    }
+                }
                 return;
         }
+    }
+
+    private addGenPlannerAdjacencyPrompt(streamState: GenPlannerStreamState) {
+        if (
+            streamState.mode !== "scenario" ||
+            !streamState.needsAdjacencyClarification ||
+            streamState.hasStreamError ||
+            streamState.hasReceivedResult ||
+            !streamState.hasReceivedDone
+        ) {
+            return;
+        }
+
+        const hasActivePrompt = this.chatMessages.some(
+            (chatMessage) =>
+                chatMessage.type === "response" &&
+                isGenPlannerAdjacencyPromptMessage(chatMessage.message) &&
+                (
+                    chatMessage.message.status === "pending" ||
+                    chatMessage.message.status === "submitting"
+                ),
+        );
+
+        if (hasActivePrompt) {
+            return;
+        }
+
+        const promptId =
+            `genplanner-adjacency-${this.nextGenPlannerAdjacencyPromptId}`;
+
+        this.nextGenPlannerAdjacencyPromptId += 1;
+
+        this.chatMessages.push({
+            type: "response",
+            message: {
+                type: "genplanner_adjacency_prompt",
+                id: promptId,
+                status: "pending",
+            },
+        });
     }
 
     private addGenPlannerSavePrompt(streamState: GenPlannerStreamState) {
@@ -4741,6 +5193,7 @@ class ChatDataStore {
             hasReceivedResult: false,
             hasReceivedDone: false,
             hasStreamError: false,
+            needsAdjacencyClarification: false,
             mode: "custom",
             setupId: setup.id,
         };
@@ -4827,8 +5280,16 @@ class ChatDataStore {
         }));
     }
 
-    private sendGenPlannerScenarioChatRequest(message: string) {
+    private sendGenPlannerScenarioChatRequest(
+        message: string,
+        adjacency?: {
+            neighbourPairs: ZonePair[];
+            forbiddenPairs: ZonePair[];
+        },
+        displayMessage?: string,
+    ) {
         const userQuery = message.trim();
+        const visibleMessage = displayMessage?.trim() || userQuery;
         const scenarioId = this.selectedScenario;
         const projectId = typeof this.selectedContext === "number"
             ? this.selectedContext
@@ -4872,13 +5333,14 @@ class ChatDataStore {
         this.currentStatus = "GenPlanner обрабатывает запрос";
         this.chatMessages.push({
             type: "request",
-            message: { type: "text", text: userQuery },
+            message: { type: "text", text: visibleMessage },
         });
 
         const streamState: GenPlannerStreamState = {
             hasReceivedResult: false,
             hasReceivedDone: false,
             hasStreamError: false,
+            needsAdjacencyClarification: false,
             mode: "scenario",
             projectId,
             scenarioId,
@@ -4893,6 +5355,8 @@ class ChatDataStore {
                 userQuery,
                 chatId: this.activeGenPlannerChatId ?? this.getActiveBackendChatId(),
                 test: false,
+                neighbourPairs: adjacency?.neighbourPairs,
+                forbiddenPairs: adjacency?.forbiddenPairs,
             },
             signal: this.abortController.signal,
             onOpen: () => {
@@ -4914,12 +5378,14 @@ class ChatDataStore {
         })
         .then(action(() => {
             if (this.currentStreamRequestId !== requestId) {
-                return;
+                return false;
             }
 
             this.commitStreamedResponse();
+
             if (!streamState.hasStreamError && !streamState.hasReceivedDone) {
                 streamState.hasStreamError = true;
+
                 this.chatMessages.push({
                     type: "response",
                     message: {
@@ -4928,16 +5394,23 @@ class ChatDataStore {
                     },
                 });
             }
+
+            this.addGenPlannerAdjacencyPrompt(streamState);
             this.addGenPlannerSavePrompt(streamState);
+
+            return (
+                !streamState.hasStreamError &&
+                streamState.hasReceivedDone
+            );
         }))
         .catch(action((error) => {
             if (this.currentStreamRequestId !== requestId) {
-                return;
+                return false;
             }
 
             if (error?.name === "AbortError" || error?.name === "CanceledError") {
                 this.commitStreamedResponse();
-                return;
+                return false;
             }
 
             console.error("Error streaming GenPlanner generation:", error);
@@ -4956,6 +5429,7 @@ class ChatDataStore {
                 type: "response",
                 message: { type: "error", text: errorText },
             });
+            return false;
         }))
         .finally(action(() => {
             if (this.currentStreamRequestId !== requestId) {
@@ -5253,6 +5727,48 @@ class ChatDataStore {
             void this.getUserChats();
         }));
     }
+    submitGenPlannerAdjacencyMatrix = async (
+        promptId: string,
+        value: {
+            neighbourPairs: ZonePair[];
+            forbiddenPairs: ZonePair[];
+        },
+    ) => {
+        const promptMessage =
+            this.getGenPlannerAdjacencyPromptMessage(promptId);
+
+        if (
+            !promptMessage ||
+            (
+                promptMessage.status !== "pending" &&
+                promptMessage.status !== "error"
+            ) ||
+            this.isStreaming
+        ) {
+            return;
+        }
+
+        promptMessage.status = "submitting";
+        promptMessage.errorText = undefined;
+
+        const succeeded = await this.sendGenPlannerScenarioChatRequest(
+            "Да, запускай генерацию. Все настройки соседства уже переданы в матрице. Считай их окончательными, не запрашивай описание соседств текстом и используй переданные обязательные и запрещённые пары.",
+            value,
+            "Запускай генерацию с заданными соседствами зон.",
+        );
+
+        runInAction(() => {
+            if (succeeded) {
+                promptMessage.status = "submitted";
+                promptMessage.errorText = undefined;
+                return;
+            }
+
+            promptMessage.status = "error";
+            promptMessage.errorText =
+                "Не удалось отправить матрицу соседства. Попробуйте ещё раз.";
+        });
+    };
 
     saveGenPlannerResult = async (promptId: string) => {
         const promptMessage = this.getGenPlannerSavePromptMessage(promptId);
@@ -5397,7 +5913,9 @@ class ChatDataStore {
             }
 
             if (setupMessage.status === "awaiting_parameters") {
-                return this.sendGenBuilderChatRequest(message, setupMessage.id);
+                return setupMessage.generate3d === undefined
+                    ? this.requestGenBuilder3DChoice(message, setupMessage.id)
+                    : this.sendGenBuilderChatRequest(message, setupMessage.id);
             }
 
             this.chatMessages.push({
@@ -5406,6 +5924,10 @@ class ChatDataStore {
                     type: "info",
                     text: setupMessage.status === "submitting" || setupMessage.status === "running"
                         ? "Дождитесь завершения текущей генерации."
+                        : setupMessage.status === "awaiting_3d_choice"
+                            ? "Выберите, нужно ли отображать застройку в 3D."
+                            : setupMessage.status === "awaiting_facade_style"
+                                ? "Выберите стиль фасада и подтвердите выбор."
                         : setupMessage.status === "validating_file"
                             ? "Дождитесь завершения проверки файла."
                             : setupMessage.mode === "files"
@@ -5703,6 +6225,7 @@ class ChatDataStore {
                 .sort((left, right) => left.part_seq - right.part_seq);
 
             for (const part of sortedParts) {
+                const sourceService = part.source_service ?? part.mcp_source;
                 const genPlannerResultLayers = userMessage.role === "assistant"
                     ? extractGenPlannerResultLayers(part.payload)
                     : [];
@@ -5734,7 +6257,7 @@ class ChatDataStore {
                 }
 
                 const downloadFile = userMessage.role === "assistant" && part.kind === "file"
-                    ? extractDownloadFileMessage(part.payload)
+                    ? extractDownloadFileMessage(part.payload, sourceService)
                     : undefined;
 
                 if (downloadFile) {
@@ -5756,6 +6279,7 @@ class ChatDataStore {
                             ? extractGeoJsonFileLayer(
                                 part.payload,
                                 getLayerName(part.payload) ?? HISTORY_LAYER_FALLBACK_NAME,
+                                sourceService,
                             )
                             : undefined)
                     )
@@ -5844,7 +6368,7 @@ class ChatDataStore {
                 if (this.activeChatId !== chatId || this.currentStreamRequestId !== requestId) return;
 
                 this.chatMessages = chatMessages;
-                this.restoreMapLayersFromMessages(chatMessages);
+                this.restoreMapLayersFromMessages(this.chatMessages);
             });
 
             if (chat && chat.scenario_id) {
