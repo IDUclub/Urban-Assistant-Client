@@ -1,5 +1,7 @@
 export const BRAND_THEME = "default"
 
+export const SHOW_CONTEXT_IDS = import.meta.env.VITE_SHOW_CONTEXT_IDS === "true";
+
 export const THEME_STORAGE_KEY = "urban-assistant-theme";
 
 export const THEMES = {
@@ -15,5 +17,5 @@ export type ThemeId = keyof typeof THEMES;
 export const DEFAULT_THEME = "idu";
 
 export function isThemeId (value: unknown): value is ThemeId {
-  return typeof value === "string" && value in THEMES;
+  return typeof value === "string" && Object.prototype.hasOwnProperty.call(THEMES, value);
 } 

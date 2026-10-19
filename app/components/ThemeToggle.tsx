@@ -8,6 +8,7 @@ import {
   THEMES,
   type ThemeId,
 } from "@/config";
+import { PERSIST_USER_SETTINGS } from "@lib/userSettings";
 import type { IconType } from "react-icons/lib";
 
 const THEME_ICONS: Record<ThemeId, IconType> = {
@@ -23,6 +24,10 @@ function applyTheme(id: ThemeId) {
 }
 
 function readStoredTheme(): ThemeId {
+  if (!PERSIST_USER_SETTINGS) {
+    return DEFAULT_THEME;
+  }
+
   try {
     const saved = localStorage.getItem(THEME_STORAGE_KEY);
     return isThemeId(saved) ? saved : DEFAULT_THEME;
@@ -44,6 +49,12 @@ export default function ThemeToggle() {
   const handleClickChangeTheme = (id: ThemeId) => {
     setTheme(id);
     applyTheme(id);
+    if (PERSIST_USER_SETTINGS) {
+      try {
+        localStorage.setItem(THEME_STORAGE_KEY, id);
+      } catch {
+      }
+    }
   };
 
   return (
