@@ -1,3 +1,4 @@
+import { PERSIST_USER_SETTINGS, readUserSetting, writeUserSetting } from "@lib/userSettings";
 import axios from "axios";
 import { action, makeAutoObservable, reaction, runInAction } from "mobx";
 import AuthStore from "@lib/AuthStore";
@@ -1205,17 +1206,20 @@ type ChatSession = {
     selectedScenario: number | null;
 };
 
-type ChatTool =
-     | "Нормативная документация"
-    | "Обеспеченность"
-    | "Проверка объектов по ПЗЗ"
-    | "Проверка ВРИ"
-    | "Зоны ограничений"
-    | "Генерация застройки"
-    | "Генерация функционального зонирования"
-    | "План развития территории"
-    | "Проверка нормативных ограничений"
-    | "Справка по проекту";
+export const CHAT_SERVICES = [
+    "Нормативная документация",
+    "Зоны ограничений",
+    "Проверка объектов по ПЗЗ",
+    "Генерация застройки",
+    "Генерация функционального зонирования",
+    "План развития территории",
+    "Обеспеченность",
+    "Проверка ВРИ",
+    "Проверка нормативных ограничений",
+    "Справка по проекту",
+] as const;
+
+type ChatTool = typeof CHAT_SERVICES[number];
 
 function isPzzSetupMessage(message: ChatMessage["message"]): message is PzzSetupMessage {
     return message.type === "pzz_setup";
@@ -1798,6 +1802,7 @@ class ChatDataStore {
     private resetCheckContext() {
         this.abortStream();
         this.currentStreamRequestId += 1;
+        this.isUserChatOpening = false;
         this.commitStreamedResponse();
         this.resetStreamingState();
         this.chatMessages = this.chatMessages.filter((chatMessage) => {
@@ -1967,6 +1972,7 @@ class ChatDataStore {
         this.messageDraft = "";
         this.abortStream();
         this.currentStreamRequestId += 1;
+        this.isUserChatOpening = false;
         this.chatMessages = [];
         this.isStreaming = false;
         this.selectedContext = "nonproject";
@@ -2452,6 +2458,7 @@ class ChatDataStore {
 
         this.abortStream();
         this.currentStreamRequestId += 1;
+        this.isUserChatOpening = false;
         this.streamedResponse = "";
         this.isStreaming = false;
         this.currentStatus = undefined;
@@ -6577,12 +6584,7 @@ class ChatDataStore {
 
     private applyUserChatContext(chat?: UserChat) {
         const metadata = chat?.metadata ?? {};
-        const projectId = toNumber(
-            metadata.project_id ??
-            metadata.projectId ??
-            metadata.selected_context ??
-            metadata.selectedContext,
-        );
+        const projectId = chat ? getUserChatProjectId(chat) : undefined;
         const scenarioId = toNumber(chat?.scenario_id ?? metadata.scenario_id ?? metadata.scenarioId);
 
         this.parsedContext = null;
@@ -6781,6 +6783,7 @@ class ChatDataStore {
         this.activeGenPlannerChatId = undefined;
         this.isUserChatOpening = true;
         this.chatMessages = [];
+        this.selectedChatTool = null;
         this.pzzSetupFiles.clear();
         this.vriSetupFiles.clear();
         this.genBuilderSetupFiles.clear();
@@ -6864,6 +6867,62 @@ class ChatDataStore {
             },
         )
     };
+
+    private userSettingsRestored = false;
+
+    async restoreUserSettings() {
+        if (!PERSIST_USER_SETTINGS || this.userSettingsRestored) {
+            return;
+        }
+
+        this.userSettingsRestored = true;
+        const saved = readUserSetting("urban-assistant-chat-settings");
+        const requestId = this.currentStreamRequestId;
+        const context = this.selectedContext;
+        const scenario = this.selectedScenario;
+        const tool = this.selectedChatTool;
+
+        if (saved && typeof saved === "object" && !Array.isArray(saved)) {
+            const settings = saved as Record<string, unknown>;
+            const projectId = typeof settings.context === "number"
+                && Number.isSafeInteger(settings.context) && settings.context > 0
+                && DataStore.userProjects?.some((project) => project.id === settings.context)
+                ? settings.context : null;
+            const scenarios = projectId === null ? [] : await DataStore.getProjectScenarios(projectId);
+            const scenarioId = scenarios.find((item) => item.id === settings.scenario)?.id ?? null;
+            const validContext = settings.context === "nonproject" || projectId !== null;
+            const unchanged = this.currentStreamRequestId === requestId
+                && this.selectedContext === context && this.selectedScenario === scenario
+                && this.selectedChatTool === tool;
+
+            if (validContext && unchanged && AuthStore.isAuthenticated) {
+                runInAction(() => {
+                    this.selectedContext = projectId ?? "nonproject";
+                    this.selectedScenario = scenarioId;
+
+                    const savedTool = CHAT_SERVICES.find((service) => service === settings.tool);
+                    const allowedOutsideProject = savedTool === "Нормативная документация"
+                        || savedTool === "Проверка объектов по ПЗЗ" || savedTool === "Проверка ВРИ"
+                        || savedTool === "Генерация застройки" || savedTool === "Генерация функционального зонирования";
+                    const canRestoreTool = projectId === null
+                        ? allowedOutsideProject : scenarioId !== null;
+
+                    if (savedTool && canRestoreTool) {
+                        this.setSelectedChatTool(savedTool);
+                    }
+                });
+            }
+        }
+
+        reaction(
+            () => ({
+                context: this.selectedContext,
+                scenario: this.selectedScenario,
+                tool: this.selectedChatTool,
+            }),
+            (settings) => writeUserSetting("urban-assistant-chat-settings", settings),
+        );
+    }
 
     constructor() {
         makeAutoObservable(this, {}, { autoBind: true });

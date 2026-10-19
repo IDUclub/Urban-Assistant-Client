@@ -40,6 +40,7 @@ export async function clientLoader({
     }
 
     await DataStore.getUserProjects();
+    await ChatStore.restoreUserSettings();
     await ChatStore.getUserChats();
 }
 

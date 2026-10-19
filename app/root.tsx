@@ -11,6 +11,7 @@ import { lazy, Suspense, useEffect } from "react";
 import { observer } from "mobx-react-lite";
 import type { Route } from "./+types/root";
 import AuthStore from "@lib/AuthStore";
+import MasBfmStore from "@lib/MasBfmStore";
 import PageLoader from "@components/PageLoader";
 import MasBfmToggle from "@components/mas-bfm/MasBfmToggle";
 import ThemeToggle from "@components/ThemeToggle";
@@ -84,6 +85,7 @@ export function HydrateFallback() {
 
 const App = observer(function App() {
   useEffect(() => {
+    MasBfmStore.restoreUserSettings();
     void AuthStore.init();
   }, []);
 

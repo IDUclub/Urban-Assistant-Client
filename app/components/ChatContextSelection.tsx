@@ -14,7 +14,7 @@ import {
 import { LuLayers3 } from "react-icons/lu";
 import DataStore, { type CreatedProject } from "@lib/DataStore";
 import DocumentsStore, { type UserDocument } from "@lib/DocumentsStore";
-import ChatStore from "@lib/ChatStore";
+import ChatStore, { CHAT_SERVICES } from "@lib/ChatStore";
 import MapStore from "@lib/MapStore";
 import CustomSelect, { type SelectOption } from "@components/ui/Select";
 import CreateProjectModal from "@components/CreateProjectModal";
@@ -22,19 +22,6 @@ import CreateScenarioModal from "@components/CreateScenarioModal";
 import DocumentLibraryModal from "@components/documents/DocumentLibraryModal";
 import DocumentsModal from "@components/documents/DocumentsModal";
 import UploadDocumentModal from "@components/documents/UploadDocumentModal";
-
-const CHAT_SERVICES = [
-  "Нормативная документация",
-  "Зоны ограничений",
-  "Проверка объектов по ПЗЗ",
-  "Генерация застройки",
-  "Генерация функционального зонирования",
-  "План развития территории",
-  "Обеспеченность",
-  "Проверка ВРИ",
-  "Проверка нормативных ограничений",
-  "Справка по проекту",
-] as const;
 
 type PanelView = "menu" | "context" | null;
 type PanelPlacement = "top" | "bottom";
@@ -167,9 +154,10 @@ const ChatContextSelection = observer(({ inputRef, onSearchOpenChange }: {
         })),
     ];
 
+    const loadedProjectScenarios = projectScenarios.get(Number(selectedContext));
     const currentProjectScenarios = selectedContext === "nonproject"
         ? []
-        : (projectScenarios.get(Number(selectedContext)) ?? []);
+        : (loadedProjectScenarios ?? []);
 
     const scenarioOptions: SelectOption[] = currentProjectScenarios.map((scenario) => ({
         label: scenario.name,
@@ -246,13 +234,17 @@ const ChatContextSelection = observer(({ inputRef, onSearchOpenChange }: {
     }, [scenarioOptions, selectedContext, selectedScenario]);
 
     useEffect(() => {
+        if (selectedContext !== "nonproject" && !loadedProjectScenarios) {
+            return;
+        }
+
         if (
             selectedChatTool !== null
             && !availableServices.includes(selectedChatTool)
         ) {
             ChatStore.setSelectedChatTool(null);
         }
-    }, [selectedChatTool, selectedContext, hasScenarioSelection]);
+    }, [selectedChatTool, selectedContext, hasScenarioSelection, loadedProjectScenarios]);
 
     useEffect(() => {
         if (dismissedDraft !== null && dismissedDraft !== draft) {

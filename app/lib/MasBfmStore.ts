@@ -1,3 +1,4 @@
+import { readUserSetting, writeUserSetting } from "@lib/userSettings";
 import { makeAutoObservable, runInAction } from "mobx";
 import SynapseClient, {
   SynapseHttpError,
@@ -129,8 +130,13 @@ class MasBfmStore {
     );
   }
 
+  restoreUserSettings() {
+    this.isEnabled = readUserSetting("urban-assistant-mas-bfm") === true;
+  }
+
   toggle() {
     this.isEnabled = !this.isEnabled;
+    writeUserSetting("urban-assistant-mas-bfm", this.isEnabled);
     if (!this.isEnabled) {
       this.stopMonitoring();
     }
