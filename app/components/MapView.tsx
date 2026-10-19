@@ -517,6 +517,20 @@ function getLayerDisplayName(name?: string) {
     return `Обеспеченность сервисом «${serviceName}» (${PROVISION_LAYER_TYPE_LABELS[provisionLayer.layerType]})`;
 }
 
+function getLayerListDisplayName(name?: string) {
+    const provisionLayer = getProvisionLayerParts(name);
+
+    if (!provisionLayer) return getLayerDisplayName(name);
+
+    const serviceName = getProvisionServiceDisplayName(provisionLayer.serviceName);
+    const capitalizedServiceName = serviceName.replace(
+        /^./u,
+        (firstLetter) => firstLetter.toLocaleUpperCase("ru-RU"),
+    );
+
+    return `${capitalizedServiceName} — ${PROVISION_LAYER_TYPE_LABELS[provisionLayer.layerType]}`;
+}
+
 function isProvisionLinksLayer(name?: string) {
     return getProvisionLayerParts(name)?.layerType === "links";
 }
@@ -1533,6 +1547,7 @@ const MapLayersPanel = ({
                     {displayedLayerRows.map(({ layer, legendGradient, legendTitle }) => {
                         const isActiveLayer = activeLayerId === layer.id;
                         const displayName = getLayerDisplayName(layer.name);
+                        const listDisplayName = getLayerListDisplayName(layer.name);
 
                         return (
                             <div
@@ -1582,7 +1597,7 @@ const MapLayersPanel = ({
                                     title={displayName}
                                     aria-pressed={isActiveLayer}
                                 >
-                                    {displayName}
+                                    {listDisplayName}
                                 </button>
                                 <button
                                     type="button"
@@ -2605,8 +2620,8 @@ const MapView = observer(({
                 <div className="pointer-events-auto absolute top-4 right-4 z-10 flex max-h-[calc(100%-2rem)] w-[min(24rem,calc(100%-2rem))] flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white/50 p-3 shadow-lg backdrop-blur customer-dark:border-ui-border customer-dark:bg-surface-panel/50">
                     <div className="mb-2 flex shrink-0 items-center justify-between gap-3">
                         <div className="min-w-0">
-                            <div className="truncate text-xs font-semibold uppercase tracking-[0.14em] text-gray-500 customer-dark:text-content-muted">
-                                {getLayerDisplayName(selectedFeature.layerName)}
+                            <div className="truncate pl-[5px] text-xs font-semibold uppercase tracking-[0.14em] text-gray-500 customer-dark:text-content-muted">
+                                {getLayerListDisplayName(selectedFeature.layerName)}
                             </div>
                         </div>
                         <button
