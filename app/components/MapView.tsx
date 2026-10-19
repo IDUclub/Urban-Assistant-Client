@@ -517,11 +517,8 @@ function getLayerDisplayName(name?: string) {
     return `Обеспеченность сервисом «${serviceName}» (${PROVISION_LAYER_TYPE_LABELS[provisionLayer.layerType]})`;
 }
 
-function isSchoolProvisionLinksLayer(name?: string) {
-    const provisionLayer = getProvisionLayerParts(name);
-
-    return provisionLayer?.layerType === "links"
-        && provisionLayer.serviceName.toLowerCase().includes("школ");
+function isProvisionLinksLayer(name?: string) {
+    return getProvisionLayerParts(name)?.layerType === "links";
 }
 
 function canUseCategoryColorMode(name?: string) {
@@ -1301,12 +1298,12 @@ function isRoadLayer(name?: string) {
 
 function getLayerLineWidthOffset(name?: string) {
     if (isRoadLayer(name)) return 4;
-    if (isSchoolProvisionLinksLayer(name)) return 1;
+    if (isProvisionLinksLayer(name)) return 1;
 
     return 0;
 }
 
-function getSchoolProvisionLinksHitLayerId(layerId: string) {
+function getProvisionLinksHitLayerId(layerId: string) {
     return `geojson-line-hit-${layerId}`;
 }
 
@@ -1344,10 +1341,10 @@ function getInteractiveRenderedLayerIds(
     const renderedLayerIds = getRenderedLayerIds(layerId, categoricalStyle);
 
     if (
-        isSchoolProvisionLinksLayer(layerName)
+        isProvisionLinksLayer(layerName)
         && (!categoricalStyle?.valueColors.length || categoricalStyle.useExpression)
     ) {
-        renderedLayerIds.push(getSchoolProvisionLinksHitLayerId(layerId));
+        renderedLayerIds.push(getProvisionLinksHitLayerId(layerId));
     }
 
     return renderedLayerIds;
@@ -2302,9 +2299,9 @@ const MapView = observer(({
                                     )}
                                     layout={{ visibility: layer.isVisible ? "visible" : "none" }}
                                 />
-                                {isSchoolProvisionLinksLayer(layer.name) && (
+                                {isProvisionLinksLayer(layer.name) && (
                                     <Layer
-                                        {...createLineHitLayer(getSchoolProvisionLinksHitLayerId(layer.id))}
+                                        {...createLineHitLayer(getProvisionLinksHitLayerId(layer.id))}
                                         layout={{ visibility: layer.isVisible ? "visible" : "none" }}
                                     />
                                 )}
