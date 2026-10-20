@@ -10,7 +10,7 @@ type SynapseRunConfiguration = {
   is_default: boolean;
 };
 
-type SynapseWorkflow = {
+export type SynapseWorkflow = {
   id?: string;
   _id?: string;
   name: string;
@@ -185,13 +185,13 @@ class SynapseClient {
     );
   }
 
-  async getWorkflowId() {
-    if (this.resolvedWorkflowId) {
+  async getWorkflowId(availableWorkflows?: SynapseWorkflow[]) {
+    if (!availableWorkflows && this.resolvedWorkflowId) {
       return this.resolvedWorkflowId;
     }
 
     const configuredWorkflow = getConfig().workflowId;
-    const workflows = await this.listWorkflows();
+    const workflows = availableWorkflows ?? await this.listWorkflows();
     const selected = workflows.find(
       (workflow) =>
         workflow.id === configuredWorkflow ||
@@ -209,7 +209,7 @@ class SynapseClient {
     return workflowId;
   }
 
-  async createProject(userPrompt: string) {
+  async createProject(userPrompt: string, selectedWorkflowId?: string) {
     const prompt = userPrompt.trim();
     if (!prompt) {
       throw new Error("Запрос МАС БФМ не может быть пустым.");
@@ -217,7 +217,7 @@ class SynapseClient {
 
     const [runConfigId, workflowId] = await Promise.all([
       this.getDefaultRunConfigurationId(),
-      this.getWorkflowId(),
+      selectedWorkflowId ?? this.getWorkflowId(),
     ]);
     return this.request<SynapseProjectSummary>("/projects", {
       method: "POST",
