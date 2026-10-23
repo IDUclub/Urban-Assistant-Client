@@ -2,7 +2,7 @@ import { makeAutoObservable, observable } from "mobx";
 
 export type MapColorMode = "category" | "scale";
 
-type MapLayer = {
+export type MapLayer = {
     id: string;
     name: string;
     layer: any;
