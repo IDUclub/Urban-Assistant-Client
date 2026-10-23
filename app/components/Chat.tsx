@@ -1,3 +1,4 @@
+import { PlacementSetupCard, PlacementSummaryCard } from "@components/PlacementMessages";
 import CollapsibleChatInput from "@components/CollapsibleChatInput";
 import { AiOutlinePlusCircle } from "react-icons/ai";
 import { IoIosSend } from "react-icons/io";
@@ -201,7 +202,11 @@ function GeoJsonLayerRow({
     );
 }
 
-function DownloadFileRow({ title, downloadUrl }: { title: string; downloadUrl: string }) {
+function DownloadFileRow({ title, downloadUrl, filename }: {
+    title: string;
+    downloadUrl: string;
+    filename?: string;
+}) {
     const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
     const handlePreview = (event: React.MouseEvent<HTMLAnchorElement>) => {
@@ -222,6 +227,7 @@ function DownloadFileRow({ title, downloadUrl }: { title: string; downloadUrl: s
             {isPreviewOpen && (
                 <MarkdownFilePreviewModal
                     title={title}
+                    filename={filename}
                     downloadUrl={downloadUrl}
                     onClose={() => setIsPreviewOpen(false)}
                 />
@@ -915,7 +921,7 @@ const ChatInput = observer((
                                   ? "cursor-not-allowed text-slate-400 placeholder:text-slate-400 customer-dark:text-content-muted customer-dark:placeholder:text-content-muted"
                                   : "text-gray-950 placeholder:text-gray-500 customer-dark:text-content-primary customer-dark:placeholder:text-content-muted"}
                             `}
-                            placeholder={isStreaming ? "Ответ генерируется..." : "Спросите Помощника"}
+                            placeholder={isStreaming ? "Ответ генерируется..." : "Спросите помощника"}
                             value={currentInput}
                             onChange={(e) => setCurrentInput(e.target.value)}
                             onKeyDown={(event) => {
@@ -939,7 +945,7 @@ const ChatInput = observer((
                                 className={`group disabled:cursor-default disabled:opacity-40 ${isStreaming ? "cursor-pointer" : ""}`}
                                 onClick={() => {
                                     if (isStreaming) {
-                                        ChatStore.abortStream();
+                                        ChatStore.stopChatStream();
                                         return;
                                     }
 
@@ -1131,12 +1137,15 @@ const ChatComponent = observer(function ChatComponent(
                 {message.message.type === "file" && (
                     <DownloadFileRow
                         title={message.message.title}
+                        filename={message.message.filename}
                         downloadUrl={message.message.downloadUrl}
                     />
                 )}
                 {message.message.type === "table" && (
                     <TableMessage table={message.message} />
                 )}
+                {message.message.type === "placement_setup" && <PlacementSetupCard setup={message.message} />}
+                {message.message.type === "placement_summary" && <PlacementSummaryCard message={message.message} />}
                 {message.message.type === "pzz_setup" && (
                     <PzzSetupMessageCard setup={message.message} />
                 )}

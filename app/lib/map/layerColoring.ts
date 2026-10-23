@@ -1,3 +1,4 @@
+import { PLACEMENT_CLASSES } from "@lib/placement/types";
 import type { ExpressionSpecification } from "mapbox-gl";
 import type { MapColorMode } from "@lib/MapStore";
 import {
@@ -45,6 +46,9 @@ import {
     getFeaturePropertyNumbers,
     hasFeaturesWithoutPropertyValue,
 } from "./geoJson";
+
+const PLACEMENT_VALUE_COLORS = PLACEMENT_CLASSES.map(([code, color]) => [code, color] as const);
+const PLACEMENT_LEGEND_GRADIENT = getValueColorGradient(PLACEMENT_VALUE_COLORS);
 
 export const PZZ_VERDICT_COLORS = [
     ["Разрешен", "#22C55E"],
@@ -483,6 +487,10 @@ export function getLegendValueLabel(
             : GENPLANNER_ROAD_NAMES_BY_ID[roadTypeId] ?? value;
     }
 
+    if (propertyName === "Класс_пригодности") {
+        return `${value} — ${PLACEMENT_CLASSES.find(([code]) => code === value)?.[2] ?? value}`;
+    }
+
     if (propertyName === GENBUILDER_EXCLUDED_PROPERTY) {
         return value === "true" ? "Исключённые объекты" : "Сгенерированные объекты";
     }
@@ -513,6 +521,16 @@ export function getMapLegendItems(
 }
 
 export function getDefaultCategoricalLayerStyle(name: string | undefined, layer: unknown): CategoricalLayerStyle | undefined {
+    if (getFeaturePropertyValues(layer, "Класс_пригодности").length) {
+        return {
+            propertyName: "Класс_пригодности",
+            valueColors: PLACEMENT_VALUE_COLORS,
+            fillOpacity: 0.55,
+            legendGradient: PLACEMENT_LEGEND_GRADIENT,
+            legendTitle: "Классы пригодности для размещения",
+        };
+    }
+
     const functionalZoneStyle = getFunctionalZoneStyle(name, layer);
 
     if (functionalZoneStyle) {
