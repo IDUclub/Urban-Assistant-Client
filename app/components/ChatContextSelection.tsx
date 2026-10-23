@@ -189,6 +189,7 @@ const ChatContextSelection = observer(({ inputRef, onSearchOpenChange }: {
         ? CHAT_SERVICES.filter((service) => (
             service === "Нормативная документация"
             || service === "Проверка объектов по ПЗЗ"
+            || service === "Размещение сервисов"
             || service === "Проверка ВРИ"
             || service === "Генерация застройки"
             || service === "Генерация функционального зонирования"

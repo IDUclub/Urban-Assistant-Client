@@ -1,4 +1,11 @@
 import { PERSIST_USER_SETTINGS, readUserSetting, writeUserSetting } from "@lib/userSettings";
+import {
+    PLACEMENT_FILE_FIELDS,
+    parsePlacementSummary,
+    type PlacementSetup,
+    type PlacementFileKey,
+    type PlacementSummaryMessage,
+} from "@lib/placement/types";
 import axios from "axios";
 import { action, makeAutoObservable, reaction, runInAction } from "mobx";
 import AuthStore from "@lib/AuthStore";
@@ -141,7 +148,12 @@ type TablePart = UserChatPartBase & {
     payload: Record<string, unknown>;
 };
 
-type UserChatPart = TextPart | StatusPart | ToolCallPart | FilePart | TablePart;
+type PlacementSummaryPart = UserChatPartBase & {
+    kind: "placement_summary";
+    payload: Record<string, unknown>;
+};
+
+type UserChatPart = TextPart | StatusPart | ToolCallPart | FilePart | TablePart | PlacementSummaryPart;
 
 interface UserChatMessage {
     message_id: string;
@@ -840,6 +852,7 @@ function extractDownloadFileMessage(
 
     return {
         type: "file",
+        filename: toString(content.filename ?? record.filename),
         title: (
             toString(content.title) ??
             toString(content.filename) ??
@@ -1003,6 +1016,7 @@ type DownloadFileMessage = {
     type: "file";
     title: string;
     downloadUrl: string;
+    filename?: string;
 };
 
 type TableMessage = {
@@ -1185,6 +1199,8 @@ type ChatMessagePayload =
     | WarningMessage
     | InfoMessage
     | PzzSetupMessage
+    | PlacementSetup
+    | PlacementSummaryMessage
     | VriSetupMessage
     | GenBuilderSetupMessage
     | GenBuilder3DPromptMessage
@@ -1210,6 +1226,7 @@ export const CHAT_SERVICES = [
     "Нормативная документация",
     "Зоны ограничений",
     "Проверка объектов по ПЗЗ",
+    "Размещение сервисов",
     "Генерация застройки",
     "Генерация функционального зонирования",
     "План развития территории",
@@ -1697,6 +1714,7 @@ class ChatDataStore {
     userChats: UserChat[] = [];
     isUserChatsLoading = false;
     isUserChatOpening = false;
+    private placementFiles = new Map<string, Partial<Record<PlacementFileKey, File>>>();
     private pzzSetupFiles: Map<string, PzzSetupFiles> = new Map();
     private vriSetupFiles: Map<string, VriSetupFiles> = new Map();
     private genBuilderSetupFiles: Map<string, GenBuilderSetupFiles> = new Map();
@@ -1777,6 +1795,7 @@ class ChatDataStore {
         this.activeGenPlannerChatId = undefined;
         this.selectedPzzZoneSource = undefined;
         this.pzzSetupFiles.clear();
+        this.placementFiles.clear();
         this.vriSetupFiles.clear();
         this.genBuilderSetupFiles.clear();
         this.genPlannerResults.clear();
@@ -1793,6 +1812,7 @@ class ChatDataStore {
         this.activeGenPlannerChatId = undefined;
         this.selectedPzzZoneSource = undefined;
         this.pzzSetupFiles.clear();
+        this.placementFiles.clear();
         this.vriSetupFiles.clear();
         this.genBuilderSetupFiles.clear();
         this.genPlannerResults.clear();
@@ -1807,7 +1827,7 @@ class ChatDataStore {
         this.resetStreamingState();
         this.chatMessages = this.chatMessages.filter((chatMessage) => {
             if (chatMessage.type === "response"
-                && (isPzzSetupMessage(chatMessage.message) || isVriSetupMessage(chatMessage.message))) {
+                && (isPzzSetupMessage(chatMessage.message) || isVriSetupMessage(chatMessage.message) || chatMessage.message.type === "placement_setup")) {
                 return chatMessage.message.status === "finished";
             }
             return true;
@@ -1930,6 +1950,18 @@ class ChatDataStore {
             this.removeIncompleteToolSetup(previousTool);
         }
 
+        if (previousTool === "Размещение сервисов" && previousTool !== tool) {
+            if (this.isStreaming) {
+                this.stopChatStream();
+                this.currentStreamRequestId += 1;
+                this.commitStreamedResponse();
+                this.resetStreamingState();
+            }
+            this.chatMessages = this.chatMessages.filter(
+                ({ message }) => message.type !== "placement_setup" || message.status === "finished",
+            );
+            this.placementFiles.clear();
+        }
         this.selectedChatTool = tool;
         if (tool !== "Проверка объектов по ПЗЗ") {
             this.selectedPzzZoneSource = undefined;
@@ -1984,6 +2016,7 @@ class ChatDataStore {
         this.selectedChatTool = null;
         this.selectedPzzZoneSource = undefined;
         this.pzzSetupFiles.clear();
+        this.placementFiles.clear();
         this.vriSetupFiles.clear();
         this.genBuilderSetupFiles.clear();
         this.genBuilderResults.clear();
@@ -2470,6 +2503,7 @@ class ChatDataStore {
         this.parsedContext = null;
         this.selectedChatTool = null;
         this.pzzSetupFiles.clear();
+        this.placementFiles.clear();
         this.vriSetupFiles.clear();
         this.genBuilderSetupFiles.clear();
         this.genBuilderResults.clear();
@@ -3898,6 +3932,456 @@ class ChatDataStore {
 
         promptMessage.status = "declined";
         this.genBuilderResults.delete(promptMessage.setupId);
+    }
+
+    private getPlacementSetup(id: string) {
+        const entry = this.chatMessages.find(
+            ({ message }) => message.type === "placement_setup" && message.id === id,
+        );
+
+        if (entry?.message.type === "placement_setup") {
+            return entry.message;
+        }
+    }
+
+    private startPlacementSetup(request: string) {
+        this.chatMessages = this.chatMessages.filter(({ message }) => {
+            if (message.type === "placement_setup" && message.status === "error") {
+                this.placementFiles.delete(message.id);
+
+                return false;
+            }
+
+            return true;
+        });
+
+        this.resetStreamingState();
+        const scenarioId =
+            this.selectedContext === "nonproject"
+                ? undefined
+                : (this.selectedScenario ?? undefined);
+
+        if (this.selectedContext !== "nonproject" && !scenarioId) {
+            this.addChatNotice("info", "Для подбора мест в проекте выберите сценарий.");
+            return;
+        }
+
+        const id = `placement-${this.currentPzzSetupId}`;
+        this.currentPzzSetupId += 1;
+
+        const setup: PlacementSetup = {
+            type: "placement_setup",
+            id,
+            request,
+            scenarioId,
+            projectId: typeof this.selectedContext === "number" ? this.selectedContext : undefined,
+            sources: [],
+            status: scenarioId ? "loading" : "ready",
+            step: scenarioId ? "complete" : "zones",
+            fileNames: {},
+        };
+        this.placementFiles.set(id, {});
+        this.chatMessages.push({ type: "response", message: setup });
+
+        if (scenarioId) {
+            void this.loadPlacementSources(id, scenarioId);
+        }
+    }
+
+    private async loadPlacementSources(id: string, scenarioId: number) {
+        try {
+            const sources = normalizeFunctionalZoneSources(
+                await DataStore.getScenarioZoneSources(scenarioId),
+            );
+            runInAction(() => {
+                const setup = this.getPlacementSetup(id);
+                if (!setup) {
+                    return;
+                }
+                setup.sources = sources;
+                setup.status = sources.length ? "ready" : "error";
+                setup.errorText = sources.length
+                    ? undefined
+                    : "Источники функциональных зон сценария недоступны или отсутствуют.";
+            });
+        } catch {
+            runInAction(() => {
+                const setup = this.getPlacementSetup(id);
+                if (setup) {
+                    setup.status = "error";
+                    setup.errorText = "Не удалось загрузить источники функциональных зон.";
+                }
+            });
+        }
+    }
+
+    setPlacementFile(id: string, key: PlacementFileKey, file?: File) {
+        const setup = this.getPlacementSetup(id);
+        if (
+            !setup ||
+            setup.status !== "ready" ||
+            setup.scenarioId ||
+            setup.step !== key ||
+            (!file && key === "zones")
+        ) {
+            return;
+        }
+
+        const files = this.placementFiles.get(id) ?? {};
+        if (file) {
+            files[key] = file;
+            setup.fileNames[key] = file.name;
+        } else {
+            delete files[key];
+            delete setup.fileNames[key];
+        }
+
+        this.placementFiles.set(id, files);
+        const steps = ["zones", "descriptions", "cadastre", "objects", "complete"] as const;
+        setup.step = steps[steps.indexOf(key) + 1];
+        setup.errorText = undefined;
+
+        if (setup.step === "complete") {
+            return this.submitPlacement(id);
+        }
+    }
+
+    restartPlacement(id: string) {
+        const setup = this.getPlacementSetup(id);
+        if (!setup || this.isStreaming) {
+            return;
+        }
+
+        setup.retry = setup.status === "error" || setup.retry;
+        setup.errorText = undefined;
+        setup.status = "ready";
+
+        if (setup.scenarioId) {
+            setup.status = "loading";
+            void this.loadPlacementSources(id, setup.scenarioId);
+        } else {
+            setup.step = "zones";
+        }
+    }
+
+    stopChatStream() {
+        const setup = this.chatMessages
+            .flatMap(({ message }) =>
+                message.type === "placement_setup" &&
+                ["running", "queued", "waiting_capacity"].includes(message.status)
+                    ? [message]
+                    : [],
+            )
+            .at(-1);
+
+        const requestId = this.currentStreamRequestId;
+        this.abortStream();
+
+        if (!setup?.taskId) {
+            return;
+        }
+
+        const base = PZZ_AUTO_CHAT_STREAM_URL.replace(/\/tasks\/auto\/chat\/stream$/, "");
+        const path = setup.scenarioId ? `/scenarios/${setup.scenarioId}/tasks` : "/tasks";
+        void axios
+            .delete(`${base}${path}/${encodeURIComponent(setup.taskId)}`, {
+                headers: { Authorization: `Bearer ${AuthStore.accessToken}` },
+            })
+            .catch((error) =>
+                runInAction(() => {
+                    if (
+                        requestId !== this.currentStreamRequestId ||
+                        (axios.isAxiosError(error) && error.response?.status === 409)
+                    ) {
+                        return;
+                    }
+                    this.addChatNotice(
+                        "warning",
+                        "Ответ остановлен, но отменить задачу на сервере не удалось.",
+                    );
+                }),
+            );
+    }
+
+    async submitPlacement(id: string, year?: number, source?: string) {
+        const setup = this.getPlacementSetup(id);
+        if (!setup || setup.status !== "ready" || this.isStreaming || !setup.request.trim()) {
+            return;
+        }
+
+        const files = this.placementFiles.get(id) ?? {};
+        if (
+            setup.scenarioId &&
+            !setup.sources.some((item) => item.year === year && item.source === source)
+        ) {
+            return;
+        }
+
+        if (!setup.scenarioId && (!files.zones || setup.step !== "complete")) {
+            return;
+        }
+
+        const body = new FormData();
+        body.set("mode", "placement");
+
+        if (setup.retry) {
+            body.set("force_recompute", "true");
+        }
+
+        body.set("service_name", setup.request.trim());
+        body.set("user_query", setup.request.trim());
+
+        if (setup.scenarioId) {
+            body.set("year", String(year));
+            body.set("source", source!);
+            setup.year = year;
+            setup.source = source;
+        } else {
+            for (const key of Object.keys(PLACEMENT_FILE_FIELDS) as PlacementFileKey[]) {
+                const file = files[key];
+                if (file) {
+                    body.set(PLACEMENT_FILE_FIELDS[key], file, file.name);
+                }
+            }
+        }
+
+        if (typeof this.activeChatId === "string") {
+            body.set("chat_id", this.activeChatId);
+        }
+
+        this.abortController?.abort();
+        const controller = new AbortController();
+        this.abortController = controller;
+        this.currentStreamRequestId += 1;
+        const requestId = this.currentStreamRequestId;
+
+        setup.status = "running";
+        setup.errorText = undefined;
+        setup.taskId = undefined;
+        this.isStreaming = true;
+        this.streamedResponse = "";
+        this.currentStatus = "Подбор мест размещения";
+        MapStore.clearMapLayers();
+
+        if (setup.projectId) {
+            this.requestProjectBoundary(setup.projectId, requestId);
+        }
+
+        const base = PZZ_AUTO_CHAT_STREAM_URL.replace(/\/tasks\/auto\/chat\/stream$/, "");
+        let hasDone = false;
+        let hasSummary = false;
+        let hasResult = false;
+        let hasError = false;
+
+        try {
+            const { data } = await axios.post(
+                setup.scenarioId
+                    ? `${base}/scenarios/${setup.scenarioId}/chat/stream`
+                    : PZZ_AUTO_CHAT_STREAM_URL,
+                body,
+                {
+                    headers: {
+                        Accept: "text/event-stream",
+                        Authorization: `Bearer ${AuthStore.accessToken}`,
+                    },
+                    responseType: "stream",
+                    adapter: "fetch",
+                    signal: controller.signal,
+                },
+            );
+
+            if (requestId !== this.currentStreamRequestId) {
+                return;
+            }
+
+            if (controller.signal.aborted) {
+                throw new DOMException("Stopped", "AbortError");
+            }
+
+            await readSseStream(data, (event) =>
+                runInAction(() => {
+                    if (requestId !== this.currentStreamRequestId || controller.signal.aborted) {
+                        return;
+                    }
+
+                    if (event.data.trim() === "[DONE]") {
+                        hasDone = true;
+                        return;
+                    }
+
+                    const payload = parseJsonValue(event.data);
+                    const kind = getStreamChunkKind(payload, event.eventName);
+                    const record = asRecord(payload);
+                    const content = asRecord(record?.content) ?? record;
+
+                    if (this.handleServiceEvent(payload)) {
+                        return;
+                    }
+
+                    if (kind === "error") {
+                        hasError = true;
+                        setup.errorText =
+                            getVriErrorText(payload) ??
+                            extractTextFromPayload(payload) ??
+                            "Не удалось выполнить подбор мест.";
+                        setup.status = "error";
+                        return;
+                    }
+
+                    if (kind === "done") {
+                        hasDone = true;
+                        if (
+                            ["detection_failed", "failed", "error", "cancelled"].includes(
+                                content?.status,
+                            )
+                        ) {
+                            hasError = true;
+                            setup.status = "error";
+                            setup.errorText ??=
+                                "Не удалось выполнить подбор. Уточните название сервиса и повторите запрос.";
+                        }
+                        return;
+                    }
+
+                    if (hasError) {
+                        return;
+                    }
+
+                    const summary =
+                        kind === "placement_summary" ? parsePlacementSummary(payload) : undefined;
+
+                    if (summary) {
+                        this.commitStreamedResponse();
+                        hasSummary = true;
+                        setup.taskId = summary.taskId ?? setup.taskId;
+                        this.chatMessages.push({ type: "response", message: summary });
+                        return;
+                    }
+
+                    if (["task", "task_event", "status"].includes(kind ?? "")) {
+                        const task = asRecord(content?.task) ?? content;
+                        setup.taskId =
+                            toString(task?.external_id ?? task?.task_external_id) ?? setup.taskId;
+                        const status = normalizePzzTaskStatus(task?.status);
+
+                        if (status === "failed") {
+                            hasError = true;
+                            setup.status = "error";
+                            setup.errorText =
+                                getVriErrorText(payload) ??
+                                extractTextFromPayload(payload) ??
+                                "Подбор завершился с ошибкой.";
+                        } else if (status && status !== "finished") {
+                            setup.status = status;
+                        }
+
+                        this.currentStatus =
+                            extractTextFromPayload(payload) ?? "Подбор мест размещения";
+                        return;
+                    }
+
+                    if (kind === "warning") {
+                        const text = extractTextFromPayload(payload);
+                        if (text) {
+                            this.addChatNotice("warning", text);
+                        }
+                        return;
+                    }
+
+                    if (kind === "chunk" || kind === "text" || kind === "token") {
+                        const text =
+                            typeof payload === "string"
+                                ? payload
+                                : (content?.text ?? record?.text ?? content?.token);
+                        if (typeof text === "string") {
+                            this.streamedResponse += text;
+                        }
+                        return;
+                    }
+
+                    if (kind === "file") {
+                        const layer = getStreamFileLayer(
+                            payload,
+                            event.eventName,
+                            "pzz pipeline service",
+                        );
+
+                        if (layer) {
+                            const name = toString(content?.name);
+                            hasResult ||=
+                                name === "placement_classes" ||
+                                /\/files\/placement_classes\//.test(getLayerUri(layer.layer) ?? "");
+                            this.commitStreamedResponse();
+                            this.appendGeoJsonLayer(layer);
+                            return;
+                        }
+
+                        const file = extractDownloadFileMessage(payload, "pzz pipeline service");
+                        if (file) {
+                            this.commitStreamedResponse();
+                            this.chatMessages.push({ type: "response", message: file });
+                        }
+
+                        return;
+                    }
+
+                    this.appendStreamChunk(event.data, event.eventName, false);
+                }),
+            );
+
+            if (controller.signal.aborted) {
+                throw new DOMException("Stopped", "AbortError");
+            }
+
+            runInAction(() => {
+                if (requestId !== this.currentStreamRequestId) {
+                    return;
+                }
+
+                this.commitStreamedResponse();
+
+                if (hasError) {
+                    return;
+                }
+
+                setup.status = hasDone && hasSummary && hasResult ? "finished" : "error";
+                setup.errorText =
+                    hasDone && hasSummary && hasResult
+                        ? undefined
+                        : "Поток завершился без подтверждения результата. Повторите подбор.";
+            });
+        } catch (error) {
+            const cancelled = controller.signal.aborted;
+            const text = cancelled
+                ? "Получение ответа остановлено."
+                : await getPzzHttpErrorText(error, "Не удалось выполнить подбор мест.");
+
+            runInAction(() => {
+                if (requestId !== this.currentStreamRequestId) {
+                    return;
+                }
+
+                this.commitStreamedResponse();
+                setup.status = "error";
+                setup.errorText = text;
+            });
+        } finally {
+            runInAction(() => {
+                if (requestId !== this.currentStreamRequestId) {
+                    return;
+                }
+
+                this.isStreaming = false;
+                this.currentStatus = undefined;
+                this.abortController = undefined;
+
+                if (setup.status === "finished") {
+                    this.placementFiles.delete(id);
+                }
+
+                void this.getUserChats();
+            });
+        }
     }
 
     private getPzzSetupMessage(setupId: string) {
@@ -6313,6 +6797,10 @@ class ChatDataStore {
     }
 
     sendChatMessage = async (message: string) => {
+        if (this.selectedChatTool === "Размещение сервисов" && !message.trim()) {
+            return;
+        }
+
         if (
             this.selectedChatTool === "План развития территории"
             && !(typeof this.selectedContext === "number" && this.selectedScenario)
@@ -6393,6 +6881,18 @@ class ChatDataStore {
         }
 
         if (
+            this.selectedChatTool === "Размещение сервисов" &&
+            this.chatMessages.some(
+                ({ message }) =>
+                    message.type === "placement_setup" &&
+                    message.status !== "finished" &&
+                    message.status !== "error",
+            )
+        ) {
+            this.addChatNotice("info", "Завершите настройку подбора или повторите её после ошибки.");
+            return;
+        }
+        if (
             this.selectedChatTool === "Проверка ВРИ"
             && this.hasActiveVriSetup()
         ) {
@@ -6416,12 +6916,17 @@ class ChatDataStore {
         //     this.addChat();
         // }
         MapStore.clearMapLayers();
-        if (typeof this.selectedContext === "number") {
+        if (
+            typeof this.selectedContext === "number" &&
+            this.selectedChatTool !== "Размещение сервисов"
+        ) {
             this.requestProjectBoundary(this.selectedContext);
         }
         this.chatMessages.push({type: "request", message: { type: "text", text: message}})
 
-        if (this.selectedChatTool === "Проверка ВРИ") {
+        if (this.selectedChatTool === "Размещение сервисов") {
+            return this.startPlacementSetup(message);
+        } else if (this.selectedChatTool === "Проверка ВРИ") {
             return this.startVriCheckSetup(message);
         } else if (this.selectedChatTool === "Нормативная документация") {
             return this.sendNormativeDocumentMessage(message, this.selectedScenario ?? undefined);
@@ -6638,6 +7143,8 @@ class ChatDataStore {
 
     private async createChatMessagesFromUserChatMessages(
         userMessages: UserChatMessage[],
+        scenarioId: number | null = this.selectedScenario,
+        requestId = this.currentStreamRequestId,
     ) {
         const messages: ChatMessage[] = [];
         const sortedUserMessages = userMessages
@@ -6686,6 +7193,14 @@ class ChatDataStore {
                     continue;
                 }
 
+                const placementSummary =
+                    userMessage.role === "assistant" ? parsePlacementSummary(part.payload) : undefined;
+
+                if (placementSummary) {
+                    flushText();
+                    messages.push({ type: "response", message: placementSummary });
+                    continue;
+                }
                 const table = extractTableMessage(part.payload);
 
                 if (userMessage.role === "assistant" && table) {
@@ -6767,6 +7282,56 @@ class ChatDataStore {
             flushText();
         }
 
+        const summaries = new Set(
+            messages.flatMap(({ message }) =>
+                message.type === "placement_summary" && message.taskId ? [message.taskId] : [],
+            ),
+        );
+
+        const tasks = new Map<string, number>();
+        messages.forEach(({ message }, index) => {
+            if (message.type !== "geojson") {
+                return;
+            }
+
+            const uri = getLayerUri(parseFeatureCollection(message.layer));
+            const taskId = uri?.match(/\/files\/placement_classes\/([^/?#]+)/)?.[1];
+            if (taskId && !summaries.has(taskId)) {
+                tasks.set(taskId, index);
+            }
+        });
+
+        const base = PZZ_AUTO_CHAT_STREAM_URL.replace(/\/tasks\/auto\/chat\/stream$/, "");
+        for (const [taskId, index] of [...tasks].sort((a, b) => b[1] - a[1])) {
+            if (requestId !== this.currentStreamRequestId) {
+                return messages;
+            }
+
+            try {
+                const path = scenarioId ? `/scenarios/${scenarioId}/tasks` : "/tasks";
+                const { data } = await axios.get(
+                    `${base}${path}/${encodeURIComponent(taskId)}/placement-summary`,
+                    {
+                        timeout: 15000,
+                        headers: { Authorization: `Bearer ${AuthStore.accessToken}` },
+                    },
+                );
+                const summary = parsePlacementSummary(data);
+                if (!summary) {
+                    throw new Error("Invalid placement summary");
+                }
+                messages.splice(index, 0, { type: "response", message: summary });
+            } catch {
+                messages.splice(index, 0, {
+                    type: "response",
+                    message: {
+                        type: "warning",
+                        text: "Не удалось восстановить сводку подбора. Сохранённые слои и текст ответа доступны ниже.",
+                    },
+                });
+            }
+        }
+
         return messages;
     }
 
@@ -6785,6 +7350,7 @@ class ChatDataStore {
         this.chatMessages = [];
         this.selectedChatTool = null;
         this.pzzSetupFiles.clear();
+        this.placementFiles.clear();
         this.vriSetupFiles.clear();
         this.genBuilderSetupFiles.clear();
         this.genBuilderResults.clear();
@@ -6795,7 +7361,19 @@ class ChatDataStore {
 
         try {
             const userMessages = await this.getUserChatMessages(chatId);
-            const chatMessages = await this.createChatMessagesFromUserChatMessages(userMessages);
+            if (this.activeChatId !== chatId || this.currentStreamRequestId !== requestId) {
+                return;
+            }
+
+            const chatMessages = await this.createChatMessagesFromUserChatMessages(
+                userMessages,
+                chat?.scenario_id ?? null,
+                requestId,
+            );
+
+            if (this.activeChatId !== chatId || this.currentStreamRequestId !== requestId) {
+                return;
+            }
 
             if (chat && chat.scenario_id) {
                 const chatContext = await DataStore.getProjectScenarioName(chat.scenario_id);
@@ -6810,6 +7388,16 @@ class ChatDataStore {
                 if (this.activeChatId !== chatId || this.currentStreamRequestId !== requestId) return;
 
                 this.chatMessages = chatMessages;
+                const lastRequestIndex = chatMessages.findLastIndex(({ type }) => type === "request");
+                const lastRequestHasPlacementSummary = chatMessages.some(
+                    ({ message }, index) =>
+                        index > lastRequestIndex && message.type === "placement_summary",
+                );
+
+                if (lastRequestHasPlacementSummary) {
+                    this.setSelectedChatTool("Размещение сервисов");
+                }
+
                 this.restoreMapLayersFromMessages(this.chatMessages);
             });
 
@@ -6903,6 +7491,7 @@ class ChatDataStore {
                     const savedTool = CHAT_SERVICES.find((service) => service === settings.tool);
                     const allowedOutsideProject = savedTool === "Нормативная документация"
                         || savedTool === "Проверка объектов по ПЗЗ" || savedTool === "Проверка ВРИ"
+                        || savedTool === "Размещение сервисов"
                         || savedTool === "Генерация застройки" || savedTool === "Генерация функционального зонирования";
                     const canRestoreTool = projectId === null
                         ? allowedOutsideProject : scenarioId !== null;

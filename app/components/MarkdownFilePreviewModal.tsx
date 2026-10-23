@@ -8,6 +8,7 @@ import useDocumentModal from "@components/documents/useDocumentModal";
 
 type MarkdownFilePreviewModalProps = {
     title: string;
+    filename?: string;
     downloadUrl: string;
     onClose: () => void;
 };
@@ -25,6 +26,7 @@ function saveFile(blob: Blob, fileName: string) {
 
 export default function MarkdownFilePreviewModal({
     title,
+    filename,
     downloadUrl,
     onClose,
 }: MarkdownFilePreviewModalProps) {
@@ -85,14 +87,14 @@ export default function MarkdownFilePreviewModal({
 
         try {
             const blob = fileBlob ?? await downloadFile(downloadUrl);
-            saveFile(blob, title);
+            saveFile(blob, filename ?? title);
         } catch (downloadError) {
             console.error("Error downloading file:", downloadError);
             setError("Не удалось скачать файл.");
         } finally {
             setIsDownloading(false);
         }
-    }, [downloadUrl, fileBlob, isDownloading, title]);
+    }, [downloadUrl, fileBlob, isDownloading, title, filename]);
 
     return createPortal(
         <div
