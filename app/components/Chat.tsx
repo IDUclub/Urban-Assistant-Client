@@ -244,6 +244,8 @@ type GeoJsonResponseMessage = ChatStoreMessage & {
 
 type PzzSetupData = Extract<ChatStoreMessage["message"], { type: "pzz_setup" }>;
 type VriSetupData = Extract<ChatStoreMessage["message"], { type: "vri_setup" }>;
+
+const PZZ_GEO_FILE_ACCEPT = ".geojson,.json,.gpkg,.gml,.kml,.geoparquet,.parquet,.zip";
 type TableData = Extract<ChatStoreMessage["message"], { type: "table" }>;
 function isGeoJsonResponseMessage(message: ChatStoreMessage): message is GeoJsonResponseMessage {
     return message.type === "response" && message.message.type === "geojson";
@@ -504,6 +506,7 @@ const PzzSetupMessageCard = observer(({ setup }: { setup: PzzSetupData }) => {
                 return (
                     <FileUpload
                         label="Загрузите файл с ПЗЗ"
+                        accept={PZZ_GEO_FILE_ACCEPT}
                         fileName={setup.pzzZonesFileName}
                         disabled={setup.status !== "ready" || isLocked}
                         onFileSelected={(file) => ChatStore.submitPzzZonesFile(setup.id, file)}
@@ -532,6 +535,7 @@ const PzzSetupMessageCard = observer(({ setup }: { setup: PzzSetupData }) => {
                 return (
                     <FileUpload
                         label="Загрузите файл со зданиями"
+                        accept={PZZ_GEO_FILE_ACCEPT}
                         fileName={setup.cadastralFileName}
                         disabled={setup.status !== "ready" || isLocked}
                         onFileSelected={(file) => ChatStore.submitPzzCadastralFile(setup.id, file)}
@@ -614,6 +618,14 @@ const PzzSetupMessageCard = observer(({ setup }: { setup: PzzSetupData }) => {
             {setup.errorText && (
                 <div className="rounded-2xl border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700 customer:border-danger-border customer:bg-danger-soft customer:text-danger-content">
                     {setup.errorText}
+                    <button
+                        type="button"
+                        className="mt-2 block underline disabled:opacity-50"
+                        disabled={ChatStore.isStreaming}
+                        onClick={() => ChatStore.restartPzzSetup(setup.id)}
+                    >
+                        Повторить проверку
+                    </button>
                 </div>
             )}
         </div>
@@ -674,6 +686,7 @@ function VriChoiceButtons({
 }
 
 const VriSetupMessageCard = observer(({ setup }: { setup: VriSetupData }) => {
+    const checkTitle = setup.isMoBoundaryCheck ? "Проверка участков и границ МО" : "Проверка ВРИ";
     const isReady = setup.status === "ready";
     const isLocked = setup.status === "submitting" ||
         setup.status === "running" ||
@@ -683,22 +696,43 @@ const VriSetupMessageCard = observer(({ setup }: { setup: VriSetupData }) => {
         setup.classifierFileName ? `Классификатор ВРИ: ${setup.classifierFileName}` : undefined,
         setup.pzzZonesFileName ? `Зоны ПЗЗ: ${setup.pzzZonesFileName}` : undefined,
         setup.pzzZoneDescriptionFileName ? `Описание зон ПЗЗ: ${setup.pzzZoneDescriptionFileName}` : undefined,
+        setup.moBoundariesFileName ? `Границы МО: ${setup.moBoundariesFileName}` : undefined,
     ].filter(Boolean);
 
     const renderStep = () => {
         if (setup.status === "finished") {
-            return <div className="text-sm text-slate-600 customer-dark:text-content-secondary">Проверка ВРИ завершена.</div>;
+            return <div className="text-sm text-slate-600 customer-dark:text-content-secondary">{setup.isMoBoundaryCheck && setup.wantsMoBoundaries === false ? "Дополнительная проверка пропущена." : `${checkTitle} завершена.`}</div>;
         }
 
         if (setup.status === "submitting" || setup.status === "running") {
-            return <div className="text-sm text-slate-600 customer-dark:text-content-secondary">Проверка ВРИ выполняется...</div>;
+            return <div className="text-sm text-slate-600 customer-dark:text-content-secondary">{checkTitle} выполняется...</div>;
         }
 
         switch (setup.step) {
+            case "ask_mo_check":
+                return (
+                    <VriChoiceButtons
+                        question="Хотите дополнительно проверить земельные участки и их пересечения с границами МО?"
+                        disabled={!isReady || isLocked || ChatStore.isStreaming}
+                        onYes={() => ChatStore.answerMoBoundaryCheck(setup.id, true)}
+                        onNo={() => ChatStore.answerMoBoundaryCheck(setup.id, false)}
+                    />
+                );
+            case "upload_mo_boundaries":
+                return (
+                    <FileUpload
+                        label="Загрузите границы муниципальных образований"
+                        accept={PZZ_GEO_FILE_ACCEPT}
+                        fileName={setup.moBoundariesFileName}
+                        disabled={!isReady || isLocked}
+                        onFileSelected={(file) => ChatStore.submitMoBoundariesFile(setup.id, file)}
+                    />
+                );
             case "upload_land_plots":
                 return (
                     <FileUpload
                         label="Загрузите земельные участки"
+                        accept={PZZ_GEO_FILE_ACCEPT}
                         fileName={setup.landPlotsFileName}
                         disabled={!isReady || isLocked}
                         onFileSelected={(file) => ChatStore.submitVriLandPlots(setup.id, file)}
@@ -735,6 +769,7 @@ const VriSetupMessageCard = observer(({ setup }: { setup: VriSetupData }) => {
                 return (
                     <FileUpload
                         label="Загрузите зоны ПЗЗ"
+                        accept={PZZ_GEO_FILE_ACCEPT}
                         fileName={setup.pzzZonesFileName}
                         disabled={!isReady || isLocked}
                         onFileSelected={(file) => ChatStore.submitVriPzzZones(setup.id, file)}
@@ -766,7 +801,7 @@ const VriSetupMessageCard = observer(({ setup }: { setup: VriSetupData }) => {
     return (
         <div className="flex w-full flex-col gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-800 customer-dark:border-ui-border customer-dark:bg-surface-muted customer-dark:text-content-primary">
             <div className="flex items-center justify-between gap-3">
-                <span className="font-medium text-slate-900 customer-dark:text-content-primary">Проверка ВРИ</span>
+                <span className="font-medium text-slate-900 customer-dark:text-content-primary">{checkTitle}</span>
                 <span className="rounded-full bg-white px-2.5 py-1 text-xs text-slate-500 customer-dark:bg-surface-raised customer-dark:text-content-muted">
                     {getVriSetupStatusLabel(setup.status)}
                 </span>
@@ -779,11 +814,19 @@ const VriSetupMessageCard = observer(({ setup }: { setup: VriSetupData }) => {
                 </div>
             )}
             {renderStep()}
-            {/* {setup.errorText && (
+            {setup.errorText && (
                 <div className="rounded-2xl border border-danger-border bg-danger-soft px-3 py-2 text-xs text-danger-content">
                     {setup.errorText}
+                    <button
+                        type="button"
+                        className="mt-2 block underline disabled:opacity-50"
+                        disabled={ChatStore.isStreaming}
+                        onClick={() => ChatStore.restartVriSetup(setup.id)}
+                    >
+                        Заменить файлы и повторить
+                    </button>
                 </div>
-            )} */}
+            )}
         </div>
     );
 });
@@ -826,10 +869,17 @@ const ChatTools = observer(() => {
 const ChatInput = observer((
     { onSubmit }: { onSubmit: ChatComponentProps["onSubmit"]}
 ) => {
-    const { isStreaming } = ChatStore;
+    const { isStreaming, selectedChatTool } = ChatStore;
+    const [isToolSearchOpen, setIsToolSearchOpen] = useState(false);
     const currentInput = ChatStore.messageDraft;
     const setCurrentInput = (value: string) => ChatStore.setMessageDraft(value);
     const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+    useEffect(() => {
+        if (selectedChatTool) {
+            textareaRef.current?.focus();
+        }
+    }, [selectedChatTool]);
 
     useEffect(() => {
         const textarea = textareaRef.current;
@@ -857,6 +907,7 @@ const ChatInput = observer((
                     `}>
                         <textarea
                             ref={textareaRef}
+                            aria-label="Сообщение помощнику"
                             rows={1}
                             className={`
                                 min-w-0 flex-1 resize-none overflow-y-auto bg-transparent leading-6 focus:outline-none transition-colors duration-200
@@ -868,7 +919,8 @@ const ChatInput = observer((
                             value={currentInput}
                             onChange={(e) => setCurrentInput(e.target.value)}
                             onKeyDown={(event) => {
-                                if (event.key === "Enter" && currentInput) {
+                                if (!event.defaultPrevented && !event.nativeEvent.isComposing && event.key === "Enter" && !event.shiftKey && currentInput) {
+                                    event.preventDefault();
                                     onSubmit?.(currentInput);
                                     setCurrentInput("");
                                 }
@@ -878,11 +930,13 @@ const ChatInput = observer((
                     </div>
                     <div className="mt-5 flex w-full items-end justify-between gap-3">
                         <div className="min-w-0 flex-1">
-                            <ChatContextSelection />
+                            <ChatContextSelection inputRef={textareaRef} onSearchOpenChange={setIsToolSearchOpen} />
                         </div>
                         <div className="flex shrink-0 items-center">
                             <button
-                                className={`group ${isStreaming ? "cursor-pointer" : ""}`}
+                                disabled={!isStreaming && isToolSearchOpen}
+                                aria-label={isStreaming ? "Остановить ответ" : "Отправить сообщение"}
+                                className={`group disabled:cursor-default disabled:opacity-40 ${isStreaming ? "cursor-pointer" : ""}`}
                                 onClick={() => {
                                     if (isStreaming) {
                                         ChatStore.abortStream();
