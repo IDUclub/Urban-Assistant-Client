@@ -259,8 +259,15 @@ export async function getFacadeSceneGlb(
     glbUrl: string,
     signal: AbortSignal,
 ): Promise<Blob> {
-    const url = `${baseUrl.replace(/\/+$/, "")}/${glbUrl.replace(/^\/+/, "")}`;
-    const { data } = await axios.get(url, {
+    const serviceBase = new URL(`${baseUrl.replace(/\/+$/, "")}/`);
+    const url = /^https?:\/\//i.test(glbUrl)
+        ? new URL(glbUrl)
+        : new URL(glbUrl.replace(/^\/+/, ""), serviceBase);
+    if (url.origin !== serviceBase.origin) {
+        throw new Error("Facade scene URL must belong to the GenBuilder service");
+    }
+
+    const { data } = await axios.get(url.toString(), {
         headers: { Authorization: `Bearer ${accessToken}` },
         responseType: "blob",
         signal,

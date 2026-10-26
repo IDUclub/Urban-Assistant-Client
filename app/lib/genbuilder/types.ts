@@ -59,7 +59,7 @@ export type GenBuilderFacadeSceneMessage = {
     type: "genbuilder_facade_scene";
     resultId: string;
     glbUrl: string;
-    origin: { lon: number; lat: number };
+    origin?: { lon: number; lat: number };
     facadeStyle?: string;
     buildings?: number;
 };

@@ -17,7 +17,6 @@ import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { observer } from "mobx-react-lite";
 import ChatStore, { downloadGeoJsonLayer } from "@lib/ChatStore";
-import MapStore from "@lib/MapStore";
 import { SyncLoader } from "react-spinners";
 import ChatContextSelection from "@components/ChatContextSelection";
 import Select from "@components/ui/Select";
@@ -303,7 +302,6 @@ function getMessageContainerClassName(message: ChatStoreMessage) {
             return "w-full rounded-3xl border border-amber-200 bg-amber-50 px-5 py-4 text-amber-950 customer-dark:border-ui-border customer-dark:bg-surface-muted customer-dark:text-content-primary";
         case "info":
         case "genbuilder_clarification":
-        case "genbuilder_facade_scene":
             return "w-full rounded-3xl border border-blue-200 bg-blue-50 px-5 py-4 text-blue-950 customer-dark:border-ui-border customer-dark:bg-surface-muted customer-dark:text-content-primary";
         case "genbuilder_3d_prompt":
             return "w-full py-4 text-gray-950 customer-dark:text-content-primary";
@@ -1069,6 +1067,14 @@ const ChatComponent = observer(function ChatComponent(
         }
 
         if (
+            message.message.type === "genbuilder_facade_scene" ||
+            (message.message.type === "file" &&
+                /\/facade-scenes\/[^/?#]+\.glb(?:[?#]|$)/i.test(message.message.downloadUrl))
+        ) {
+            continue;
+        }
+
+        if (
             message.message.type === "genbuilder_3d_prompt" &&
             message.message.status === "submitted" &&
             !message.message.selectedStyleName
@@ -1157,26 +1163,6 @@ const ChatComponent = observer(function ChatComponent(
                 )}
                 {message.message.type === "genbuilder_3d_prompt" && (
                     <GenBuilder3DPromptCard prompt={message.message} />
-                )}
-                {message.message.type === "genbuilder_facade_scene" && (
-                    <div className="flex items-start gap-3 text-sm">
-                        <IoInformationCircleOutline className="mt-0.5 shrink-0 text-blue-500" size={22} />
-                        <div>
-                            <div className="font-semibold">
-                                {MapStore.facadeScene?.resultId !== message.message.resultId
-                                    ? "3D-модель застройки получена"
-                                    : !MapStore.facadeScene.isVisible
-                                        ? "3D-модель застройки скрыта на карте"
-                                        : MapStore.facadeSceneLoadStatus === "ready"
-                                            ? "3D-модель застройки отображается на карте"
-                                            : MapStore.facadeSceneLoadStatus === "error"
-                                                ? "Не удалось загрузить 3D-модель на карту"
-                                                : "Загружаем 3D-модель застройки на карту..."}
-                            </div>
-                            {message.message.facadeStyle && <div className="mt-1">Стиль: {message.message.facadeStyle}</div>}
-                            {message.message.buildings !== undefined && <div>Зданий: {message.message.buildings}</div>}
-                        </div>
-                    </div>
                 )}
                 {message.message.type === "genbuilder_clarification" && (
                     <GenBuilderClarificationMessageCard clarification={message.message} />

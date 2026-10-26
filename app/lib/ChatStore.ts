@@ -825,6 +825,8 @@ function extractDownloadFileMessage(
     payload: unknown,
     fallbackSourceService?: unknown,
 ): DownloadFileMessage | undefined {
+    if (extractHistoryFacadeScene(payload, fallbackSourceService)) return undefined;
+
     const parsed = parseJsonValue(payload);
     const record = asRecord(parsed);
     if (!record) return undefined;
@@ -864,6 +866,118 @@ function extractDownloadFileMessage(
         ),
         downloadUrl,
     };
+}
+
+function parseFacadeSceneOrigin(value: unknown) {
+    const origin = asRecord(value);
+    const lon = toNumber(origin?.lon);
+    const lat = toNumber(origin?.lat);
+
+    return lon !== undefined && lat !== undefined &&
+        lon >= -180 && lon <= 180 && lat >= -90 && lat <= 90
+        ? { lon, lat }
+        : undefined;
+}
+
+function extractHistoryFacadeScene(
+    payload: unknown,
+    fallbackSourceService?: unknown,
+): GenBuilderFacadeSceneMessage | undefined {
+    const record = asRecord(payload);
+    if (!record) return undefined;
+
+    const content = asRecord(record.content) ?? record;
+    const liveScene = parseFacadeScene(content) ?? parseFacadeScene(record);
+    if (liveScene) {
+        return {
+            type: "genbuilder_facade_scene",
+            resultId: liveScene.resultId,
+            glbUrl: liveScene.glbUrl,
+            origin: liveScene.origin,
+            facadeStyle: liveScene.facadeStyle,
+            buildings: liveScene.buildings,
+        };
+    }
+
+    const url = toString(content.url ?? content.glb_url ?? record.url ?? record.glb_url);
+    const filename = toString(content.filename ?? record.filename);
+    const mimeType = toString(content.mime_type ?? content.mimeType ?? record.mime_type)?.toLowerCase();
+    const sourceService = toString(
+        content.source_service ?? record.source_service ?? fallbackSourceService,
+    )?.toLowerCase();
+    const isFacadeScene = toString(content.name ?? record.name) === "facade_scene" ||
+        /\/facade-scenes\/[^/?#]+\.glb(?:[?#]|$)/i.test(url ?? "");
+    const isGlb = mimeType === "model/gltf-binary" ||
+        /\.glb(?:[?#]|$)/i.test(filename ?? "") ||
+        /\.glb(?:[?#]|$)/i.test(url ?? "");
+    if (!url || !isGlb || !isFacadeScene ||
+        (sourceService && sourceService !== "genbuilder")) return undefined;
+
+    const resultId = toString(content.result_id ?? record.result_id) ??
+        (filename ?? new URL(url, "https://download.invalid").pathname.split("/").at(-1))
+            ?.replace(/\.glb$/i, "");
+    if (!resultId) return undefined;
+
+    return {
+        type: "genbuilder_facade_scene",
+        resultId,
+        glbUrl: url,
+        origin: parseFacadeSceneOrigin(content.origin ?? record.origin),
+        facadeStyle: toString(content.facade_style ?? record.facade_style),
+    };
+}
+
+function getGeoJsonLayerCenter(layer: unknown) {
+    const parsed = parseFeatureCollection(layer);
+    const record = asRecord(parsed);
+    if (!record) return undefined;
+
+    const explicitOrigin = parseFacadeSceneOrigin(
+        record.origin ?? asRecord(record.metadata)?.origin,
+    );
+    if (explicitOrigin) return explicitOrigin;
+
+    let west = Infinity;
+    let south = Infinity;
+    let east = -Infinity;
+    let north = -Infinity;
+    const visitCoordinates = (coordinates: unknown): void => {
+        if (!Array.isArray(coordinates)) return;
+        if (coordinates.length >= 2 && typeof coordinates[0] === "number" &&
+            typeof coordinates[1] === "number") {
+            const [lon, lat] = coordinates;
+            if (Number.isFinite(lon) && Number.isFinite(lat) &&
+                lon >= -180 && lon <= 180 && lat >= -90 && lat <= 90) {
+                west = Math.min(west, lon);
+                south = Math.min(south, lat);
+                east = Math.max(east, lon);
+                north = Math.max(north, lat);
+            }
+            return;
+        }
+        coordinates.forEach(visitCoordinates);
+    };
+    const visitGeometry = (geometry: unknown): void => {
+        const value = asRecord(geometry);
+        if (!value) return;
+        if (value.type === "GeometryCollection" && Array.isArray(value.geometries)) {
+            value.geometries.forEach(visitGeometry);
+        } else {
+            visitCoordinates(value.coordinates);
+        }
+    };
+
+    if (record.type === "FeatureCollection" && Array.isArray(record.features)) {
+        record.features.forEach((feature: unknown) => visitGeometry(asRecord(feature)?.geometry));
+    } else if (record.type === "Feature") {
+        visitGeometry(record.geometry);
+    } else {
+        visitGeometry(record);
+    }
+
+    return [west, south, east, north].every(Number.isFinite)
+        ? { lon: (west + east) / 2, lat: (south + north) / 2 }
+        : undefined;
 }
 
 function extractFeatureCollectionLayer(
@@ -1188,6 +1302,7 @@ type AddGeoJsonLayerOptions = {
     showError?: boolean;
     accessToken?: string;
     onNotFound?: () => void;
+    onLoaded?: (layer: any) => void;
 };
 
 type ChatMessagePayload =
@@ -2144,6 +2259,7 @@ class ChatDataStore {
                 name: layer.name,
                 layer: parsedLayer,
             });
+            options.onLoaded?.(parsedLayer);
             return;
         }
 
@@ -2155,6 +2271,7 @@ class ChatDataStore {
                     name: layer.name,
                     layer: downloadedLayer,
                 });
+                options.onLoaded?.(downloadedLayer);
             }))
             .catch(action((error) => {
                 if (requestId !== this.currentStreamRequestId) return;
@@ -2360,28 +2477,83 @@ class ChatDataStore {
         const lastResponseLayers = messages.flatMap((message, ind) =>
             (ind > lastRequestIndex || (hasPzzResult && isPzzFileLayer(message))) && message.type === "response" && message.message?.type === "geojson" ?
                 {
+                    messageIndex: ind,
                     name: message.message?.name,
                     layer: parseFeatureCollection(message.message.layer),
                     message: message.message,
                 } : []
         );
 
-        MapStore.clearMapLayers();
-        const requestId = this.currentStreamRequestId;
-        void this.restoreHistoryMapLayers(lastResponseLayers, requestId);
-
-        const lastFacadeScene = messages.findLast((message, index) =>
+        const lastFacadeSceneIndex = messages.findLastIndex((message, index) =>
             index > lastRequestIndex &&
             message.type === "response" &&
             isGenBuilderFacadeSceneMessage(message.message)
         );
-        if (lastFacadeScene?.type === "response" && isGenBuilderFacadeSceneMessage(lastFacadeScene.message)) {
+        const lastFacadeScene = messages[lastFacadeSceneIndex];
+        const facadeScene = lastFacadeScene?.type === "response" &&
+            isGenBuilderFacadeSceneMessage(lastFacadeScene.message)
+            ? lastFacadeScene.message
+            : undefined;
+        const precedingLayers = lastResponseLayers.filter(
+            (layer) => layer.messageIndex > lastRequestIndex &&
+                layer.messageIndex < lastFacadeSceneIndex,
+        );
+        const locationLayer = facadeScene && !facadeScene.origin
+            ? precedingLayers.findLast((layer) => /сгенерирован|generated/i.test(layer.name))
+                ?? precedingLayers.at(-1)
+                ?? lastResponseLayers.findLast((layer) => layer.messageIndex > lastRequestIndex)
+            : undefined;
+        const earlierLayers = messages.slice(0, Math.max(lastRequestIndex + 1, lastFacadeSceneIndex))
+            .flatMap((message) => message.type === "response" && message.message.type === "geojson"
+                ? [message.message]
+                : []);
+        const earlierLayer = facadeScene && !facadeScene.origin && !locationLayer
+            ? earlierLayers.findLast((message) => /сгенерирован|generated/i.test(message.name))
+                ?? earlierLayers.at(-1)
+            : undefined;
+        const showFacadeScene = (layer: unknown) => {
+            if (!facadeScene || facadeScene.origin) return;
+            const origin = getGeoJsonLayerCenter(layer);
+            if (!origin) return;
+            facadeScene.origin = origin;
             MapStore.setFacadeScene({
-                resultId: lastFacadeScene.message.resultId,
-                glbUrl: lastFacadeScene.message.glbUrl,
-                origin: lastFacadeScene.message.origin,
-                facadeStyle: lastFacadeScene.message.facadeStyle,
+                resultId: facadeScene.resultId,
+                glbUrl: facadeScene.glbUrl,
+                origin,
+                facadeStyle: facadeScene.facadeStyle,
             });
+        };
+
+        MapStore.clearMapLayers();
+        const requestId = this.currentStreamRequestId;
+        void this.restoreHistoryMapLayers(lastResponseLayers, requestId, (layer, loadedLayer) => {
+            if (layer === locationLayer) showFacadeScene(loadedLayer);
+        });
+
+        if (facadeScene?.origin && !locationLayer) {
+            MapStore.setFacadeScene({
+                resultId: facadeScene.resultId,
+                glbUrl: facadeScene.glbUrl,
+                origin: facadeScene.origin,
+                facadeStyle: facadeScene.facadeStyle,
+            });
+        }
+
+        if (earlierLayer) {
+            const priorLayer = parseFeatureCollection(earlierLayer.layer);
+            const uri = getLayerUri(priorLayer);
+            if (uri) {
+                const requestId = this.currentStreamRequestId;
+                void downloadGeoJsonLayer(uri)
+                    .then(action((downloadedLayer) => {
+                        if (requestId === this.currentStreamRequestId) {
+                            showFacadeScene(downloadedLayer);
+                        }
+                    }))
+                    .catch((error) => console.error("Error locating facade scene:", error));
+            } else {
+                showFacadeScene(priorLayer);
+            }
         }
 
         if (
@@ -2395,6 +2567,7 @@ class ChatDataStore {
     private async restoreHistoryMapLayers(
         layers: (UserChatLayer & { message: GeoJSONMessage })[],
         requestId: number,
+        onLoaded?: (layer: UserChatLayer, loadedLayer: any) => void,
     ) {
         for (const layer of layers) {
             if (requestId !== this.currentStreamRequestId) {
@@ -2403,6 +2576,7 @@ class ChatDataStore {
             layer.message.unavailable = undefined;
             await this.addGeoJsonLayerToMap(layer, {
                 requestId,
+                onLoaded: (loadedLayer) => onLoaded?.(layer, loadedLayer),
                 onNotFound: () => {
                     layer.message.unavailable = true;
                 },
@@ -7212,9 +7386,19 @@ class ChatDataStore {
                     continue;
                 }
 
+                const facadeScene = userMessage.role === "assistant"
+                    ? extractHistoryFacadeScene(part.payload, sourceService)
+                    : undefined;
+
                 const downloadFile = userMessage.role === "assistant" && part.kind === "file"
                     ? extractDownloadFileMessage(part.payload, sourceService)
                     : undefined;
+
+                if (facadeScene) {
+                    flushText();
+                    messages.push({ type: "response", message: facadeScene });
+                    continue;
+                }
 
                 if (downloadFile) {
                     flushText();
