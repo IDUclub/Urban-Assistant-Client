@@ -76,6 +76,14 @@ export const VRI_TOP1_FILL_OPACITY = 0.65;
 
 export const GENERATED_LAYER_FILL_OPACITY = 0.65;
 
+const GENBUILDER_SCALE_COLOR_PROPERTIES = new Set([
+    "building_area",
+    "capacity",
+    "floors_count",
+    "living_area",
+    "residents_number",
+]);
+
 export type ColorPalette = {
     id: string;
     label: string;
@@ -193,7 +201,9 @@ export function canUseScaleColorMode(
     propertyName: string,
 ) {
     if (getProvisionLayerParts(name)) return true;
-    if (isGenBuilderResponseLayer(name, layer)) return true;
+    if (isGenBuilderResponseLayer(name, layer)) {
+        return GENBUILDER_SCALE_COLOR_PROPERTIES.has(propertyName);
+    }
     if (isNormsCheckResultLayer(name)) return false;
     if (isFunctionalZoneLayer(name, layer)) return false;
     if (isRoadLayer(name)) return false;

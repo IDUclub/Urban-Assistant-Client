@@ -23,8 +23,10 @@ import {
     downloadGeoJsonLayer,
 } from "@lib/map/geoJson";
 import {
+    GENBUILDER_FUNCTIONAL_ZONE_PROPERTY,
     getLayerDisplayName,
     getLayerListDisplayName,
+    isGenBuilderResponseLayer,
     isProvisionLinksLayer,
     isTerritoryBoundaryLayer,
 } from "@lib/map/layerMetadata";
@@ -455,18 +457,26 @@ const MapView = observer(({
                 layer.style.colorPaletteAutoVersion === INITIAL_COLOR_PALETTE_VERSION
             ) return;
 
-            const propertyName = getLayerColorPropertyName(
-                layer.name,
-                layer.layer,
-                layer.style.colorByProperty,
-            );
+            const usesGeneratedFunctionalZone = isGenBuilderResponseLayer(layer.name, layer.layer)
+                && getColorableLayerProperties(layer.layer).some(
+                    (property) => property.name === GENBUILDER_FUNCTIONAL_ZONE_PROPERTY,
+                );
+            const propertyName = usesGeneratedFunctionalZone
+                ? GENBUILDER_FUNCTIONAL_ZONE_PROPERTY
+                : getLayerColorPropertyName(
+                    layer.name,
+                    layer.layer,
+                    layer.style.colorByProperty,
+                );
             if (!propertyName) return;
 
             const mode = getAvailableColorMode(
                 layer.name,
                 layer.layer,
                 propertyName,
-                getSelectedColorMode(layer.style.colorMode),
+                usesGeneratedFunctionalZone
+                    ? "category"
+                    : getSelectedColorMode(layer.style.colorMode),
             );
             const modePaletteIds = usedPaletteIds.get(mode) ?? new Set<string>();
             const palette = getRandomInitialColorPalette(mode, modePaletteIds);
@@ -474,6 +484,7 @@ const MapView = observer(({
             modePaletteIds.add(palette.id);
             usedPaletteIds.set(mode, modePaletteIds);
             MapStore.setLayerColorSettings(layer.id, {
+                propertyName: usesGeneratedFunctionalZone ? propertyName : undefined,
                 mode,
                 palette: palette.id,
                 paletteSelection: "auto",
