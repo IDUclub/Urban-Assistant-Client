@@ -9,6 +9,7 @@ import useDocumentModal from "@components/documents/useDocumentModal";
 type MarkdownFilePreviewModalProps = {
     title: string;
     filename?: string;
+    previewUrl?: string;
     downloadUrl: string;
     onClose: () => void;
 };
@@ -28,6 +29,7 @@ export default function MarkdownFilePreviewModal({
     title,
     filename,
     downloadUrl,
+    previewUrl = downloadUrl,
     onClose,
 }: MarkdownFilePreviewModalProps) {
     const dialogRef = useRef<HTMLDivElement | null>(null);
@@ -37,6 +39,7 @@ export default function MarkdownFilePreviewModal({
     const [isLoading, setIsLoading] = useState(true);
     const [isDownloading, setIsDownloading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [downloadError, setDownloadError] = useState<string | null>(null);
     const [loadAttempt, setLoadAttempt] = useState(0);
 
     useDocumentModal({
@@ -51,20 +54,27 @@ export default function MarkdownFilePreviewModal({
 
         setIsLoading(true);
         setError(null);
+        setDownloadError(null);
+        setFileBlob(null);
+        setMarkdown("");
 
-        downloadFile(downloadUrl)
+        downloadFile(previewUrl)
             .then(async (blob) => ({
                 blob,
                 text: await blob.text(),
             }))
             .then(({ blob, text }) => {
-                if (!isActive) return;
+                if (!isActive) {
+                    return;
+                }
 
                 setFileBlob(blob);
                 setMarkdown(text);
             })
             .catch((loadError) => {
-                if (!isActive) return;
+                if (!isActive) {
+                    return;
+                }
 
                 console.error("Error loading Markdown preview:", loadError);
                 setError("Не удалось загрузить предпросмотр файла.");
@@ -78,23 +88,28 @@ export default function MarkdownFilePreviewModal({
         return () => {
             isActive = false;
         };
-    }, [downloadUrl, loadAttempt]);
+    }, [previewUrl, loadAttempt]);
 
     const handleDownload = useCallback(async () => {
-        if (isDownloading) return;
+        if (isDownloading) {
+            return;
+        }
 
         setIsDownloading(true);
+        setDownloadError(null);
 
         try {
-            const blob = fileBlob ?? await downloadFile(downloadUrl);
+            const blob = previewUrl === downloadUrl && fileBlob
+                ? fileBlob
+                : await downloadFile(downloadUrl);
             saveFile(blob, filename ?? title);
         } catch (downloadError) {
             console.error("Error downloading file:", downloadError);
-            setError("Не удалось скачать файл.");
+            setDownloadError("Не удалось скачать файл. Повторите скачивание.");
         } finally {
             setIsDownloading(false);
         }
-    }, [downloadUrl, fileBlob, isDownloading, title, filename]);
+    }, [previewUrl, downloadUrl, fileBlob, isDownloading, title, filename]);
 
     return createPortal(
         <div
@@ -141,6 +156,11 @@ export default function MarkdownFilePreviewModal({
                         </button>
                     </div>
                 </header>
+                {downloadError && (
+                    <p className="px-6 pt-4 text-sm text-red-700 customer-dark:text-danger-content" role="alert">
+                        {downloadError}
+                    </p>
+                )}
                 <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5 sm:px-8 sm:py-7">
                     {isLoading && (
                         <div className="flex h-full items-center justify-center" role="status">

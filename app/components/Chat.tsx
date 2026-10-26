@@ -201,8 +201,9 @@ function GeoJsonLayerRow({
     );
 }
 
-function DownloadFileRow({ title, downloadUrl, filename }: {
+function DownloadFileRow({ title, previewUrl, downloadUrl, filename }: {
     title: string;
+    previewUrl?: string;
     downloadUrl: string;
     filename?: string;
 }) {
@@ -216,7 +217,7 @@ function DownloadFileRow({ title, downloadUrl, filename }: {
     return (
         <>
             <a
-                href={downloadUrl}
+                href={previewUrl ?? downloadUrl}
                 onClick={handlePreview}
                 className="inline-flex min-w-0 items-center gap-2 font-medium text-blue-600 underline decoration-blue-300 underline-offset-2 transition-colors hover:text-blue-700 customer:text-brand-primary customer:decoration-brand-border customer:hover:text-brand-contrast"
             >
@@ -227,6 +228,7 @@ function DownloadFileRow({ title, downloadUrl, filename }: {
                 <MarkdownFilePreviewModal
                     title={title}
                     filename={filename}
+                    previewUrl={previewUrl}
                     downloadUrl={downloadUrl}
                     onClose={() => setIsPreviewOpen(false)}
                 />
@@ -1144,6 +1146,7 @@ const ChatComponent = observer(function ChatComponent(
                     <DownloadFileRow
                         title={message.message.title}
                         filename={message.message.filename}
+                        previewUrl={message.message.previewUrl}
                         downloadUrl={message.message.downloadUrl}
                     />
                 )}
