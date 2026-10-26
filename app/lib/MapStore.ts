@@ -130,9 +130,13 @@ class MapDataStore {
         );
 
         if (insertIndex < 0) {
-            this.mapLayers.push(mapLayer);
+            this.mapLayers = [...this.mapLayers, mapLayer];
         } else {
-            this.mapLayers.splice(insertIndex, 0, mapLayer);
+            this.mapLayers = [
+                ...this.mapLayers.slice(0, insertIndex),
+                mapLayer,
+                ...this.mapLayers.slice(insertIndex),
+            ];
         }
     }
 
@@ -146,10 +150,11 @@ class MapDataStore {
             return;
         }
 
-        this.mapLayers[existingLayerIndex] = {
-            ...this.mapLayers[existingLayerIndex],
-            layer: layer.layer,
-        };
+        this.mapLayers = this.mapLayers.map((currentLayer, index) =>
+            index === existingLayerIndex
+                ? { ...currentLayer, layer: layer.layer }
+                : currentLayer
+        );
     }
 
     setMapLayers(layers: {name: string; layer: any}[]) {
