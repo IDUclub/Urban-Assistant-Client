@@ -40,22 +40,15 @@ export function createLineLayer(
     widthOffset = 0,
 ) {
     const lineWidth = boundaryMaxWidth
-        ? getBoundaryLineWidth(boundaryMaxWidth)
-        : [
-            "case",
-            ["==", ["geometry-type"], "Polygon"],
-            0.6,
-            getSelectedLineWidth(3),
-        ] as ExpressionSpecification;
+        ? getBoundaryLineWidth(boundaryMaxWidth, widthOffset)
+        : getGeometryAwareLineWidth(3, widthOffset);
 
     return {
         id,
         type: "line" as const,
         paint: {
             "line-color": color,
-            "line-width": widthOffset
-                ? ["+", lineWidth, widthOffset] as ExpressionSpecification
-                : lineWidth,
+            "line-width": lineWidth,
         },
     };
 }
@@ -72,20 +65,43 @@ export function createLineHitLayer(id: string) {
     };
 }
 
-export function getBoundaryLineWidth(maxWidth: number): ExpressionSpecification {
+export function getBoundaryLineWidth(maxWidth: number, widthOffset = 0): ExpressionSpecification {
     return [
         "interpolate",
         ["linear"],
         ["zoom"],
         5,
-        maxWidth * 0.2,
+        maxWidth * 0.2 + widthOffset,
         9,
-        maxWidth * 0.35,
+        maxWidth * 0.35 + widthOffset,
         12,
-        maxWidth * 0.65,
+        maxWidth * 0.65 + widthOffset,
         16,
-        maxWidth,
+        maxWidth + widthOffset,
     ];
+}
+
+function getGeometryAwareLineWidth(maxWidth: number, widthOffset = 0): ExpressionSpecification {
+    const lineWidthAtZoom = (lineWidth: number) => [
+        "case",
+        ["==", ["geometry-type"], "Polygon"],
+        0.6 + widthOffset,
+        lineWidth + widthOffset,
+    ];
+
+    return [
+        "interpolate",
+        ["linear"],
+        ["zoom"],
+        5,
+        lineWidthAtZoom(maxWidth * 0.08),
+        9,
+        lineWidthAtZoom(maxWidth * 0.2),
+        12,
+        lineWidthAtZoom(maxWidth * 0.5),
+        16,
+        lineWidthAtZoom(maxWidth),
+    ] as ExpressionSpecification;
 }
 
 export function getSelectedLineWidth(maxWidth: number): ExpressionSpecification {

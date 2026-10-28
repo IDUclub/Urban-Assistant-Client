@@ -23,10 +23,8 @@ import {
     downloadGeoJsonLayer,
 } from "@lib/map/geoJson";
 import {
-    GENBUILDER_FUNCTIONAL_ZONE_PROPERTY,
     getLayerDisplayName,
     getLayerListDisplayName,
-    isGenBuilderResponseLayer,
     isProvisionLinksLayer,
     isTerritoryBoundaryLayer,
 } from "@lib/map/layerMetadata";
@@ -457,36 +455,37 @@ const MapView = observer(({
                 layer.style.colorPaletteAutoVersion === INITIAL_COLOR_PALETTE_VERSION
             ) return;
 
-            const usesGeneratedFunctionalZone = isGenBuilderResponseLayer(layer.name, layer.layer)
-                && getColorableLayerProperties(layer.layer).some(
-                    (property) => property.name === GENBUILDER_FUNCTIONAL_ZONE_PROPERTY,
-                );
-            const propertyName = usesGeneratedFunctionalZone
-                ? GENBUILDER_FUNCTIONAL_ZONE_PROPERTY
-                : getLayerColorPropertyName(
-                    layer.name,
-                    layer.layer,
-                    layer.style.colorByProperty,
-                );
+            const originalStyle = getDefaultCategoricalLayerStyle(layer.name, layer.layer);
+            const propertyName = originalStyle?.propertyName ?? getLayerColorPropertyName(
+                layer.name,
+                layer.layer,
+                layer.style.colorByProperty,
+            );
             if (!propertyName) return;
 
             const mode = getAvailableColorMode(
                 layer.name,
                 layer.layer,
                 propertyName,
-                usesGeneratedFunctionalZone
-                    ? "category"
-                    : getSelectedColorMode(layer.style.colorMode),
+                originalStyle ? "category" : getSelectedColorMode(layer.style.colorMode),
             );
-            const modePaletteIds = usedPaletteIds.get(mode) ?? new Set<string>();
-            const palette = getRandomInitialColorPalette(mode, modePaletteIds);
+            const paletteId = originalStyle
+                ? "original"
+                : getRandomInitialColorPalette(
+                    mode,
+                    usedPaletteIds.get(mode) ?? new Set<string>(),
+                ).id;
 
-            modePaletteIds.add(palette.id);
-            usedPaletteIds.set(mode, modePaletteIds);
+            if (!originalStyle) {
+                const modePaletteIds = usedPaletteIds.get(mode) ?? new Set<string>();
+
+                modePaletteIds.add(paletteId);
+                usedPaletteIds.set(mode, modePaletteIds);
+            }
             MapStore.setLayerColorSettings(layer.id, {
-                propertyName: usesGeneratedFunctionalZone ? propertyName : undefined,
+                propertyName: originalStyle ? propertyName : undefined,
                 mode,
-                palette: palette.id,
+                palette: paletteId,
                 paletteSelection: "auto",
                 paletteAutoVersion: INITIAL_COLOR_PALETTE_VERSION,
             });

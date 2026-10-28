@@ -116,6 +116,47 @@ export function getPropertyMatchValue(value: unknown) {
     return matchValue.trim() ? matchValue : undefined;
 }
 
+function getServiceIdentifiers(value: unknown): string[] {
+    if (Array.isArray(value)) {
+        return value.flatMap(getServiceIdentifiers);
+    }
+
+    const primitiveValue = getPropertyMatchValue(value);
+    if (primitiveValue !== undefined) {
+        return [primitiveValue];
+    }
+
+    if (!value || typeof value !== "object") {
+        return [];
+    }
+
+    const record = value as Record<string, unknown>;
+    const directServiceValue = record.service_type_id
+        ?? record.serviceTypeId
+        ?? record.service
+        ?? record.type
+        ?? record.id;
+    if (directServiceValue !== undefined) {
+        return getServiceIdentifiers(directServiceValue);
+    }
+
+    return Object.keys(record).filter((key) => (
+        key !== "capacity" && key !== "service_capacity"
+    ));
+}
+
+export function getFeaturePropertyMatchValue(feature: any, propertyName: string) {
+    const value = getFeatureProperty(feature, propertyName);
+    if (normalizePropertyName(propertyName) !== "service") {
+        return getPropertyMatchValue(value);
+    }
+
+    const serviceIdentifiers = Array.from(new Set(getServiceIdentifiers(value)))
+        .sort((left, right) => left.localeCompare(right, "ru", { numeric: true }));
+
+    return serviceIdentifiers.length ? serviceIdentifiers.join(", ") : undefined;
+}
+
 export function formatFeaturePropertyValue(value: unknown): string {
     if (value === null || value === undefined) {
         return "—";
@@ -203,7 +244,7 @@ export function getFeaturePropertyValues(layer: unknown, propertyName: string): 
     const record = parsedLayer as Record<string, any>;
     const values = new Set<string>();
     const collectValue = (feature: any) => {
-        const value = getPropertyMatchValue(getFeatureProperty(feature, propertyName));
+        const value = getFeaturePropertyMatchValue(feature, propertyName);
 
         if (value) {
             values.add(value);
@@ -220,7 +261,7 @@ export function getFeaturePropertyValues(layer: unknown, propertyName: string): 
         return Array.from(values);
     }
 
-    const value = getPropertyMatchValue(getFeatureProperty(record, propertyName));
+    const value = getFeaturePropertyMatchValue(record, propertyName);
     return value ? [value] : [];
 }
 
@@ -245,7 +286,7 @@ export function hasFeaturesWithoutPropertyValue(layer: unknown, propertyName: st
 
     const record = parsedLayer as Record<string, any>;
     const isMissingValue = (feature: any) => (
-        getPropertyMatchValue(getFeatureProperty(feature, propertyName)) === undefined
+        getFeaturePropertyMatchValue(feature, propertyName) === undefined
     );
 
     if (record.type === "FeatureCollection" && Array.isArray(record.features)) {
@@ -265,7 +306,7 @@ export function filterLayerByPropertyValue(
     if (!parsedLayer || typeof parsedLayer !== "object" || typeof parsedLayer === "string") return layer;
 
     const matchesValue = (feature: any) => {
-        const value = getPropertyMatchValue(getFeatureProperty(feature, propertyName))
+        const value = getFeaturePropertyMatchValue(feature, propertyName)
             ?? fallbackValue;
         return value === expectedValue;
     };

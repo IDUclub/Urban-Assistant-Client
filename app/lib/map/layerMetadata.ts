@@ -18,6 +18,8 @@ export const GENBUILDER_EXCLUDED_PROPERTY = "is_excluded";
 
 export const GENBUILDER_FUNCTIONAL_ZONE_PROPERTY = "zone";
 
+export const GENBUILDER_SERVICE_PROPERTY = "service";
+
 export function isPzzActualZoneCodeProperty(propertyName: string) {
     return normalizePropertyName(propertyName) === normalizePropertyName(PZZ_ACTUAL_ZONE_CODE_PROPERTY);
 }

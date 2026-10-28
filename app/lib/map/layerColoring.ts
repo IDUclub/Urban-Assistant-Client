@@ -26,6 +26,7 @@ import {
     VRI_TOP1_PROPERTY,
     GENBUILDER_EXCLUDED_PROPERTY,
     GENBUILDER_FUNCTIONAL_ZONE_PROPERTY,
+    GENBUILDER_SERVICE_PROPERTY,
     isPzzActualZoneCodeProperty,
     isPzzCheckResponseLayer,
     isGenBuilderResponseLayer,
@@ -44,6 +45,7 @@ import {
     getLayerFeatures,
     getFeaturePropertyValues,
     getFeaturePropertyNumbers,
+    getFeaturePropertyMatchValue,
     hasFeaturesWithoutPropertyValue,
 } from "./geoJson";
 
@@ -146,7 +148,7 @@ export const SCALE_COLOR_PALETTES: readonly ColorPalette[] = [
     },
 ];
 
-export const INITIAL_COLOR_PALETTE_VERSION = 1;
+export const INITIAL_COLOR_PALETTE_VERSION = 3;
 
 export type LayerColorPropertyKind = "category" | "number";
 
@@ -163,12 +165,15 @@ export function getColorableLayerProperties(layer: unknown): LayerColorProperty[
         if (!properties || typeof properties !== "object") return;
 
         Object.entries(properties).forEach(([propertyName, value]) => {
-            if (value === null || value === undefined || value === "") return;
-            if (!isColorablePropertyValue(value)) return;
+            const colorableValue = propertyName === GENBUILDER_SERVICE_PROPERTY
+                ? getFeaturePropertyMatchValue(feature, propertyName)
+                : value;
+            if (colorableValue === null || colorableValue === undefined || colorableValue === "") return;
+            if (!isColorablePropertyValue(colorableValue)) return;
 
             const values = propertyValues.get(propertyName) ?? [];
 
-            values.push(value);
+            values.push(colorableValue);
             propertyValues.set(propertyName, values);
         });
     });
@@ -541,31 +546,17 @@ export function getDefaultCategoricalLayerStyle(name: string | undefined, layer:
         };
     }
 
+    if (
+        isGenBuilderResponseLayer(name, layer)
+        && getFeaturePropertyValues(layer, GENBUILDER_SERVICE_PROPERTY).length
+    ) {
+        return undefined;
+    }
+
     const functionalZoneStyle = getFunctionalZoneStyle(name, layer);
 
     if (functionalZoneStyle) {
         return functionalZoneStyle;
-    }
-
-    if (isGenBuilderResponseLayer(name, layer)) {
-        const hasExcludedObjects = getFeaturePropertyValues(
-            layer,
-            GENBUILDER_EXCLUDED_PROPERTY,
-        ).includes("true");
-        const valueColors = hasExcludedObjects
-            ? GENBUILDER_BUILDING_COLORS
-            : GENBUILDER_BUILDING_COLORS.slice(0, 1);
-
-        return {
-            propertyName: GENBUILDER_EXCLUDED_PROPERTY,
-            valueColors,
-            fillOpacity: GENERATED_LAYER_FILL_OPACITY,
-            legendGradient: getValueColorGradient(valueColors),
-            fallbackValue: "false",
-            legendTitle: hasExcludedObjects
-                ? "Сгенерированные — зелёные, исключённые — оранжевые"
-                : "Сгенерированные объекты",
-        };
     }
 
     const genPlannerRoadStyle = getGenPlannerRoadStyle(name, layer);
@@ -627,6 +618,12 @@ export function getLayerColorPropertyName(
 ) {
     if (selectedPropertyName) return selectedPropertyName;
 
+    if (isGenBuilderResponseLayer(name, layer)) {
+        return getFeaturePropertyValues(layer, GENBUILDER_SERVICE_PROPERTY).length
+            ? GENBUILDER_SERVICE_PROPERTY
+            : undefined;
+    }
+
     return getDefaultCategoricalLayerStyle(name, layer)?.propertyName
         ?? getColorableLayerProperties(layer)[0]?.name;
 }
@@ -671,7 +668,7 @@ export function getSelectedCategoricalLayerStyle(
         valueColors,
         fillOpacity: GENERATED_LAYER_FILL_OPACITY,
         legendGradient: getValueColorGradient(valueColors),
-        useExpression: true,
+        useExpression: propertyName !== GENBUILDER_SERVICE_PROPERTY,
         scaleLabels: useScale && values.length
             ? [values[0], values.at(-1) ?? values[0]]
             : undefined,
