@@ -444,6 +444,21 @@ function resolveServiceFileUrl(value: unknown, sourceService: unknown) {
                 return uri;
             }
 
+            const reportPath = originalUrl.pathname.match(/\/reports\/.*$/)?.[0];
+            if (reportPath) {
+                let reportBasePath = serviceUrl.pathname.replace(/\/+$/, "");
+                if (sourceServiceName === "buildplanner") {
+                    reportBasePath += "/buildplanner";
+                } else if (sourceServiceName === "genplanner" && !reportBasePath.endsWith("/genplanner")) {
+                    reportBasePath += "/genplanner";
+                }
+
+                return new URL(
+                    `${reportBasePath}${reportPath}${originalUrl.search}${originalUrl.hash}`,
+                    serviceUrl.origin,
+                ).toString();
+            }
+
             const basePath = serviceUrl.pathname.replace(/\/+$/, "");
             const path = originalUrl.pathname;
             const filePath = path === basePath || path.startsWith(`${basePath}/`)
@@ -825,18 +840,22 @@ function extractDownloadFileMessage(
     payload: unknown,
     fallbackSourceService?: unknown,
 ): DownloadFileMessage | undefined {
-    if (extractHistoryFacadeScene(payload, fallbackSourceService)) return undefined;
+    if (extractHistoryFacadeScene(payload, fallbackSourceService)) {
+        return;
+    }
 
     const parsed = parseJsonValue(payload);
     const record = asRecord(parsed);
-    if (!record) return undefined;
+    if (!record) {
+        return;
+    }
 
     const content = asRecord(record.content) ?? record;
     const explicitDownloadUrl =
         content.download_url ?? content.downloadUrl ??
         record.download_url ?? record.downloadUrl;
     if (!explicitDownloadUrl && isGeoJsonFilePayload({ ...record, ...content })) {
-        return undefined;
+        return;
     }
 
     const downloadUrl = resolvePayloadFileUrl(
@@ -850,20 +869,33 @@ function extractDownloadFileMessage(
         fallbackSourceService,
     );
 
-    if (!downloadUrl) return undefined;
+    if (!downloadUrl) {
+        return;
+    }
+
+    const previewUrl = resolvePayloadFileUrl(
+        content.url ?? content.uri ?? record.url ?? record.uri,
+        record,
+        content,
+        fallbackSourceService,
+    ) ?? downloadUrl;
+    const isReport = (content.role ?? record.role) === "report" ||
+        (content.name ?? record.name) === "report";
+    const filename = toString(content.filename ?? record.filename) ??
+        (isReport ? "Отчёт.txt" : undefined);
+    const reportTitle = isReport
+        ? toString(content.title) ?? toString(record.title) ?? "Отчёт о работе сервиса"
+        : undefined;
+    const title = reportTitle ??
+        toString(content.title) ?? toString(content.filename) ?? toString(content.name) ??
+        toString(record.title) ?? toString(record.filename) ?? toString(record.name) ??
+        "Скачать файл";
 
     return {
         type: "file",
-        filename: toString(content.filename ?? record.filename),
-        title: (
-            toString(content.title) ??
-            toString(content.filename) ??
-            toString(content.name) ??
-            toString(record.title) ??
-            toString(record.filename) ??
-            toString(record.name) ??
-            "Скачать файл"
-        ),
+        filename,
+        title,
+        previewUrl,
         downloadUrl,
     };
 }
@@ -1129,6 +1161,7 @@ type GeoJSONMessage = {
 type DownloadFileMessage = {
     type: "file";
     title: string;
+    previewUrl?: string;
     downloadUrl: string;
     filename?: string;
 };
@@ -2305,6 +2338,7 @@ class ChatDataStore {
         payload: string,
         eventName?: string,
         commitOnDone = true,
+        fallbackSourceService?: string,
     ) => {
         const trimmedPayload = payload.trim();
         if (!trimmedPayload || trimmedPayload === "[DONE]") return;
@@ -2349,7 +2383,7 @@ class ChatDataStore {
                     return;
                 }
 
-                const file = extractDownloadFileMessage(parsed);
+                const file = extractDownloadFileMessage(parsed, fallbackSourceService);
                 if (file) {
                     this.commitStreamedResponse();
                     this.chatMessages.push({ type: "response", message: file });
@@ -3618,7 +3652,7 @@ class ChatDataStore {
                     return;
                 }
 
-                const file = extractDownloadFileMessage(streamEvent.content);
+                const file = extractDownloadFileMessage(streamEvent.content, "genbuilder");
                 if (file) {
                     this.commitStreamedResponse();
                     this.chatMessages.push({ type: "response", message: file });
@@ -4706,7 +4740,7 @@ class ChatDataStore {
             this.addChatNotice("error", text);
             return false;
         }
-        this.appendStreamChunk(event.data, event.eventName);
+        this.appendStreamChunk(event.data, event.eventName, true, "pzz pipeline service");
         return true;
     }
 
@@ -5677,7 +5711,7 @@ class ChatDataStore {
         }
 
         if (getStreamChunkKind(payload, eventName) === "file") {
-            const file = extractDownloadFileMessage(payload);
+            const file = extractDownloadFileMessage(payload, "pzz pipeline service");
             if (file) {
                 this.commitStreamedResponse();
                 this.chatMessages.push({ type: "response", message: file });
@@ -6172,7 +6206,7 @@ class ChatDataStore {
                     if (layer) {
                         this.appendGeoJsonLayer(layer);
                     } else {
-                        const file = extractDownloadFileMessage(streamEvent.data);
+                        const file = extractDownloadFileMessage(streamEvent.data, "genplanner");
                         if (file) {
                             this.commitStreamedResponse();
                             this.chatMessages.push({ type: "response", message: file });
@@ -6600,7 +6634,7 @@ class ChatDataStore {
                     return;
                 }
 
-                const file = extractDownloadFileMessage(streamEvent.payload);
+                const file = extractDownloadFileMessage(streamEvent.payload, "buildplanner");
                 if (file) {
                     this.commitStreamedResponse();
                     this.chatMessages.push({
@@ -6684,7 +6718,7 @@ class ChatDataStore {
                         return;
                     }
 
-                    const file = extractDownloadFileMessage(streamEvent.data);
+                    const file = extractDownloadFileMessage(streamEvent.data, "buildplanner");
                     if (file) {
                         this.commitStreamedResponse();
                         this.chatMessages.push({
