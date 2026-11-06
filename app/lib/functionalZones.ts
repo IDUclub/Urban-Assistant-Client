@@ -60,6 +60,20 @@ const FUNCTIONAL_ZONE_IDS_BY_VALUE: Record<string, number> = {
     highrise_residential: 13,
 };
 
+export const FUNCTIONAL_ZONE_TYPE_OPTIONS = [
+    { value: "residential", label: "Жилая зона" },
+    { value: "recreation", label: "Рекреационная зона" },
+    { value: "special", label: "Зона особого назначения" },
+    { value: "industrial", label: "Промышленная зона" },
+    { value: "agricultural", label: "Сельскохозяйственная зона" },
+    { value: "transport", label: "Транспортная зона" },
+    { value: "business", label: "Общественно-деловая зона" },
+    { value: "individual_residential", label: "ИЖС" },
+    { value: "lowrise_residential", label: "Малоэтажная жилая зона" },
+    { value: "midrise_residential", label: "Среднеэтажная жилая зона" },
+    { value: "highrise_residential", label: "Многоэтажная жилая зона" },
+] as const;
+
 export function getFunctionalZoneId(value: unknown) {
     if (typeof value === "number") {
         return Number.isFinite(value) ? value : undefined;

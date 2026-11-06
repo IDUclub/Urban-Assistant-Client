@@ -34,6 +34,7 @@ import {
 } from "@components/GenPlannerMessages";
 import MarkdownMessage from "@components/MarkdownMessage";
 import MarkdownFilePreviewModal from "@components/MarkdownFilePreviewModal";
+import { ProjectFromFilesSetupCard } from "@components/ProjectFromFilesMessages";
 
 
 type ChatMessageItemType = "title" | "plain" | "block" | "list";
@@ -1178,6 +1179,9 @@ const ChatComponent = observer(function ChatComponent(
                 )}
                 {message.message.type === "genplanner_custom_setup" && (
                     <GenPlannerCustomSetupCard setup={message.message} />
+                )}
+                {message.message.type === "project_from_files_setup" && (
+                    <ProjectFromFilesSetupCard setup={message.message} />
                 )}
                 {message.type === "request" && (
                     <div className="absolute -bottom-1.5 right-4 w-0 h-0 border-l-8 border-l-transparent border-r-8 border-r-transparent border-t-8 border-t-blue-100 customer:border-t-brand-soft "></div>

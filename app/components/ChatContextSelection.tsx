@@ -6,6 +6,7 @@ import {
     MdClose,
     MdOutlineCancel,
     MdOutlineDescription,
+    MdOutlineCreateNewFolder,
     MdOutlineFolder,
     MdUploadFile,
     MdCheck,
@@ -14,7 +15,7 @@ import {
 import { LuLayers3 } from "react-icons/lu";
 import DataStore, { type CreatedProject } from "@lib/DataStore";
 import DocumentsStore, { type UserDocument } from "@lib/DocumentsStore";
-import ChatStore, { CHAT_SERVICES } from "@lib/ChatStore";
+import ChatStore, { CHAT_SERVICES, PROJECT_FROM_FILES_TOOL } from "@lib/ChatStore";
 import MapStore from "@lib/MapStore";
 import CustomSelect, { type SelectOption } from "@components/ui/Select";
 import CreateProjectModal from "@components/CreateProjectModal";
@@ -193,13 +194,17 @@ const ChatContextSelection = observer(({ inputRef, onSearchOpenChange }: {
             || service === "Проверка ВРИ"
             || service === "Генерация застройки"
             || service === "Генерация функционального зонирования"
+            || service === PROJECT_FROM_FILES_TOOL
         ))
         : CHAT_SERVICES.filter((service) => (
-            (
-                service !== "Генерация функционального зонирования"
-                && service !== "План развития территории"
+            service !== PROJECT_FROM_FILES_TOOL
+            && (
+                (
+                    service !== "Генерация функционального зонирования"
+                    && service !== "План развития территории"
+                )
+                || hasScenarioSelection
             )
-            || hasScenarioSelection
         ));
     const isProjectSelected = selectedProjectId !== null
         && Number.isFinite(selectedProjectId);
@@ -294,6 +299,11 @@ const ChatContextSelection = observer(({ inputRef, onSearchOpenChange }: {
             icon: <MdOutlineFolder size={19} />,
             run: () => setIsCreateProjectModalOpen(true),
         },
+        ...(selectedContext === "nonproject" ? [{
+            id: PROJECT_FROM_FILES_TOOL, group: "Проект", label: PROJECT_FROM_FILES_TOOL,
+            icon: <MdOutlineCreateNewFolder size={19} />,
+            run: () => ChatStore.setSelectedChatTool(PROJECT_FROM_FILES_TOOL),
+        }] : []),
         {
             id: "documents", group: "Библиотека документов", label: "Просмотр документов",
             icon: <MdOutlineDescription size={19} />,
@@ -319,7 +329,9 @@ const ChatContextSelection = observer(({ inputRef, onSearchOpenChange }: {
         });
     }
 
-    actions.push(...availableServices.map((service) => ({
+    actions.push(...availableServices.filter(
+        (service) => service !== PROJECT_FROM_FILES_TOOL,
+    ).map((service) => ({
         id: service, group: "Модули", label: service,
         icon: <LuLayers3 size={19} />,
         run: () => ChatStore.setSelectedChatTool(service),
@@ -532,31 +544,32 @@ const ChatContextSelection = observer(({ inputRef, onSearchOpenChange }: {
                     </span>
                 </button>
 
-                {!isChatVisible && (
-                    <button
-                        type="button"
-                        className="
-                            flex min-w-0 max-w-[min(60%,32rem)] items-center gap-2 rounded-2xl
-                            bg-slate-100 px-4 py-2 text-sm font-medium text-slate-600
-                            transition-colors hover:bg-slate-200 hover:text-slate-900
-                            focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0788CE]/40
-                            disabled:cursor-not-allowed disabled:opacity-50
-                            customer:focus-visible:ring-brand-primary/40
-                            customer-dark:bg-surface-muted customer-dark:text-content-secondary
-                            customer-dark:hover:bg-surface-hover customer-dark:hover:text-content-primary
-                        "
-                        onClick={() => {
-                            setDismissedDraft(draft);
-                            setPanelView("context");
-                        }}
-                        disabled={isStreaming}
-                        title={activeContextLabel}
-                        aria-label={`Выбрать проект. Текущий контекст: ${activeContextLabel}`}
-                    >
-                        <LuLayers3 size={16} className="shrink-0" />
-                        <span className="truncate">{activeContextLabel}</span>
-                    </button>
-                )}
+                <button
+                    type="button"
+                    className="
+                        flex min-w-0 max-w-[min(60%,32rem)] items-center gap-2 rounded-2xl
+                        bg-slate-100 px-4 py-2 text-sm font-medium text-slate-600
+                        transition-colors hover:bg-slate-200 hover:text-slate-900
+                        focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0788CE]/40
+                        disabled:cursor-not-allowed disabled:opacity-50
+                        customer:focus-visible:ring-brand-primary/40
+                        customer-dark:bg-surface-muted customer-dark:text-content-secondary
+                        customer-dark:hover:bg-surface-hover customer-dark:hover:text-content-primary
+                    "
+                    onClick={() => {
+                        if (isChatVisible) return;
+                        setDismissedDraft(draft);
+                        setPanelView("context");
+                    }}
+                    disabled={isStreaming}
+                    title={activeContextLabel}
+                    aria-label={isChatVisible
+                        ? `Текущий проект: ${activeContextLabel}`
+                        : `Выбрать проект. Текущий контекст: ${activeContextLabel}`}
+                >
+                    <LuLayers3 size={16} className="shrink-0" />
+                    <span className="truncate">{activeContextLabel}</span>
+                </button>
 
                 {selectedChatTool && (
                     <div
@@ -601,10 +614,10 @@ const ChatContextSelection = observer(({ inputRef, onSearchOpenChange }: {
                         role="dialog"
                         aria-label={
                             isChatVisible
-                                ? "Создание проекта и сервисы"
+                                ? "Проект и модули"
                                 : isContextView
                                     ? "Выбор проекта"
-                                    : "Выбор проекта и сервисы"
+                                    : "Выбор проекта и модулей"
                         }
                     >
                         {!isContextView ? (
@@ -634,7 +647,7 @@ const ChatContextSelection = observer(({ inputRef, onSearchOpenChange }: {
                                                 <button
                                                     type="button"
                                                     data-active={isActive}
-                                                    aria-pressed={action.group === "Модули" ? isSelected : undefined}
+                                                    aria-pressed={action.group === "Модули" || action.id === PROJECT_FROM_FILES_TOOL ? isSelected : undefined}
                                                     className={rowClass}
                                                     onClick={() => executeAction(action)}
                                                 >
