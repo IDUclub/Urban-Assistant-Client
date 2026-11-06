@@ -7,6 +7,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { MdClose } from "react-icons/md";
+import ScenarioImportPreviewMap from "@components/ScenarioImportPreviewMap";
 import {
     formatScenarioGeoJson,
     parseScenarioGeoJson,
@@ -20,6 +21,9 @@ import {
     type InfrastructureImportItem,
     type InfrastructureTypeOption,
 } from "@lib/ScenarioInfrastructure";
+
+const EMPTY_GEOMETRIES: ScenarioImportedGeometry[] = [];
+const EMPTY_TYPE_IDS: Array<number | undefined> = [];
 
 export type ScenarioPropertyOption = {
     value: number;
@@ -100,6 +104,8 @@ function InfrastructureFields({
     onItemChange,
     physicalObjectTypes,
     serviceTypes,
+    selectedIndex,
+    onSelectObject,
 }: {
     propertyNames: string[];
     mapping: InfrastructurePropertyMapping;
@@ -108,7 +114,23 @@ function InfrastructureFields({
     onItemChange: (index: number, update: (item: InfrastructureImportItem) => InfrastructureImportItem) => void;
     physicalObjectTypes: InfrastructureTypeOption[];
     serviceTypes: InfrastructureTypeOption[];
+    selectedIndex: number | null;
+    onSelectObject: (index: number | null) => void;
 }) {
+    const rowsRef = useRef<Array<HTMLDetailsElement | null>>([]);
+
+    useEffect(() => {
+        if (selectedIndex !== null) {
+            const row = rowsRef.current[selectedIndex];
+            if (row) {
+                const list = row.parentElement;
+                if (list) {
+                    list.scrollTo({ top: row.offsetTop, behavior: "smooth" });
+                }
+            }
+        }
+    }, [selectedIndex]);
+
     return (
         <>
             <div className="space-y-3 rounded-2xl border border-slate-200 p-4 customer-dark:border-ui-border">
@@ -135,11 +157,18 @@ function InfrastructureFields({
 
             <div>
                 <div className="mb-2 text-sm font-medium">Объекты ({items.length})</div>
-                <div className="max-h-112 space-y-2 overflow-y-auto pr-1">
+                <div className="relative max-h-112 space-y-2 overflow-y-auto pr-1">
                     {items.map((item, index) => (
                         <details key={`${index}-${item.feature.geometry.type}`}
+                            ref={(element) => { rowsRef.current[index] = element; }}
+                            open={selectedIndex === index}
                             className="rounded-xl border border-slate-200 bg-white customer-dark:border-ui-border customer-dark:bg-surface-panel">
-                            <summary className="cursor-pointer px-3 py-2.5 text-sm font-medium">
+                            <summary
+                                onClick={(event) => {
+                                    event.preventDefault();
+                                    onSelectObject(selectedIndex === index ? null : index);
+                                }}
+                                className={`cursor-pointer rounded-xl px-3 py-2.5 text-sm font-medium ${selectedIndex === index ? "bg-sky-100 text-sky-900 customer-dark:bg-surface-hover customer-dark:text-content-primary" : ""}`}>
                                 Объект {index + 1} · {item.feature.geometry.type}
                                 {!isInfrastructureItemMapped(item) && <span className="ml-2 text-red-600">Требуется сопоставление</span>}
                             </summary>
@@ -209,6 +238,8 @@ function ScenarioGeoJsonEditorModal(props: ScenarioGeoJsonEditorModalProps) {
     const standardProps = props.kind === "infrastructure" ? null : props;
     const infrastructureProps = props.kind === "infrastructure" ? props : null;
     const initialInfrastructureRef = useRef(infrastructureProps);
+    const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+    const [showSource, setShowSource] = useState(props.kind !== "infrastructure");
     const [source, setSource] = useState(props.initialSource);
     const [propertyName, setPropertyName] = useState(
         props.kind === "infrastructure" ? "" : props.initialPropertyName,
@@ -303,7 +334,13 @@ function ScenarioGeoJsonEditorModal(props: ScenarioGeoJsonEditorModalProps) {
     };
 
     const handleSourceChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
+        setSelectedIndex(null);
         setSource(event.target.value);
+    };
+
+    const handleMappingChange = (field: keyof InfrastructurePropertyMapping, value: string) => {
+        setSelectedIndex(null);
+        setMapping((current) => ({ ...current, [field]: value }));
     };
 
     const canSave = !parsed.error && parsed.features.length > 0 && (
@@ -353,28 +390,57 @@ function ScenarioGeoJsonEditorModal(props: ScenarioGeoJsonEditorModalProps) {
                 </div>
 
                 <div className="mt-6 grid gap-5 lg:grid-cols-[minmax(0,1.3fr)_minmax(20rem,0.7fr)]">
-                    <div>
-                        <div className="mb-2 text-sm font-medium">GeoJSON</div>
-                        <div className="grid h-136 grid-cols-[auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-slate-200 bg-slate-950 font-mono text-sm customer-dark:border-ui-border">
-                            <pre
-                                ref={gutterRef}
-                                aria-hidden="true"
-                                className="m-0 overflow-hidden border-r border-slate-700 bg-slate-900 px-3 py-4 text-right leading-6 text-slate-500 select-none"
+                    <div className="min-w-0">
+                        {props.kind === "infrastructure" && (
+                            <div className="mb-4 space-y-2">
+                                <p className="text-sm text-slate-500 customer-dark:text-content-muted">Выберите объект на карте или в списке, чтобы изменить его характеристики.</p>
+                                <ScenarioImportPreviewMap
+                                    functionalZones={EMPTY_GEOMETRIES}
+                                    functionalZoneTypeIds={EMPTY_TYPE_IDS}
+                                    roads={EMPTY_GEOMETRIES}
+                                    roadTypeIds={EMPTY_TYPE_IDS}
+                                    infrastructure={items}
+                                    physicalObjectTypes={props.physicalObjectTypes}
+                                    selectedIndex={selectedIndex}
+                                    onSelectObject={setSelectedIndex}
+                                />
+                            </div>
+                        )}
+                        {props.kind === "infrastructure" ? (
+                            <button
+                                type="button"
+                                className="mb-2 text-sm font-medium text-[#0788CE]"
+                                aria-expanded={showSource}
+                                aria-controls="scenario-geojson-source"
+                                onClick={() => setShowSource((current) => !current)}
                             >
-                                {getLineNumbers(source)}
-                            </pre>
-                            <textarea
-                                value={source}
-                                onChange={handleSourceChange}
-                                onScroll={(event) => {
-                                    if (gutterRef.current) {
-                                        gutterRef.current.scrollTop = event.currentTarget.scrollTop;
-                                    }
-                                }}
-                                spellCheck={false}
-                                className="min-h-0 w-full resize-none bg-slate-950 px-4 py-4 leading-6 text-slate-100 outline-none"
-                                aria-label="GeoJSON editor"
-                            />
+                                {showSource ? "Скрыть GeoJSON" : "Показать GeoJSON"}
+                            </button>
+                        ) : (
+                            <div className="mb-2 text-sm font-medium">GeoJSON</div>
+                        )}
+                        <div id="scenario-geojson-source" hidden={!showSource}>
+                            <div className="grid h-136 grid-cols-[auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-slate-200 bg-slate-950 font-mono text-sm customer-dark:border-ui-border">
+                                <pre
+                                    ref={gutterRef}
+                                    aria-hidden="true"
+                                    className="m-0 overflow-hidden border-r border-slate-700 bg-slate-900 px-3 py-4 text-right leading-6 text-slate-500 select-none"
+                                >
+                                    {getLineNumbers(source)}
+                                </pre>
+                                <textarea
+                                    value={source}
+                                    onChange={handleSourceChange}
+                                    onScroll={(event) => {
+                                        if (gutterRef.current) {
+                                            gutterRef.current.scrollTop = event.currentTarget.scrollTop;
+                                        }
+                                    }}
+                                    spellCheck={false}
+                                    className="min-h-0 w-full resize-none bg-slate-950 px-4 py-4 leading-6 text-slate-100 outline-none"
+                                    aria-label="GeoJSON editor"
+                                />
+                            </div>
                         </div>
                         {parsed.error && (
                             <div className="mt-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 customer-dark:border-danger-border customer-dark:bg-danger-soft customer-dark:text-danger-content">
@@ -388,7 +454,9 @@ function ScenarioGeoJsonEditorModal(props: ScenarioGeoJsonEditorModalProps) {
                             <InfrastructureFields
                                 propertyNames={propertyNames}
                                 mapping={mapping}
-                                onMappingChange={(field, value) => setMapping((current) => ({ ...current, [field]: value }))}
+                                onMappingChange={handleMappingChange}
+                                selectedIndex={selectedIndex}
+                                onSelectObject={setSelectedIndex}
                                 items={items}
                                 onItemChange={updateItem}
                                 physicalObjectTypes={props.physicalObjectTypes}

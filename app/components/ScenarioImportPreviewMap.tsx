@@ -1,5 +1,6 @@
-import { useMemo } from "react";
-import Map, { Layer, Source } from "react-map-gl/mapbox";
+import { useCallback, useEffect, useMemo, useRef } from "react";
+import Map, { Layer, Source, NavigationControl, type MapRef } from "react-map-gl/mapbox";
+import type { CircleLayerSpecification, FillLayerSpecification, LineLayerSpecification, MapMouseEvent } from "mapbox-gl";
 import type { Feature, FeatureCollection, Geometry } from "geojson";
 import type { ScenarioImportedGeometry } from "@lib/ScenarioGeoJson";
 import type { InfrastructureImportItem, InfrastructureTypeOption } from "@lib/ScenarioInfrastructure";
@@ -17,6 +18,8 @@ type ScenarioImportPreviewMapProps = {
     roadTypeIds: Array<number | undefined>;
     infrastructure: InfrastructureImportItem[];
     physicalObjectTypes: InfrastructureTypeOption[];
+    selectedIndex?: number | null;
+    onSelectObject?: (index: number) => void;
 };
 
 type Coordinates = [number, number];
@@ -24,6 +27,12 @@ type Bounds = [Coordinates, Coordinates];
 
 const DEFAULT_CENTRE: Coordinates = [37.6173, 55.7558];
 const PREVIEW_COLOR_PROPERTY = "__scenario_preview_color";
+const PREVIEW_INDEX_PROPERTY = "__scenario_preview_index";
+const INFRASTRUCTURE_LAYER_IDS = [
+    "scenario-import-infrastructure-fill",
+    "scenario-import-infrastructure-line",
+    "scenario-import-infrastructure-points",
+];
 
 function extendBounds(
     bounds: Bounds | undefined,
@@ -93,6 +102,7 @@ function toFeatureCollection(
             type: "Feature",
             properties: {
                 ...feature.properties,
+                [PREVIEW_INDEX_PROPERTY]: index,
                 [PREVIEW_COLOR_PROPERTY]: colors[index] ?? FUNCTIONAL_ZONE_FALLBACK_COLOR,
             },
             geometry: feature.geometry,
@@ -124,13 +134,43 @@ function ScenarioImportPreviewMap({
     roadTypeIds,
     infrastructure,
     physicalObjectTypes,
+    selectedIndex,
+    onSelectObject,
 }: ScenarioImportPreviewMapProps) {
+    const mapRef = useRef<MapRef>(null);
+    const isEditor = onSelectObject !== undefined;
+    const selectionBounds = useMemo(() => {
+        const geometry = selectedIndex == null ? undefined : infrastructure[selectedIndex]?.feature.geometry;
+
+        return geometry ? getGeometryBounds([geometry]) : undefined;
+    }, [infrastructure, selectedIndex]);
+
     const allGeometries = useMemo<Geometry[]>(
         () => [...functionalZones, ...roads, ...infrastructure.map(({ feature }) => feature)]
             .map(({ geometry }) => geometry),
         [functionalZones, roads, infrastructure],
     );
     const bounds = useMemo(() => getGeometryBounds(allGeometries), [allGeometries]);
+
+    const cameraBounds = selectionBounds ?? bounds;
+    const west = cameraBounds?.[0][0];
+    const south = cameraBounds?.[0][1];
+    const east = cameraBounds?.[1][0];
+    const north = cameraBounds?.[1][1];
+    const fitEditorBounds = useCallback(() => {
+        if (isEditor && west !== undefined && south !== undefined && east !== undefined && north !== undefined) {
+            mapRef.current?.fitBounds([[west, south], [east, north]], {
+                padding: 48,
+                maxZoom: 17,
+                duration: 400,
+            });
+        }
+    }, [isEditor, west, south, east, north]);
+
+    useEffect(() => {
+        fitEditorBounds();
+    }, [fitEditorBounds, selectedIndex]);
+
     const centre: Coordinates = bounds
         ? [
             (bounds[0][0] + bounds[1][0]) / 2,
@@ -175,10 +215,44 @@ function ScenarioImportPreviewMap({
         label: physicalObjectTypes.find((type) => type.value === typeId)?.label ?? "Тип не выбран",
     })), [infrastructure, physicalObjectTypes]);
 
+    const infrastructurePaint = useMemo(() => {
+        const isSelected: ["==", ["get", string], number] = ["==", ["get", PREVIEW_INDEX_PROPERTY], selectedIndex ?? -1];
+        const color: ["get", string] = ["get", PREVIEW_COLOR_PROPERTY];
+        const fill: FillLayerSpecification["paint"] = {
+            "fill-color": color,
+            "fill-opacity": isEditor ? ["case", isSelected, 0.85, 0.4] : 0.55,
+        };
+        const line: LineLayerSpecification["paint"] = {
+            "line-color": isEditor ? ["case", isSelected, "#0788CE", color] : color,
+            "line-width": isEditor ? ["case", isSelected, 5, 2] : 3,
+        };
+        const circle: CircleLayerSpecification["paint"] = {
+            "circle-color": color,
+            "circle-radius": isEditor ? ["case", isSelected, 10, 6] : 6,
+            "circle-stroke-color": "#FFFFFF",
+            "circle-stroke-width": 1.5,
+        };
+
+        return { fill, line, circle };
+    }, [isEditor, selectedIndex]);
+
+    const handleMapClick = (event: MapMouseEvent) => {
+        const index = event.features?.[0]?.properties?.[PREVIEW_INDEX_PROPERTY];
+
+        if (typeof index === "number" && Number.isInteger(index) && infrastructure[index]) {
+            onSelectObject?.(index);
+        }
+    };
+
     return (
         <div className="overflow-hidden rounded-2xl border border-slate-200 customer-dark:border-ui-border">
             <Map
-                key={mapKey}
+                key={isEditor ? "editor" : mapKey}
+                ref={mapRef}
+                onLoad={fitEditorBounds}
+                interactiveLayerIds={isEditor ? INFRASTRUCTURE_LAYER_IDS : undefined}
+                cursor={isEditor ? "pointer" : undefined}
+                onClick={handleMapClick}
                 initialViewState={{
                     longitude: centre[0],
                     latitude: centre[1],
@@ -190,6 +264,7 @@ function ScenarioImportPreviewMap({
                 mapboxAccessToken={import.meta.env.VITE_MAPBOX_TOKEN}
                 style={{ height: 350 }}
             >
+                {isEditor && <NavigationControl position="top-right" />}
                 <Source id="scenario-import-functional-zones" type="geojson" data={functionalZoneFeatures}>
                     <Layer
                         id="scenario-import-functional-zones-fill"
@@ -213,23 +288,18 @@ function ScenarioImportPreviewMap({
                     <Layer
                         id="scenario-import-infrastructure-fill"
                         type="fill"
-                        paint={{ "fill-color": ["get", PREVIEW_COLOR_PROPERTY], "fill-opacity": 0.55 }}
+                        paint={infrastructurePaint.fill}
                     />
                     <Layer
                         id="scenario-import-infrastructure-line"
                         type="line"
-                        paint={{ "line-color": ["get", PREVIEW_COLOR_PROPERTY], "line-width": 3 }}
+                        paint={infrastructurePaint.line}
                     />
                     <Layer
                         id="scenario-import-infrastructure-points"
                         type="circle"
                         filter={["==", "$type", "Point"]}
-                        paint={{
-                            "circle-color": ["get", PREVIEW_COLOR_PROPERTY],
-                            "circle-radius": 6,
-                            "circle-stroke-color": "#FFFFFF",
-                            "circle-stroke-width": 1.5,
-                        }}
+                        paint={infrastructurePaint.circle}
                     />
                 </Source>
 
@@ -256,20 +326,24 @@ function ScenarioImportPreviewMap({
                 </Source>
             </Map>
             <div className="flex flex-wrap gap-x-4 gap-y-1 border-t border-slate-100 bg-white px-3 py-2 text-xs text-slate-600 customer-dark:border-ui-border customer-dark:bg-surface-raised customer-dark:text-content-secondary">
-                <span className="inline-flex items-center gap-1.5">
-                    <i
-                        className="h-2.5 w-2.5 rounded-sm"
-                        style={{ background: getLegendBackground(functionalZoneColors) }}
-                    />
-                    Функциональные зоны: {functionalZones.length}
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                    <i
-                        className="h-0.5 w-3"
-                        style={{ background: getLegendBackground(roadColors) }}
-                    />
-                    Дорожная сеть: {roads.length}
-                </span>
+                {!isEditor && (
+                    <>
+                        <span className="inline-flex items-center gap-1.5">
+                            <i
+                                className="h-2.5 w-2.5 rounded-sm"
+                                style={{ background: getLegendBackground(functionalZoneColors) }}
+                            />
+                            Функциональные зоны: {functionalZones.length}
+                        </span>
+                        <span className="inline-flex items-center gap-1.5">
+                            <i
+                                className="h-0.5 w-3"
+                                style={{ background: getLegendBackground(roadColors) }}
+                            />
+                            Дорожная сеть: {roads.length}
+                        </span>
+                    </>
+                )}
                 {infrastructure.length > 0 && (
                     <span className="font-medium">Объекты застройки: {infrastructure.length}</span>
                 )}
