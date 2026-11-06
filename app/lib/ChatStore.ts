@@ -59,9 +59,25 @@ import type {
     ZonePair,
 } from "@lib/genplanner/zoneAdjacencyMatrix";
 import MapStore from "@lib/MapStore";
+import {
+    cancelProjectPipeline,
+    streamProjectFromFiles,
+    updateProjectPipelineToken,
+    updateProjectFileLayerRole,
+    uploadProjectFiles,
+} from "@lib/projectFromFiles/client";
+import type {
+    ProjectClarification,
+    ProjectFileRole,
+    ProjectFromFilesRequest,
+    ProjectFromFilesSetupMessage,
+    ProjectFromFilesStreamEvent,
+} from "@lib/projectFromFiles/types";
 
 const URBAN_API_URL = import.meta.env.VITE_URBAN_API;
 const GENBUILDER_API_URL = import.meta.env.VITE_GENBUILDER_API;
+const PROJECT_FROM_FILES_HIDDEN_CHATS_KEY = "urban-assistant-project-from-files-hidden-chats";
+
 const GENPLANNER_API_URL = import.meta.env.VITE_GENPLANNER_API;
 const BUILDPLANNER_API_URL = import.meta.env.VITE_BUILDPLANNER_API;
 const AUTHENTICATED_LAYER_API_URLS = [
@@ -81,6 +97,19 @@ const SERVICE_API_BASE_URLS: Record<string, string | undefined> = {
     "pzz pipeline service": import.meta.env.VITE_PZZ_COMPARE_API,
     pzzcompare: import.meta.env.VITE_PZZ_COMPARE_API,
 };
+
+function readHiddenProjectFromFilesChatIds() {
+    if (typeof window === "undefined") return [];
+
+    try {
+        const value: unknown = JSON.parse(sessionStorage.getItem(PROJECT_FROM_FILES_HIDDEN_CHATS_KEY) ?? "[]");
+        return Array.isArray(value)
+            ? value.filter((item): item is string => typeof item === "string" && !!item)
+            : [];
+    } catch {
+        return [];
+    }
+}
 
 interface UserChat {
     chat_id: string;
@@ -1324,7 +1353,8 @@ type ChatMessagePayload =
     | GenBuilderSavePromptMessage
     | GenPlannerCustomSetupMessage
     | GenPlannerAdjacencyPromptMessage
-    | GenPlannerSavePromptMessage;
+    | GenPlannerSavePromptMessage
+    | ProjectFromFilesSetupMessage;
 
 type ChatMessage = {
     type: "request" | "response";
@@ -1336,6 +1366,8 @@ type ChatSession = {
     selectedContext: string | number;
     selectedScenario: number | null;
 };
+
+export const PROJECT_FROM_FILES_TOOL = "Создать проект со сценарием" as const;
 
 export const CHAT_SERVICES = [
     "Нормативная документация",
@@ -1349,6 +1381,7 @@ export const CHAT_SERVICES = [
     "Проверка ВРИ",
     "Проверка нормативных ограничений",
     "Справка по проекту",
+    PROJECT_FROM_FILES_TOOL,
 ] as const;
 
 type ChatTool = typeof CHAT_SERVICES[number];
@@ -1410,6 +1443,12 @@ function isGenPlannerAdjacencyPromptMessage(
     message: ChatMessage["message"],
 ): message is GenPlannerAdjacencyPromptMessage {
     return message.type === "genplanner_adjacency_prompt";
+}
+
+function isProjectFromFilesSetupMessage(
+    message: ChatMessage["message"],
+): message is ProjectFromFilesSetupMessage {
+    return message.type === "project_from_files_setup";
 }
 
 function normalizePzzTaskStatus(value: unknown): PzzTaskStatus | undefined {
@@ -1826,6 +1865,7 @@ class ChatDataStore {
     nextGenPlannerSavePromptId: number = 0;
     nextGenPlannerCustomSetupId: number = 0;
     nextGenPlannerAdjacencyPromptId: number = 0;
+    nextProjectFromFilesSetupId: number = 0;
     userChats: UserChat[] = [];
     isUserChatsLoading = false;
     isUserChatOpening = false;
@@ -1837,6 +1877,7 @@ class ChatDataStore {
     private genPlannerResults: Map<string, GenPlannerResult> = new Map();
     private genPlannerTerritoryFiles: Map<string, File> = new Map();
     private activeGenPlannerChatId?: string;
+    private projectFromFilesChatIds = new Set<string>(readHiddenProjectFromFilesChatIds());
 
     chatMap: Map<number, ChatSession> = new Map();
 
@@ -2027,6 +2068,14 @@ class ChatDataStore {
                 return false;
             }
 
+            if (
+                tool === PROJECT_FROM_FILES_TOOL
+                && isProjectFromFilesSetupMessage(chatMessage.message)
+            ) {
+                return chatMessage.message.projectId !== undefined
+                    || chatMessage.message.status === "stayed";
+            }
+
             return true;
         });
 
@@ -2112,6 +2161,14 @@ class ChatDataStore {
             && !this.getActiveGenPlannerCustomSetup()
         ) {
             this.startGenPlannerCustomSetup();
+        }
+
+        if (
+            tool === PROJECT_FROM_FILES_TOOL
+            && this.selectedContext === "nonproject"
+            && !this.getActiveProjectFromFilesSetup()
+        ) {
+            this.startProjectFromFilesSetup();
         }
     }
 
@@ -4249,7 +4306,29 @@ class ChatDataStore {
             .at(-1);
 
         const requestId = this.currentStreamRequestId;
+        const projectSetup = this.chatMessages.findLast(
+            ({ message }) => isProjectFromFilesSetupMessage(message)
+                && message.status === "creating",
+        )?.message as ProjectFromFilesSetupMessage | undefined;
         this.abortStream();
+
+        if (projectSetup) {
+            projectSetup.status = "error";
+            projectSetup.errorText = "Создание проекта остановлено. Если часть данных уже была создана, повторный запрос продолжит работу через этот же диалог.";
+            if (!projectSetup.pipelineRequestId) return;
+
+            void cancelProjectPipeline(projectSetup.pipelineRequestId, AuthStore.accessToken)
+                .catch((error) => {
+                    console.error("Error cancelling project pipeline:", error);
+                    runInAction(() => {
+                        this.addChatNotice(
+                            "warning",
+                            "Поток закрыт, но отменить создание проекта на сервере не удалось.",
+                        );
+                    });
+                });
+            return;
+        }
 
         if (!setup?.taskId) {
             return;
@@ -6970,7 +7049,529 @@ class ChatDataStore {
         this.genPlannerResults.delete(promptMessage.resultId);
     }
 
+    private getProjectFromFilesSetup(setupId: string) {
+        return this.chatMessages.findLast(
+            ({ message }) => isProjectFromFilesSetupMessage(message) && message.id === setupId,
+        )?.message as ProjectFromFilesSetupMessage | undefined;
+    }
+
+    private hideProjectFromFilesChat(chatId?: string) {
+        if (!chatId) return;
+
+        this.projectFromFilesChatIds.add(chatId);
+        this.userChats = this.userChats.filter((chat) => chat.chat_id !== chatId);
+        try {
+            sessionStorage.setItem(
+                PROJECT_FROM_FILES_HIDDEN_CHATS_KEY,
+                JSON.stringify([...this.projectFromFilesChatIds]),
+            );
+        } catch {
+            // История всё равно останется скрытой до перезагрузки страницы.
+        }
+    }
+
+    private getActiveProjectFromFilesSetup() {
+        return this.chatMessages.findLast(
+            ({ message }) => isProjectFromFilesSetupMessage(message)
+                && message.status !== "success"
+                && message.status !== "stayed",
+        )?.message as ProjectFromFilesSetupMessage | undefined;
+    }
+
+    startProjectFromFilesSetup() {
+        if (this.selectedContext !== "nonproject") {
+            this.addChatNotice("info", "Создать проект из файлов можно только в режиме «Вне проекта».");
+            return;
+        }
+
+        const activeSetup = this.getActiveProjectFromFilesSetup();
+        if (activeSetup) return;
+
+        this.nextProjectFromFilesSetupId += 1;
+        this.chatMessages.push({
+            type: "response",
+            message: {
+                type: "project_from_files_setup",
+                id: `project-from-files-${this.nextProjectFromFilesSetupId}`,
+                status: "selecting_files",
+                fileNames: [],
+            },
+        });
+    }
+
+    async uploadFilesForProject(setupId: string, files: readonly File[]) {
+        const setup = this.getProjectFromFilesSetup(setupId);
+        if (
+            !setup || !files.length || this.selectedContext !== "nonproject"
+            || this.isStreaming || setup.status === "updating_role"
+            || setup.status === "success" || setup.status === "stayed"
+        ) return false;
+
+        const allowedExtensions = new Set(["geojson", "json", "zip", "gpkg"]);
+        const unsupportedFile = files.find((file) => {
+            const extension = file.name.split(".").pop()?.toLowerCase();
+            return !extension || !allowedExtensions.has(extension);
+        });
+        if (unsupportedFile) {
+            setup.status = "error";
+            setup.errorText = `Формат файла «${unsupportedFile.name}» не поддерживается. Загрузите GeoJSON, ZIP или GeoPackage.`;
+            return false;
+        }
+
+        const totalSize = files.reduce((sum, file) => sum + file.size, 0);
+        if (totalSize > 50 * 1024 * 1024) {
+            setup.status = "error";
+            setup.errorText = "Общий размер файлов превышает 50 МБ.";
+            return false;
+        }
+
+        this.abortController?.abort();
+        const controller = new AbortController();
+        this.abortController = controller;
+        setup.status = "uploading";
+        setup.errorText = undefined;
+
+        try {
+            const upload = await uploadProjectFiles(
+                files,
+                AuthStore.accessToken,
+                this.getActiveBackendChatId(),
+                controller.signal,
+            );
+            if (controller.signal.aborted || this.abortController !== controller) return false;
+
+            runInAction(() => {
+                setup.upload = upload;
+                setup.fileNames = upload.files;
+                setup.userFiles = undefined;
+                setup.clarification = undefined;
+                setup.backendChatId = undefined;
+                setup.pipelineRequestId = undefined;
+                setup.projectId = undefined;
+                setup.scenarioId = undefined;
+                setup.summary = undefined;
+                setup.resultText = undefined;
+                setup.status = "ready";
+            });
+            return true;
+        } catch (error) {
+            if (controller.signal.aborted || this.abortController !== controller) return false;
+            console.error("Error uploading project files:", error);
+            runInAction(() => {
+                setup.status = "error";
+                setup.errorText = error instanceof Error
+                    ? error.message
+                    : "Не удалось загрузить файлы.";
+            });
+            return false;
+        } finally {
+            runInAction(() => {
+                if (this.abortController === controller) this.abortController = undefined;
+            });
+        }
+    }
+
+    async changeProjectFileLayerRole(
+        setupId: string,
+        layerName: string,
+        role: ProjectFileRole,
+    ) {
+        const setup = this.getProjectFromFilesSetup(setupId);
+        if (!setup?.upload || setup.status !== "ready") return;
+
+        setup.status = "updating_role";
+        setup.errorText = undefined;
+
+        try {
+            const upload = await updateProjectFileLayerRole(
+                setup.upload.upload_id,
+                layerName,
+                role,
+                AuthStore.accessToken,
+            );
+            runInAction(() => {
+                setup.upload = upload;
+                setup.status = "ready";
+            });
+        } catch (error) {
+            console.error("Error updating project file layer role:", error);
+            runInAction(() => {
+                setup.status = "ready";
+                setup.errorText = error instanceof Error
+                    ? error.message
+                    : "Не удалось изменить назначение слоя.";
+            });
+        }
+    }
+
+    resetProjectFilesSetup(setupId: string) {
+        const setup = this.getProjectFromFilesSetup(setupId);
+        if (!setup || setup.status === "creating" || setup.status === "uploading") return;
+
+        setup.status = "selecting_files";
+        setup.fileNames = [];
+        setup.upload = undefined;
+        setup.userFiles = undefined;
+        setup.clarification = undefined;
+        setup.errorText = undefined;
+        setup.resultText = undefined;
+        setup.backendChatId = undefined;
+        setup.pipelineRequestId = undefined;
+        setup.projectId = undefined;
+        setup.scenarioId = undefined;
+        setup.summary = undefined;
+    }
+
+    private handleProjectFromFilesStreamEvent(
+        setup: ProjectFromFilesSetupMessage,
+        event: ProjectFromFilesStreamEvent,
+    ) {
+        const content = event.content;
+        const getText = (...values: unknown[]) => values.map(toString).find((value) => value !== undefined);
+        const getId = (...values: unknown[]) => values.map(toNumber).find((value) => value !== undefined);
+
+        switch (event.type) {
+            case "pipeline_started":
+                setup.pipelineRequestId = getText(content.request_id);
+                return;
+            case "service_event": {
+                const storageEvent = asRecord(content.event);
+                if (storageEvent?.storage_event_type === "chat_created") {
+                    const chatId = toString(storageEvent.chat_id);
+                    setup.backendChatId = chatId;
+                    this.hideProjectFromFilesChat(chatId);
+                    return;
+                }
+                this.handleServiceEvent({ type: event.type, content });
+                return;
+            }
+            case "status":
+                this.currentStatus = getText(content.text, content.message, content.status)
+                    ?? "Создаём проект…";
+                return;
+            case "user_files":
+                setup.userFiles = {
+                    uploadIds: Array.isArray(content.upload_ids)
+                        ? content.upload_ids.filter((value): value is string => typeof value === "string")
+                        : [],
+                    mapping: Array.isArray(content.mapping)
+                        ? content.mapping.flatMap((value) => {
+                            const item = asRecord(value);
+                            if (!item) return [];
+
+                            const entityType = item.entity_type === "physical_object"
+                                || item.entity_type === "service"
+                                || item.entity_type === "functional_zone"
+                                ? item.entity_type
+                                : null;
+                            const source = item.source === "table"
+                                || item.source === "llm"
+                                || item.source === "user"
+                                || item.source === "none"
+                                ? item.source
+                                : "none";
+                            const roles = asRecord(item.roles);
+
+                            return [{
+                                signature: toString(item.signature) ?? "",
+                                label: toString(item.label) ?? "Без названия группы",
+                                count: Number.isFinite(Number(item.count)) ? Number(item.count) : 0,
+                                layers: Array.isArray(item.layers)
+                                    ? item.layers.filter((layer): layer is string => typeof layer === "string")
+                                    : [],
+                                roles: {
+                                    project: Number.isFinite(Number(roles?.project))
+                                        ? Number(roles?.project)
+                                        : undefined,
+                                    context: Number.isFinite(Number(roles?.context))
+                                        ? Number(roles?.context)
+                                        : undefined,
+                                    border: Number.isFinite(Number(roles?.border))
+                                        ? Number(roles?.border)
+                                        : undefined,
+                                },
+                                entity: typeof item.entity === "string" ? item.entity : null,
+                                entity_type: entityType,
+                                confidence: Number.isFinite(Number(item.confidence))
+                                    ? Number(item.confidence)
+                                    : 0,
+                                source,
+                                reason: typeof item.reason === "string" ? item.reason : null,
+                            }];
+                        })
+                        : [],
+                    pending: Array.isArray(content.pending)
+                        ? content.pending.filter((value): value is string => typeof value === "string")
+                        : [],
+                };
+                return;
+            case "warning": {
+                const warning = getText(content.message);
+                if (warning) this.addChatNotice("warning", warning);
+                return;
+            }
+            case "clarification":
+                setup.clarification = {
+                    question: getText(content.question) ?? "Уточните данные для создания проекта.",
+                    kind: typeof content.kind === "string"
+                        ? content.kind as ProjectClarification["kind"]
+                        : undefined,
+                    options: Array.isArray(content.options)
+                        ? content.options.filter((option) => !!asRecord(option)) as ProjectClarification["options"]
+                        : undefined,
+                };
+                setup.status = "clarification";
+                this.currentStatus = undefined;
+                return;
+            case "project_created":
+                setup.projectId = getId(content.project_id, content.id) ?? setup.projectId;
+                setup.projectName = getText(content.name, content.project_name) ?? setup.projectName;
+                return;
+            case "scenario_created":
+                setup.projectId = getId(content.project_id) ?? setup.projectId;
+                setup.scenarioId = getId(content.scenario_id, content.id) ?? setup.scenarioId;
+                setup.scenarioName = getText(content.name, content.scenario_name) ?? setup.scenarioName;
+                return;
+            case "project_summary":
+                setup.projectId = getId(content.project_id) ?? setup.projectId;
+                setup.scenarioId = getId(content.scenario_id) ?? setup.scenarioId;
+                setup.projectName = getText(content.project_name) ?? setup.projectName;
+                setup.scenarioName = getText(content.scenario_name) ?? setup.scenarioName;
+                setup.summary = content;
+                if (setup.projectId !== undefined && setup.scenarioId !== undefined) {
+                    setup.status = "success";
+                }
+                return;
+            case "chunk": {
+                const text = getText(content.text);
+                if (text) setup.resultText = text;
+                return;
+            }
+            case "token_expired":
+                this.currentStatus = "Обновляем авторизацию…";
+                void this.refreshProjectPipelineToken(
+                    setup,
+                    getText(content.request_id) ?? setup.pipelineRequestId,
+                );
+                return;
+            case "pipeline_suspended":
+                setup.status = "error";
+                setup.errorText = getText(content.message)
+                    ?? "Создание проекта приостановлено. Повторите запрос после входа в систему.";
+                return;
+            case "error":
+                setup.status = "error";
+                setup.errorText = getText(content.message)
+                    ?? "Не удалось создать проект.";
+                this.currentStatus = undefined;
+                return;
+        }
+    }
+
+    private async refreshProjectPipelineToken(
+        setup: ProjectFromFilesSetupMessage,
+        requestId?: string,
+    ) {
+        const controller = this.abortController;
+        if (!requestId) {
+            setup.status = "error";
+            setup.errorText = "Не удалось продолжить создание проекта после обновления авторизации.";
+            return;
+        }
+
+        try {
+            await AuthStore.refreshTokenIfNeeded(60);
+            if (controller?.signal.aborted || this.abortController !== controller) return;
+            await updateProjectPipelineToken(requestId, AuthStore.accessToken);
+            runInAction(() => {
+                if (controller?.signal.aborted || this.abortController !== controller) return;
+                this.currentStatus = "Авторизация обновлена. Продолжаем создание проекта…";
+            });
+        } catch (error) {
+            console.error("Error refreshing project pipeline token:", error);
+            runInAction(() => {
+                if (controller?.signal.aborted || this.abortController !== controller) return;
+                setup.status = "error";
+                setup.errorText = "Не удалось обновить авторизацию. Войдите снова и повторите запрос.";
+            });
+        }
+    }
+
+    private async runProjectFromFilesStream(
+        setup: ProjectFromFilesSetupMessage,
+        payload: ProjectFromFilesRequest,
+        requestText: string,
+    ) {
+        this.abortController?.abort();
+        const controller = new AbortController();
+        this.abortController = controller;
+        this.currentStreamRequestId += 1;
+        const requestId = this.currentStreamRequestId;
+        this.isStreaming = true;
+        this.currentStatus = "Подготавливаем создание проекта…";
+        setup.status = "creating";
+        setup.clarification = undefined;
+        setup.errorText = undefined;
+        setup.resultText = undefined;
+        this.chatMessages.push({
+            type: "request",
+            message: { type: "text", text: requestText },
+        });
+
+        try {
+            await streamProjectFromFiles(
+                payload,
+                AuthStore.accessToken,
+                controller.signal,
+                (event) => runInAction(() => {
+                    if (controller.signal.aborted || requestId !== this.currentStreamRequestId) return;
+                    this.handleProjectFromFilesStreamEvent(setup, event);
+                }),
+            );
+
+            runInAction(() => {
+                if (controller.signal.aborted || requestId !== this.currentStreamRequestId) return;
+                if (setup.status === "clarification" || setup.status === "error") return;
+                if (setup.projectId !== undefined && setup.scenarioId !== undefined) {
+                    setup.status = "success";
+                    return;
+                }
+                setup.status = "error";
+                setup.errorText = setup.resultText
+                    ?? "Создание проекта завершилось без данных о созданном проекте.";
+            });
+        } catch (error) {
+            if (controller.signal.aborted || requestId !== this.currentStreamRequestId) return;
+            console.error("Error creating project from files:", error);
+            runInAction(() => {
+                setup.status = "error";
+                setup.errorText = error instanceof Error
+                    ? error.message
+                    : "Не удалось создать проект.";
+            });
+        } finally {
+            runInAction(() => {
+                if (requestId === this.currentStreamRequestId) this.resetStreamingState();
+            });
+            if (setup.projectId !== undefined) {
+                void DataStore.getUserProjects();
+            }
+            void this.getUserChats();
+        }
+    }
+
+    createProjectFromFiles(
+        setupId: string,
+        projectName: string,
+        scenarioName?: string,
+    ) {
+        const setup = this.getProjectFromFilesSetup(setupId);
+        const normalizedProjectName = projectName.trim();
+        const normalizedScenarioName = scenarioName?.trim();
+        if (
+            !setup?.upload
+            || this.isStreaming || this.selectedContext !== "nonproject"
+            || (setup.status !== "ready" && setup.status !== "error")
+            || !normalizedProjectName
+        ) return;
+
+        const existingChatId = setup.backendChatId ?? this.getActiveBackendChatId();
+        if (setup.status === "error" && existingChatId && setup.pipelineRequestId) {
+            void this.runProjectFromFilesStream(
+                setup,
+                { request: "да", chat_id: existingChatId },
+                "Повторить создание проекта",
+            );
+            return;
+        }
+
+        const request = `Создай проект «${normalizedProjectName}» из загруженных файлов`;
+        void this.runProjectFromFilesStream(
+            setup,
+            {
+                request,
+                upload_ids: [setup.upload.upload_id],
+                chat_id: existingChatId,
+                inputs: {
+                    project_name: normalizedProjectName,
+                    scenario_name: normalizedScenarioName || undefined,
+                },
+            },
+            request,
+        );
+    }
+
+    answerProjectFromFilesClarification(setupId: string, answer: string, displayAnswer = answer) {
+        const setup = this.getProjectFromFilesSetup(setupId);
+        const chatId = setup?.backendChatId ?? this.getActiveBackendChatId();
+        const normalizedAnswer = answer.trim();
+        if (!setup || setup.status !== "clarification" || !chatId || !normalizedAnswer) return;
+
+        void this.runProjectFromFilesStream(
+            setup,
+            { request: normalizedAnswer, chat_id: chatId },
+            displayAnswer.trim() || normalizedAnswer,
+        );
+    }
+
+    async enterCreatedProject(setupId: string) {
+        const setup = this.getProjectFromFilesSetup(setupId);
+        if (!setup?.projectId || !setup.scenarioId) return;
+
+        const projectId = setup.projectId;
+        const scenarioId = setup.scenarioId;
+        const projectName = setup.projectName ?? `Проект #${projectId}`;
+        const scenarioName = setup.scenarioName ?? "Проектное решение из файлов";
+
+        this.hideProjectFromFilesChat(setup.backendChatId);
+
+        await DataStore.getUserProjects();
+        DataStore.upsertUserProject({
+            id: projectId,
+            name: projectName,
+        });
+        DataStore.invalidateProjectScenarios(projectId);
+        const scenarios = await DataStore.getProjectScenarios(projectId);
+        const normalizedScenarioName = scenarioName.trim().toLocaleLowerCase("ru");
+        const resolvedScenario = scenarios.find((scenario) => scenario.id === scenarioId)
+            ?? scenarios.find(
+                (scenario) => scenario.name.trim().toLocaleLowerCase("ru") === normalizedScenarioName,
+            )
+            ?? (scenarios.length === 1 ? scenarios[0] : undefined);
+
+        if (!resolvedScenario) {
+            runInAction(() => {
+                setup.errorText = scenarios.length
+                    ? `Сценарий «${scenarioName}» не найден среди сценариев созданного проекта. Остаёмся в текущем чате.`
+                    : "В созданном проекте пока нет доступных сценариев. Остаёмся в текущем чате.";
+            });
+            return;
+        }
+
+        runInAction(() => {
+            if (this.getProjectFromFilesSetup(setupId) !== setup) return;
+
+            setup.scenarioId = resolvedScenario.id;
+            setup.scenarioName = resolvedScenario.name;
+            setup.errorText = undefined;
+            this.clearChat();
+            this.setSelectedContext(projectId);
+            this.setSelectedScenario(resolvedScenario.id);
+            this.parsedContext = `${projectName} / ${resolvedScenario.name}`;
+        });
+    }
+
+    stayOutsideCreatedProject(setupId: string) {
+        const setup = this.getProjectFromFilesSetup(setupId);
+        if (setup?.status === "success") setup.status = "stayed";
+    }
+
     sendChatMessage = async (message: string) => {
+        if (this.selectedChatTool === PROJECT_FROM_FILES_TOOL) {
+            const setup = this.getActiveProjectFromFilesSetup();
+            if (!setup) this.startProjectFromFilesSetup();
+            return;
+        }
         if (this.selectedChatTool === "Размещение сервисов" && !message.trim()) {
             return;
         }
@@ -7191,7 +7792,11 @@ class ChatDataStore {
         .then(
             action(
                 ({ data }) => {
-                    const chats = Array.isArray(data?.items) ? data.items as UserChat[] : [];
+                    const chats = Array.isArray(data?.items)
+                        ? (data.items as UserChat[]).filter(
+                            (chat) => !this.projectFromFilesChatIds.has(chat.chat_id),
+                        )
+                        : [];
                     const fetchedChatIds = new Set(chats.map((chat) => chat.chat_id));
                     const localOnlyChats = this.userChats.filter(
                         (chat) => !fetchedChatIds.has(chat.chat_id),
@@ -7672,13 +8277,20 @@ class ChatDataStore {
                     this.selectedContext = projectId ?? "nonproject";
                     this.selectedScenario = scenarioId;
 
-                    const savedTool = CHAT_SERVICES.find((service) => service === settings.tool);
+                    const savedToolName = settings.tool === "Создание проекта"
+                        ? PROJECT_FROM_FILES_TOOL
+                        : settings.tool;
+                    const savedTool = CHAT_SERVICES.find((service) => service === savedToolName);
                     const allowedOutsideProject = savedTool === "Нормативная документация"
                         || savedTool === "Проверка объектов по ПЗЗ" || savedTool === "Проверка ВРИ"
                         || savedTool === "Размещение сервисов"
-                        || savedTool === "Генерация застройки" || savedTool === "Генерация функционального зонирования";
-                    const canRestoreTool = projectId === null
-                        ? allowedOutsideProject : scenarioId !== null;
+                        || savedTool === "Генерация застройки" || savedTool === "Генерация функционального зонирования"
+                        || savedTool === PROJECT_FROM_FILES_TOOL;
+                    const canRestoreTool = savedTool === PROJECT_FROM_FILES_TOOL
+                        ? projectId === null
+                        : projectId === null
+                            ? allowedOutsideProject
+                            : scenarioId !== null;
 
                     if (savedTool && canRestoreTool) {
                         this.setSelectedChatTool(savedTool);

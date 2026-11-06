@@ -7,7 +7,6 @@ import {
     useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { observer } from "mobx-react-lite";
 import { IoCheckmark, IoChevronDown } from "react-icons/io5";
 
 export type SelectOption = {
@@ -27,6 +26,8 @@ interface CustomSelectProps {
     searchable?: boolean;
     fitMenuToOptions?: boolean;
     ariaLabel?: string;
+    disabled?: boolean;
+    showChevronWhenDisabled?: boolean;
     trailingAction?: {
         icon: ReactNode;
         label: string;
@@ -47,6 +48,8 @@ function CustomSelect({
     searchable = true,
     fitMenuToOptions = false,
     ariaLabel,
+    disabled = false,
+    showChevronWhenDisabled = false,
     trailingAction,
 }: CustomSelectProps) {
     const [isOpen, setIsOpen] = useState(false);
@@ -62,6 +65,7 @@ function CustomSelect({
         maxHeight: "min(24rem, 50vh)",
     });
     const selectedOption = options.find((option) => option.value == value);
+    const isMenuOpen = isOpen && !disabled;
     const normalizedSearchQuery = searchQuery.trim().toLowerCase();
     const filteredOptions = normalizedSearchQuery
         ? options.filter((option) => option.label.toLowerCase().includes(normalizedSearchQuery))
@@ -72,7 +76,7 @@ function CustomSelect({
     );
 
     useEffect(() => {
-        if (!isOpen) return;
+        if (!isMenuOpen) return;
 
         setSearchQuery("");
         if (searchable) searchInputRef.current?.focus();
@@ -101,10 +105,14 @@ function CustomSelect({
             document.removeEventListener("mousedown", handlePointerDown);
             document.removeEventListener("keydown", handleEscape);
         };
-    }, [isOpen, searchable]);
+    }, [isMenuOpen, searchable]);
 
     useEffect(() => {
-        if (!isOpen) return;
+        if (disabled) setIsOpen(false);
+    }, [disabled]);
+
+    useEffect(() => {
+        if (!isMenuOpen) return;
 
         const updateMenuPosition = () => {
             const triggerRect = triggerRef.current?.getBoundingClientRect();
@@ -166,7 +174,7 @@ function CustomSelect({
     }, [
         compact,
         fitMenuToOptions,
-        isOpen,
+        isMenuOpen,
         widestOption.label,
         widestOption.previewColors?.length,
     ]);
@@ -205,22 +213,25 @@ function CustomSelect({
                         ${compact
                             ? "h-7 gap-1.5 rounded-lg border-gray-200 px-2 !text-[13px] leading-none font-medium transition-colors hover:border-[#0788CE] focus:outline-none focus:ring-2 focus:ring-[#0788CE]/20 customer:hover:border-brand-primary customer:focus:ring-brand-primary/20"
                             : `gap-4 rounded-[1.75rem] border-gray-500/30 pl-6 ${trailingAction ? "pr-14" : "pr-6"} py-2.5 text-sm font-medium tracking-[0.01em] transition duration-200 hover:-translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-white/70 customer:focus:ring-brand-primary/35`}
-                        ${isOpen
+                        ${isMenuOpen
                             ? compact
                                 ? "border-[#0788CE] ring-2 ring-[#0788CE]/20 customer:border-brand-primary customer:ring-brand-primary/20"
                                 : "ring-2 ring-white/70 customer:ring-brand-primary/35"
                             : ""}
+                        ${disabled ? "cursor-default hover:translate-y-0 hover:border-gray-200 customer:hover:border-gray-200 customer-dark:hover:border-ui-border" : ""}
                     `}
                     onClick={() => {
+                        if (disabled) return;
                         setMenuStyle((current) => ({
                             ...current,
                             visibility: "hidden",
                         }));
                         setIsOpen((current) => !current);
                     }}
-                    aria-expanded={isOpen}
+                    aria-expanded={isMenuOpen}
                     aria-haspopup="listbox"
                     aria-label={ariaLabel}
+                    disabled={disabled}
                 >
                     <span className="relative flex min-w-0 items-center gap-2 truncate">
                         {!!selectedOption?.previewColors?.length && (
@@ -231,9 +242,11 @@ function CustomSelect({
                         )}
                         <span className="truncate">{selectedOption?.label ?? placeholder ?? "Выберите значение"}</span>
                     </span>
-                    <span className={`relative shrink-0 text-black transition-transform duration-200 customer-dark:text-content-primary ${isOpen ? "rotate-180" : ""}`}>
-                        <IoChevronDown size={compact ? 12 : 18} />
-                    </span>
+                    {(!disabled || showChevronWhenDisabled) && (
+                        <span className={`relative shrink-0 text-black transition-transform duration-200 customer-dark:text-content-primary ${isMenuOpen ? "rotate-180" : ""}`}>
+                            <IoChevronDown size={compact ? 12 : 18} />
+                        </span>
+                    )}
                 </button>
                 {trailingAction && (
                     <>
@@ -261,7 +274,7 @@ function CustomSelect({
                     </>
                 )}
             </div>            
-            {isOpen && createPortal(
+            {isMenuOpen && createPortal(
                 <div
                     ref={menuRef}
                     data-custom-select-menu="true"

@@ -199,6 +199,28 @@ class AppDataStore {
     functionalZoneTypes: FunctionalZoneType[] | null = null;
     // Deduplicate simultaneous requests without retaining territory geometry.
     projectTerritoryRequests: Map<number, Promise<any | null>> = new Map();
+    // Old chats may refer to scenarios that no longer exist. Remember confirmed
+    // 404s and coalesce concurrent lookups so they do not flood the console.
+    scenarioProjectIdRequests: Map<number, Promise<number | null>> = new Map();
+    missingScenarioProjectIds: Set<number> = new Set();
+
+    upsertUserProject(project: UserProjectSummary) {
+        const projects = this.userProjects ?? [];
+        const existingIndex = projects.findIndex((item) => item.id === project.id);
+
+        if (existingIndex === -1) {
+            this.userProjects = [...projects, project];
+            return;
+        }
+
+        this.userProjects = projects.map((item, index) => (
+            index === existingIndex ? { ...item, ...project } : item
+        ));
+    }
+
+    invalidateProjectScenarios(projectId: number) {
+        this.projectScenarios.delete(projectId);
+    }
 
     getUserProjects() {
         return axios.get(
@@ -421,7 +443,7 @@ class AppDataStore {
     };
 
     async getFunctionalZoneTypes(): Promise<FunctionalZoneType[]> {
-        if (this.functionalZoneTypes) return this.functionalZoneTypes;
+        if (this.functionalZoneTypes?.length) return this.functionalZoneTypes;
 
         const { data } = await axios.get(
             `${import.meta.env.VITE_URBAN_API}/functional_zones_types`,
@@ -431,12 +453,14 @@ class AppDataStore {
                 },
             },
         );
-        const functionalZoneTypes = Array.isArray(data)
-            ? data.flatMap((zoneType: any) => {
+        const functionalZoneTypeRecords = Array.isArray(data)
+            ? data
+            : getRecord(data)?.results ?? getRecord(data)?.items;
+        const functionalZoneTypes = Array.isArray(functionalZoneTypeRecords)
+            ? functionalZoneTypeRecords.flatMap((zoneType: any) => {
                 const id = Number(zoneType?.functional_zone_type_id ?? zoneType?.id);
-                const name = typeof zoneType?.name === "string"
-                    ? zoneType.name.trim()
-                    : "";
+                const rawName = zoneType?.name ?? zoneType?.functional_zone_type_name;
+                const name = typeof rawName === "string" ? rawName.trim() : "";
 
                 if (!Number.isFinite(id) || !name) return [];
 
@@ -710,8 +734,17 @@ class AppDataStore {
         })
     }
 
-    getProjectIdByScenario(scenarioId: number) {
-        return axios.get(
+    getProjectIdByScenario(scenarioId: number): Promise<number | null> {
+        if (this.missingScenarioProjectIds.has(scenarioId)) {
+            return Promise.resolve(null);
+        }
+
+        const currentRequest = this.scenarioProjectIdRequests.get(scenarioId);
+        if (currentRequest) {
+            return currentRequest;
+        }
+
+        const request = axios.get(
             `${import.meta.env.VITE_URBAN_API}/scenarios/${scenarioId}`,
             {
                 headers: {
@@ -723,9 +756,24 @@ class AppDataStore {
             return data?.project?.project_id ?? null;
         })
         .catch(error => {
+            if (axios.isAxiosError(error) && error.response?.status === 404) {
+                runInAction(() => {
+                    this.missingScenarioProjectIds.add(scenarioId);
+                });
+                return null;
+            }
+
             console.error("Error fetching project ID by scenario:", error);
             return null;
         })
+        .finally(() => {
+            runInAction(() => {
+                this.scenarioProjectIdRequests.delete(scenarioId);
+            });
+        });
+
+        this.scenarioProjectIdRequests.set(scenarioId, request);
+        return request;
     }
 
     getScenarioZoneSources(scenarioId: number) {

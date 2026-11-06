@@ -1,5 +1,14 @@
 # Urban-Assistant-Client
 
+For local development of project creation from files, set `VITE_GMART_API` to
+the full gMART service URL. The browser sends requests directly to this URL.
+The gMART service must allow requests from the frontend origin (CORS).
+
+To proxy Urban API requests during local development, set `VITE_URBAN_API` to
+`/urban-api/v1` and `URBAN_API_PROXY_TARGET` to the Urban API server origin in
+your local `.env`. This proxy is only available in the Vite development server;
+use the deployed API URL or configure a reverse proxy for production.
+
 ## Deployment
 
 ### Docker Deployment

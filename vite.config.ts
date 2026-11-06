@@ -34,5 +34,14 @@ export default defineConfig(({ mode }) => {
     resolve: {
       tsconfigPaths: true,
     },
+    server: {
+      proxy: env.URBAN_API_PROXY_TARGET ? {
+        "/urban-api": {
+          target: env.URBAN_API_PROXY_TARGET,
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/urban-api/, "/api"),
+        },
+      } : undefined,
+    },
   };
 });
